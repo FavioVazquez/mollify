@@ -81,6 +81,11 @@ pub fn text(rule: &str) -> Option<&'static str> {
             comment). Confidence: likely. Action: delete it — version control \
             remembers it."
         }
+        "low-cohesion" => {
+            "A class whose methods share few instance attributes (high LCOM*) — \
+            it likely does several unrelated jobs. Confidence: uncertain. Action: \
+            split it into cohesive smaller classes."
+        }
         "hotspot" => {
             "A file that is both high-churn (git history) and high-complexity — the \
             riskiest code to change. Action: prioritize it for refactoring and test coverage."
@@ -165,6 +170,7 @@ pub const RULES: &[&str] = &[
     "cold-code",
     "commented-code",
     "hotspot",
+    "low-cohesion",
     "untyped-function",
     "policy-violation",
     "dangerous-eval",

@@ -14,6 +14,7 @@ use mollify_types::{
 
 pub mod arch;
 pub mod baseline;
+pub mod cohesion;
 pub mod commented;
 pub mod complexity;
 pub mod config;
@@ -117,6 +118,7 @@ pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
     let cfg = config::load(root);
     let mut findings = complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive);
     findings.extend(hotspots::analyze(root, &graph));
+    findings.extend(cohesion::analyze(&graph));
     finalize(&cfg, &graph, findings)
 }
 
@@ -302,6 +304,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     findings.extend(typehealth::analyze(&graph));
     findings.extend(security::analyze(&graph));
     findings.extend(hotspots::analyze(root, &graph));
+    findings.extend(cohesion::analyze(&graph));
     // Supply-chain runs only when a local advisory DB is present (keeps audit
     // offline + deterministic; no implicit network).
     let db_path = root.join(DEFAULT_ADVISORY_DB);
