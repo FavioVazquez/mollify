@@ -47,6 +47,8 @@ enum Command {
     Explain(ExplainArgs),
     /// Show a module's import neighborhood: what it imports and what imports it.
     Trace(TraceArgs),
+    /// Re-run `audit` whenever a Python file changes (poll-based; Ctrl-C to stop).
+    Watch(WatchArgs),
     /// Scaffold a .mollifyrc and report detected layout.
     Init(Scope),
     /// Run the Model Context Protocol server over stdio (for coding agents).
@@ -82,6 +84,16 @@ struct TraceArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Human)]
     format: Format,
+}
+
+#[derive(clap::Args)]
+struct WatchArgs {
+    /// Project root to analyze.
+    #[arg(long, default_value = ".")]
+    path: Utf8PathBuf,
+    /// Poll interval in milliseconds.
+    #[arg(long, default_value_t = 1000)]
+    interval_ms: u64,
 }
 
 #[derive(clap::Args)]
@@ -179,6 +191,7 @@ fn main() {
         Command::Fix(a) => run_fix(&a),
         Command::Explain(a) => run_explain(&a),
         Command::Trace(a) => run_trace(&a),
+        Command::Watch(a) => run_watch(&a),
         Command::Init(s) => run_init(&s),
         Command::Mcp => match mollify_mcp::run() {
             Ok(()) => 0,
@@ -363,6 +376,52 @@ fn run_trace(a: &TraceArgs) -> i32 {
         }
     }
     0
+}
+
+/// A cheap, deterministic signature of the project's Python files: the sorted
+/// (path, mtime, len) triples. Any add/remove/edit changes it.
+fn watch_signature(root: &camino::Utf8Path) -> Vec<(String, u64, u64)> {
+    let mut sig: Vec<(String, u64, u64)> = mollify_core::build_graph(root)
+        .modules
+        .iter()
+        .map(|m| {
+            let meta = std::fs::metadata(&m.path).ok();
+            let mtime = meta
+                .as_ref()
+                .and_then(|x| x.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let len = meta.as_ref().map(|x| x.len()).unwrap_or(0);
+            (m.path.to_string(), mtime, len)
+        })
+        .collect();
+    sig.sort();
+    sig
+}
+
+fn run_watch(a: &WatchArgs) -> i32 {
+    let scope = Scope {
+        path: a.path.clone(),
+        format: Format::Human,
+        gate: Gate::All,
+        base: None,
+    };
+    println!(
+        "Watching {} (every {}ms) — Ctrl-C to stop.\n",
+        a.path, a.interval_ms
+    );
+    let mut last: Option<Vec<(String, u64, u64)>> = None;
+    loop {
+        let sig = watch_signature(&a.path);
+        if last.as_ref() != Some(&sig) {
+            println!("── re-running audit ──");
+            run_audit(&scope);
+            println!();
+            last = Some(sig);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(a.interval_ms));
+    }
 }
 
 fn run_init(s: &Scope) -> i32 {

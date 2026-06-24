@@ -194,8 +194,8 @@ contract — see [RESEARCH.md](RESEARCH.md) for the honest, sourced landscape
 - Symbol usage is name-table-assisted, not full scope/binding resolution.
 - Duplication is Rabin-Karp token matching (SA-IS+LCP is the planned upgrade).
 - `--gate` attribution is file-level (line-level base-worktree is planned).
-- Not yet built: supply-chain CVE join (needs network), an LSP server, and a
-  `watch` mode. Tracked in [docs/STATUS.md](docs/STATUS.md).
+- Not yet built: supply-chain CVE join (needs network) and an LSP server.
+  Tracked in [docs/STATUS.md](docs/STATUS.md).
 
 ## Contributing
 

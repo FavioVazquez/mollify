@@ -17,6 +17,7 @@
 | `mollify fix [--apply]` | Remove `certain` + `auto_fixable` unused symbols. Dry-run unless `--apply`. |
 | `mollify explain [<rule>]` | Explain a rule id (semantics, confidence, action). No argument lists all rules. |
 | `mollify trace <module>` | Import neighborhood of a module: what it imports and what imports it. |
+| `mollify watch [--interval-ms]` | Re-run `audit` on any `.py` change (poll-based; Ctrl-C to stop). |
 | `mollify init` | Write a starter `.mollifyrc.json`. |
 | `mollify mcp` | Run the MCP stdio server (for coding agents). |
 
@@ -58,5 +59,5 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 See `references/configuration.md` semantics in `docs/configuration.md` for `architecture` and `policies`.
 
 ## Not yet implemented (do not rely on)
-Line-level gate attribution (current gate is file-level), LSP server, watch mode.
-See docs/STATUS.md.
+Line-level gate attribution (current gate is file-level), an LSP server, and a
+supply-chain CVE join. See docs/STATUS.md.

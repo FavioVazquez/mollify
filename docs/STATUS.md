@@ -98,7 +98,11 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     no analysis run; lists all rules with no argument. +test.
   - ✅ **`mollify trace <module>`** (`trace.rs`) — a module's import neighborhood
     (imports + imported-by) from the static graph; `--format json`. +test.
-  - ⬜ supply-chain CVE join (needs OSV network — egress-blocked here), LSP, watch mode,
+  - ✅ **`mollify watch`** — poll-based re-run of `audit` on any `.py` add/edit/remove
+    (dependency-free file-signature diff; `--interval-ms`).
+  - ✅ **MCP server exposes every engine** (`mollify-mcp`): audit/dead-code/deps/arch/
+    complexity/dupes/types/security/coverage + explain + trace tools. +tests.
+  - ⬜ supply-chain CVE join (needs OSV network — egress-blocked here), LSP server,
     line-level (vs file-level) gate attribution.
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
