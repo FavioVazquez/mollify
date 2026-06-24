@@ -27,6 +27,7 @@ pub mod fix;
 pub mod git;
 pub mod hotspots;
 pub mod known;
+pub mod metrics;
 pub mod plugins;
 pub mod policy;
 pub mod sarif;

@@ -11,7 +11,8 @@
 //! Tools exposed: `mollify_audit`, `mollify_dead_code`, `mollify_deps`,
 //! `mollify_arch`, `mollify_complexity`, `mollify_dupes`, `mollify_types`,
 //! `mollify_security`, `mollify_coverage`, `mollify_supply_chain`,
-//! `mollify_explain`, `mollify_trace`, `mollify_inspect`, `mollify_list`.
+//! `mollify_explain`, `mollify_trace`, `mollify_inspect`, `mollify_list`,
+//! `mollify_metrics`.
 //! Analysis tools accept `{ "path": "<dir>" }` (default ".") and return the
 //! kind-discriminated JSON report as text content. (`watch` is a long-running
 //! loop and stays CLI-only.)
@@ -145,6 +146,7 @@ fn tool_list() -> Value {
         { "name": "mollify_trace", "description": "A module's import neighborhood: what it imports and what imports it.", "inputSchema": trace_schema },
         { "name": "mollify_inspect", "description": "Per-file evidence bundle: that file's findings plus its import neighborhood.", "inputSchema": inspect_schema },
         { "name": "mollify_list", "description": "Project topology: entry-points, files, or detected frameworks.", "inputSchema": list_schema },
+        { "name": "mollify_metrics", "description": "Code metrics: Maintainability Index, Halstead, raw LOC, per-file complexity.", "inputSchema": path_schema },
     ])
 }
 
@@ -221,6 +223,9 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
             let kind = arg_str("kind").unwrap_or("entry-points");
             let rows = mollify_core::list_topology(&root, kind);
             serde_json::to_string_pretty(&json!({ "kind": "list", "of": kind, "items": rows }))
+        }
+        "mollify_metrics" => {
+            serde_json::to_string_pretty(&Report::Metrics(mollify_core::metrics::report(&root)))
         }
         "mollify_explain" => {
             let body = match arg_str("rule") {
@@ -308,6 +313,7 @@ mod tests {
             "mollify_trace",
             "mollify_inspect",
             "mollify_list",
+            "mollify_metrics",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }

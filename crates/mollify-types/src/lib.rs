@@ -123,7 +123,8 @@ pub struct Finding {
 
 /// The kind-discriminated output envelope. `kind` lets clients switch on the
 /// result type and iterate `findings`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// `Eq` is intentionally omitted: `MetricsReport` carries `f64` fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Report {
     /// Full unified report across all analysis areas.
@@ -144,6 +145,47 @@ pub enum Report {
     Security(FindingsReport),
     /// Runtime-coverage cold-path analysis.
     Coverage(FindingsReport),
+    /// Code-metrics report (Maintainability Index, Halstead, raw LOC).
+    Metrics(MetricsReport),
+}
+
+/// Per-file code metrics (radon/wily-style), plus project totals.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricsReport {
+    pub schema_version: String,
+    pub files: Vec<FileMetrics>,
+    pub totals: MetricsTotals,
+}
+
+/// Maintainability and size metrics for one file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileMetrics {
+    pub path: camino::Utf8PathBuf,
+    /// Physical lines of code.
+    pub loc: u32,
+    /// Source lines (non-blank, non-comment).
+    pub sloc: u32,
+    pub comment_lines: u32,
+    pub blank_lines: u32,
+    pub functions: u32,
+    /// Sum of per-function cyclomatic complexity.
+    pub total_cyclomatic: u32,
+    pub max_cyclomatic: u32,
+    /// Maintainability Index, normalized to 0–100 (higher is better).
+    pub maintainability_index: f64,
+    /// MI rank: `A` (20–100), `B` (10–<20), `C` (<10) — radon's mapping.
+    pub mi_rank: char,
+}
+
+/// Project-wide metric totals.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MetricsTotals {
+    pub files: usize,
+    pub loc: u32,
+    pub sloc: u32,
+    pub functions: u32,
+    /// Mean Maintainability Index across files.
+    pub mean_maintainability_index: f64,
 }
 
 /// A report that is just a sorted list of findings plus a summary.

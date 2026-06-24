@@ -151,6 +151,9 @@ pub struct ParsedModule {
     /// True if the module contains a dynamic-dispatch sink (`getattr`, `eval`,
     /// `exec`, `__import__`, `importlib`) that should downgrade confidence.
     pub has_dynamic_sink: bool,
+    /// Halstead volume `(N1+N2) * log2(n1+n2)` over the module's tokens — the
+    /// volume term of the Maintainability Index (`mollify metrics`).
+    pub halstead_volume: f64,
     had_errors: bool,
 }
 
@@ -200,6 +203,7 @@ impl PyParser {
             scope_findings: Vec::new(),
             name_counts: std::collections::HashMap::new(),
             has_dynamic_sink: false,
+            halstead_volume: halstead_volume(root, bytes),
             had_errors: root.has_error(),
         };
 
@@ -645,6 +649,52 @@ fn collect_complexity(root: Node, bytes: &[u8], m: &mut ParsedModule) {
         }
     }
     m.functions.sort_by_key(|f| f.line);
+}
+
+/// Approximate Halstead volume: classify leaf tokens into operators (anonymous
+/// punctuation/keyword nodes) and operands (named identifier/literal leaves),
+/// then `volume = (N1+N2) * log2(n1+n2)`. Used by the Maintainability Index.
+fn halstead_volume(root: Node, bytes: &[u8]) -> f64 {
+    use std::collections::HashSet;
+    let mut distinct_ops: HashSet<String> = HashSet::new();
+    let mut distinct_oprs: HashSet<String> = HashSet::new();
+    let (mut total_ops, mut total_oprs) = (0u64, 0u64);
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let mut c = n.walk();
+        let children: Vec<Node> = n.children(&mut c).collect();
+        if children.is_empty() {
+            // Leaf.
+            let kind = n.kind();
+            if kind == "comment" {
+                // skip
+            } else if n.is_named() {
+                // identifiers and literals are operands.
+                if matches!(
+                    kind,
+                    "identifier" | "integer" | "float" | "string" | "true" | "false" | "none"
+                ) {
+                    total_oprs += 1;
+                    distinct_oprs.insert(node_text(n, bytes).to_string());
+                }
+            } else {
+                // anonymous punctuation / keyword = operator.
+                total_ops += 1;
+                distinct_ops.insert(kind.to_string());
+            }
+        } else {
+            for ch in children {
+                stack.push(ch);
+            }
+        }
+    }
+    let vocab = (distinct_ops.len() + distinct_oprs.len()) as f64;
+    let length = (total_ops + total_oprs) as f64;
+    if vocab <= 1.0 {
+        0.0
+    } else {
+        length * vocab.log2()
+    }
 }
 
 /// Names whose presence makes scope analysis unreliable — skip the function.
