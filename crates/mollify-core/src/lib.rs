@@ -24,6 +24,7 @@ pub mod git;
 pub mod known;
 pub mod plugins;
 pub mod sarif;
+pub mod security;
 pub mod typehealth;
 
 /// Build the graph for a project root once, to be shared across engines.
@@ -101,6 +102,16 @@ pub fn types_report(root: &Utf8Path) -> FindingsReport {
     )
 }
 
+/// `mollify security` — security candidates (deterministic; review before acting).
+pub fn security_report(root: &Utf8Path) -> FindingsReport {
+    let graph = build_graph(root);
+    finalize(
+        &config::load(root),
+        graph.modules.len(),
+        security::analyze(&graph),
+    )
+}
+
 /// `mollify audit` — the unified pass across all engines. Produces a quality
 /// score over the combined findings.
 pub fn audit_report(root: &Utf8Path) -> AuditReport {
@@ -117,6 +128,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     ));
     findings.extend(dupes::analyze(&graph));
     findings.extend(typehealth::analyze(&graph));
+    findings.extend(security::analyze(&graph));
     config::apply(&cfg, &mut findings);
     sort_findings(&mut findings);
     let files = graph.modules.len();

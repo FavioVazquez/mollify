@@ -76,8 +76,11 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     captures per-function param/return annotation counts (excluding self/cls); flags
     fully-untyped public functions (`untyped-function`, category `type-health`). A
     Python-specific differentiator with no fallow analog. Folded into `audit`. 1 test.
-  - ⬜ runtime-coverage merge (coverage.py/sys.monitoring), notebooks (.ipynb), security/secrets,
-    supply-chain CVE join, LSP. Architecture is ready for these.
+  - ✅ **Security** (`security.rs`, `mollify security`) — bandit-style candidate producer:
+    dangerous-eval, subprocess-shell-true, unsafe-yaml-load, unsafe-deserialization,
+    tls-verify-disabled, hardcoded-secret. Category `security`. Folded into `audit`. +tests.
+  - ⬜ runtime-coverage merge (coverage.py/sys.monitoring), notebooks (.ipynb),
+    churn×complexity ranking, supply-chain CVE join, LSP, named arch presets.
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
   - `.devin/rules/mollify.md` (glob `**/*.py`)
