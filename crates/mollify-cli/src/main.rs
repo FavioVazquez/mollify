@@ -61,6 +61,8 @@ enum Command {
     Inspect(InspectArgs),
     /// List project topology: entry points, modules, and detected frameworks.
     List(ListArgs),
+    /// Code metrics: Maintainability Index, Halstead, raw LOC, per-file complexity.
+    Metrics(MetricsArgs),
     /// Scaffold a .mollifyrc and report detected layout.
     Init(Scope),
     /// Run the Model Context Protocol server over stdio (for coding agents).
@@ -148,6 +150,16 @@ enum ListKind {
     EntryPoints,
     Files,
     Frameworks,
+}
+
+#[derive(clap::Args)]
+struct MetricsArgs {
+    /// Project root to analyze.
+    #[arg(long, default_value = ".")]
+    path: Utf8PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    format: Format,
 }
 
 #[derive(clap::Args)]
@@ -293,6 +305,7 @@ fn main() {
         Command::Watch(a) => run_watch(&a),
         Command::Inspect(a) => run_inspect(&a),
         Command::List(a) => run_list(&a),
+        Command::Metrics(a) => run_metrics(&a),
         Command::Init(s) => run_init(&s),
         Command::Mcp => match mollify_mcp::run() {
             Ok(()) => 0,
@@ -728,6 +741,39 @@ fn run_list(a: &ListArgs) -> i32 {
             println!("Mollify list:{label} — {} item(s)", rows.len());
             for r in &rows {
                 println!("  {}", r.replace('\t', "  "));
+            }
+        }
+    }
+    0
+}
+
+fn run_metrics(a: &MetricsArgs) -> i32 {
+    let report = mollify_core::metrics::report(&a.path);
+    match a.format {
+        Format::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&Report::Metrics(report)).unwrap()
+        ),
+        _ => {
+            println!("Mollify metrics — {}", a.path);
+            println!(
+                "{} file(s), {} LOC ({} SLOC), {} function(s); mean MI {:.1}",
+                report.totals.files,
+                report.totals.loc,
+                report.totals.sloc,
+                report.totals.functions,
+                report.totals.mean_maintainability_index
+            );
+            for f in &report.files {
+                println!(
+                    "  [{}] MI {:>5.1}  cc(max {:>2}, sum {:>3})  {} sloc  {}",
+                    f.mi_rank,
+                    f.maintainability_index,
+                    f.max_cyclomatic,
+                    f.total_cyclomatic,
+                    f.sloc,
+                    f.path
+                );
             }
         }
     }
