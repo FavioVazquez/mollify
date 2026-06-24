@@ -79,8 +79,13 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
   - ✅ **Security** (`security.rs`, `mollify security`) — bandit-style candidate producer:
     dangerous-eval, subprocess-shell-true, unsafe-yaml-load, unsafe-deserialization,
     tls-verify-disabled, hardcoded-secret. Category `security`. Folded into `audit`. +tests.
-  - ⬜ runtime-coverage merge (coverage.py/sys.monitoring), notebooks (.ipynb),
-    churn×complexity ranking, supply-chain CVE join, LSP, named arch presets.
+  - ✅ **Churn×complexity hotspots** (`hotspots.rs`) — `git log` churn × per-file
+    cyclomatic complexity → ranked refactor-priority `hotspot` findings (the clean FOSS
+    Python white space). In `complexity` + `audit`. +test.
+  - ✅ **Notebooks (.ipynb)** — discovery + code-cell extraction (`graph::read_source`);
+    notebooks are analyzed by every engine (treated as entry scripts). +test.
+  - ⬜ runtime-coverage merge (coverage.py/sys.monitoring), supply-chain CVE join,
+    LSP, named arch presets.
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
   - `.devin/rules/mollify.md` (glob `**/*.py`)
