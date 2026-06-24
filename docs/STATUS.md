@@ -87,8 +87,19 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
   - ✅ **Runtime-coverage merge** (`coverage.rs`, `mollify coverage --coverage-file`) —
     reads a coverage.py JSON report; flags reachable-but-never-executed functions as
     `cold-code` (the cold-path signal; fallow's *paid* feature, here free). +test.
-  - ⬜ supply-chain CVE join (needs OSV network — egress-blocked here), LSP,
-    named architecture presets.
+  - ✅ **Named architecture presets / layer boundaries** (`arch.rs::analyze_layers`,
+    `.mollifyrc` `architecture.layers`/`preset`) — emits `layer-violation` when a module
+    imports a higher layer; presets `layered`/`hexagonal`/`feature-sliced`/`bulletproof`
+    expand to default orderings. In `arch` + `audit`. +tests.
+  - ✅ **Declarative rule packs / policies** (`policy.rs`, `.mollifyrc` `policies`) —
+    `forbid_import`/`forbid_call`, optionally path-scoped; deterministic `certain`
+    violations under custom rule ids. In `arch` + `audit`. +tests.
+  - ✅ **`mollify explain [<rule>]`** (`explain.rs`) — rule semantics/confidence/action,
+    no analysis run; lists all rules with no argument. +test.
+  - ✅ **`mollify trace <module>`** (`trace.rs`) — a module's import neighborhood
+    (imports + imported-by) from the static graph; `--format json`. +test.
+  - ⬜ supply-chain CVE join (needs OSV network — egress-blocked here), LSP, watch mode,
+    line-level (vs file-level) gate attribution.
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
   - `.devin/rules/mollify.md` (glob `**/*.py`)

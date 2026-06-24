@@ -19,6 +19,25 @@ pub struct Config {
     /// Ordered layer names, top (most dependent) → bottom. A layer may import
     /// same/lower layers; importing a higher layer is a `layer-violation`.
     pub arch_layers: Vec<String>,
+    /// Declarative rule packs: banned imports / calls, optionally path-scoped.
+    pub policies: Vec<Policy>,
+}
+
+/// One declarative policy ("rule pack" entry): forbid an import and/or a call,
+/// optionally only within certain path substrings.
+#[derive(Debug, Clone)]
+pub struct Policy {
+    /// Stable rule id surfaced on findings (e.g. `no-requests-in-domain`).
+    pub id: String,
+    /// Forbidden import module prefix (e.g. `requests`, `django.db`).
+    pub forbid_import: Option<String>,
+    /// Forbidden call callee (e.g. `print`, `os.system`, `subprocess`).
+    pub forbid_call: Option<String>,
+    /// Path substrings this policy applies to; empty = whole project.
+    pub in_paths: Vec<String>,
+    /// Human explanation shown in the finding reason.
+    pub message: Option<String>,
+    pub severity: Severity,
 }
 
 impl Default for Config {
@@ -30,6 +49,7 @@ impl Default for Config {
             max_cognitive: crate::complexity::DEFAULT_COGNITIVE,
             arch_preset: None,
             arch_layers: Vec::new(),
+            policies: Vec::new(),
         }
     }
 }
@@ -74,8 +94,71 @@ pub fn load(root: &Utf8Path) -> Config {
                 .filter_map(|x| x.as_str().map(String::from))
                 .collect();
         }
+        // An explicit `layers` list always wins; otherwise a known `preset`
+        // expands to a conventional ordering so users can opt in with one key.
+        if cfg.arch_layers.is_empty() {
+            if let Some(preset) = cfg.arch_preset.as_deref() {
+                cfg.arch_layers = preset_layers(preset);
+            }
+        }
+    }
+    if let Some(pols) = v.get("policies").and_then(|p| p.as_array()) {
+        for (i, p) in pols.iter().enumerate() {
+            let Some(obj) = p.as_object() else { continue };
+            let forbid_import = obj.get("forbid_import").and_then(|x| x.as_str());
+            let forbid_call = obj.get("forbid_call").and_then(|x| x.as_str());
+            // A policy with neither lever is inert; skip it.
+            if forbid_import.is_none() && forbid_call.is_none() {
+                continue;
+            }
+            let id = obj
+                .get("id")
+                .and_then(|x| x.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| format!("policy-{i}"));
+            let in_paths = obj
+                .get("in_paths")
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| s.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let severity = obj
+                .get("severity")
+                .and_then(|s| s.as_str())
+                .and_then(parse_severity)
+                .unwrap_or(Severity::Warn);
+            cfg.policies.push(Policy {
+                id,
+                forbid_import: forbid_import.map(String::from),
+                forbid_call: forbid_call.map(String::from),
+                in_paths,
+                message: obj
+                    .get("message")
+                    .and_then(|x| x.as_str())
+                    .map(String::from),
+                severity,
+            });
+        }
     }
     cfg
+}
+
+/// Default ordered layer names (top/most-dependent → bottom) for a named preset.
+/// Unknown presets yield an empty list (the layer engine then does nothing).
+fn preset_layers(preset: &str) -> Vec<String> {
+    let names: &[&str] = match preset.to_ascii_lowercase().as_str() {
+        // Classic n-tier: presentation depends on application depends on domain…
+        "layered" => &["presentation", "application", "domain", "infrastructure"],
+        // Ports-and-adapters: adapters/app may depend on domain, never the reverse.
+        "hexagonal" => &["adapters", "application", "domain"],
+        // Bulletproof-style: features → entities → shared.
+        "feature-sliced" | "bulletproof" => &["app", "features", "entities", "shared"],
+        _ => &[],
+    };
+    names.iter().map(|s| s.to_string()).collect()
 }
 
 fn parse_severity(s: &str) -> Option<Severity> {
@@ -158,6 +241,13 @@ mod tests {
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].location.path, "src/a.py");
         assert_eq!(f[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn preset_expands_to_default_layers() {
+        assert_eq!(preset_layers("hexagonal").len(), 3);
+        assert_eq!(preset_layers("layered")[0], "presentation");
+        assert!(preset_layers("nonsense").is_empty());
     }
 
     #[test]

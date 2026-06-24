@@ -91,12 +91,23 @@ pub struct SecurityHit {
     pub detail: String,
 }
 
+/// A single call expression's callee text and 1-based line. The callee is the
+/// surface text of the `function` field (e.g. `print`, `subprocess.run`,
+/// `os.system`) — enough for declarative `forbid_call` policies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallSite {
+    pub callee: String,
+    pub line: u32,
+}
+
 /// The parsed view of one Python module that the graph builds on.
 #[derive(Debug, Clone)]
 pub struct ParsedModule {
     pub path: camino::Utf8PathBuf,
     pub definitions: Vec<Definition>,
     pub imports: Vec<Import>,
+    /// Every call expression's callee text + line (for policy enforcement).
+    pub calls: Vec<CallSite>,
     /// Complexity per function/method (including nested), attributed separately.
     pub functions: Vec<FunctionComplexity>,
     /// Syntactic security candidates.
@@ -152,6 +163,7 @@ impl PyParser {
             path: path.to_owned(),
             definitions: Vec::new(),
             imports: Vec::new(),
+            calls: Vec::new(),
             functions: Vec::new(),
             security_hits: Vec::new(),
             dunder_all: None,
@@ -727,6 +739,10 @@ fn collect_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
                     if DYNAMIC_SINKS.contains(&t) || t.starts_with("importlib") {
                         m.has_dynamic_sink = true;
                     }
+                    m.calls.push(CallSite {
+                        callee: t.to_string(),
+                        line: func.start_position().row as u32 + 1,
+                    });
                 }
             }
             _ => {}

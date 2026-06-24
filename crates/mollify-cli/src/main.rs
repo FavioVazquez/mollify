@@ -43,6 +43,10 @@ enum Command {
     Coverage(CoverageArgs),
     /// Apply safe auto-fixes (certain, auto-fixable unused symbols). Dry-run unless --apply.
     Fix(FixArgs),
+    /// Explain a rule id (semantics, confidence, how to act). No argument lists all rules.
+    Explain(ExplainArgs),
+    /// Show a module's import neighborhood: what it imports and what imports it.
+    Trace(TraceArgs),
     /// Scaffold a .mollifyrc and report detected layout.
     Init(Scope),
     /// Run the Model Context Protocol server over stdio (for coding agents).
@@ -57,6 +61,24 @@ struct CoverageArgs {
     /// Path to a coverage.py JSON report (produced by `coverage json`).
     #[arg(long)]
     coverage_file: Utf8PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    format: Format,
+}
+
+#[derive(clap::Args)]
+struct ExplainArgs {
+    /// Rule id to explain (e.g. `circular-dependency`). Omit to list all rules.
+    rule: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct TraceArgs {
+    /// Module to trace (dotted name or trailing segment, e.g. `app.db` or `db`).
+    module: String,
+    /// Project root to analyze.
+    #[arg(long, default_value = ".")]
+    path: Utf8PathBuf,
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Human)]
     format: Format,
@@ -155,6 +177,8 @@ fn main() {
         ),
         Command::Coverage(a) => run_coverage(&a),
         Command::Fix(a) => run_fix(&a),
+        Command::Explain(a) => run_explain(&a),
+        Command::Trace(a) => run_trace(&a),
         Command::Init(s) => run_init(&s),
         Command::Mcp => match mollify_mcp::run() {
             Ok(()) => 0,
@@ -285,6 +309,60 @@ fn run_fix(a: &FixArgs) -> i32 {
             1
         }
     }
+}
+
+fn run_explain(a: &ExplainArgs) -> i32 {
+    match &a.rule {
+        Some(rule) => match mollify_core::explain::text(rule) {
+            Some(t) => {
+                println!("{rule}\n  {t}");
+                0
+            }
+            None => {
+                eprintln!("Unknown rule `{rule}`. Run `mollify explain` to list all rules.");
+                1
+            }
+        },
+        None => {
+            println!("Mollify rules (run `mollify explain <rule>` for details):");
+            for r in mollify_core::explain::RULES {
+                println!("  {r}");
+            }
+            0
+        }
+    }
+}
+
+fn run_trace(a: &TraceArgs) -> i32 {
+    let graph = mollify_core::build_graph(&a.path);
+    let Some(t) = mollify_core::trace::module(&graph, &a.module) else {
+        eprintln!("No module matching `{}` found under {}.", a.module, a.path);
+        return 1;
+    };
+    match a.format {
+        Format::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "kind": "trace",
+                "target": t.target,
+                "imports": t.imports,
+                "imported_by": t.imported_by,
+            }))
+            .unwrap()
+        ),
+        _ => {
+            println!("Trace — {}", t.target);
+            println!("  imports ({}):", t.imports.len());
+            for m in &t.imports {
+                println!("    → {m}");
+            }
+            println!("  imported by ({}):", t.imported_by.len());
+            for m in &t.imported_by {
+                println!("    ← {m}");
+            }
+        }
+    }
+    0
 }
 
 fn run_init(s: &Scope) -> i32 {

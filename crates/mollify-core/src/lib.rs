@@ -19,14 +19,17 @@ pub mod coverage;
 pub mod deadcode;
 pub mod deps;
 pub mod dupes;
+pub mod explain;
 pub mod fingerprint;
 pub mod fix;
 pub mod git;
 pub mod hotspots;
 pub mod known;
 pub mod plugins;
+pub mod policy;
 pub mod sarif;
 pub mod security;
+pub mod trace;
 pub mod typehealth;
 
 /// Build the graph for a project root once, to be shared across engines.
@@ -72,6 +75,7 @@ pub fn arch_report(root: &Utf8Path) -> FindingsReport {
     let cfg = config::load(root);
     let mut findings = arch::analyze(&graph);
     findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
+    findings.extend(policy::analyze(&graph, &cfg.policies));
     finalize(&cfg, graph.modules.len(), findings)
 }
 
@@ -131,6 +135,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     findings.extend(deps::analyze(root, &graph));
     findings.extend(arch::analyze(&graph));
     findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
+    findings.extend(policy::analyze(&graph, &cfg.policies));
     findings.extend(complexity::analyze_with(
         &graph,
         cfg.max_cyclomatic,
