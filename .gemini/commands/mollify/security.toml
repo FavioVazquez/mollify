@@ -1,0 +1,20 @@
+description = "Scan for security candidates (eval/exec, shell=True, secrets, weak crypto, ...)"
+prompt = """
+You are reviewing this repository with Mollify, a deterministic Python
+code-intelligence engine. Mollify emits evidence, not decisions — these are
+candidates, not confirmed vulnerabilities.
+
+Here is the current security output:
+!{mollify security --format json {{args}}}
+
+Using ONLY this output (do not grep, do not guess, do not invent findings):
+
+1. Group findings by `rule` (`dangerous-eval`, `subprocess-shell-true`,
+   `sql-injection`, `unsafe-yaml-load`, `unsafe-deserialization`,
+   `tls-verify-disabled`, `hardcoded-secret`, `weak-hash`, `weak-cipher`,
+   `insecure-random`, `request-without-timeout`) and by `confidence`, with counts.
+2. List each finding with `location.path:location.line`, its `reason`, and the
+   `fingerprint`.
+3. Propose a remediation plan ordered by severity, verifying each candidate in
+   context. Do NOT modify files without explicit user confirmation.
+"""

@@ -15,9 +15,10 @@ Using ONLY this output (do not grep, do not guess, do not invent findings):
    `rule`, `severity`, and `reason`.
 2. Call out every finding with `confidence: certain`, and specifically those whose
    actions are `auto_fixable: true` — these are the safe, high-confidence candidates.
-3. Before recommending any deletion, advise tracing the symbol's callers/usages to
-   confirm there are no reachable references. (Note: there is no `mollify trace`
-   command — do NOT claim one exists; suggest manual verification or review instead.)
+3. Before recommending any deletion, verify there are no reachable references.
+   Use `mollify trace <module>` to see a module's import neighborhood (what it
+   imports and what imports it), or `mollify inspect <file>` for a file's evidence
+   bundle plus its import neighborhood.
 4. Propose a concrete fix plan ordered by confidence and severity, using each
    finding's `suppression_comment` for known-good cases where deletion is not wanted.
    Do NOT run any fixes or modify files without explicit user confirmation.
