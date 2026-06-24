@@ -196,6 +196,28 @@ struct Scope {
     /// Advisory mode: print the report but always exit 0 (never gate CI).
     #[arg(long)]
     brief: bool,
+    /// Only show findings at least this confident (certain > likely > uncertain).
+    #[arg(long, value_enum)]
+    min_confidence: Option<ConfidenceArg>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum ConfidenceArg {
+    Certain,
+    Likely,
+    Uncertain,
+}
+
+/// Drop findings less confident than `--min-confidence`. Certainty order is
+/// certain > likely > uncertain (the enum's `Ord` runs certain < uncertain).
+fn apply_min_confidence(s: &Scope, findings: &mut Vec<Finding>) {
+    let Some(min) = s.min_confidence else { return };
+    let threshold = match min {
+        ConfidenceArg::Certain => Confidence::Certain,
+        ConfidenceArg::Likely => Confidence::Likely,
+        ConfidenceArg::Uncertain => Confidence::Uncertain,
+    };
+    findings.retain(|f| f.confidence <= threshold);
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -339,6 +361,7 @@ fn gated_exit(s: &Scope, errors: usize, outcome: &BaselineOutcome) -> i32 {
 fn run_audit(s: &Scope) -> i32 {
     let mut report = mollify_core::audit_report(&s.path);
     apply_gate(s, &mut report.findings);
+    apply_min_confidence(s, &mut report.findings);
     let outcome = handle_baseline(s, &mut report.findings);
     if let BaselineOutcome::Saved(p) = &outcome {
         println!(
@@ -381,6 +404,7 @@ fn run_findings(
 ) -> i32 {
     let mut report = f(&s.path);
     apply_gate(s, &mut report.findings);
+    apply_min_confidence(s, &mut report.findings);
     let outcome = handle_baseline(s, &mut report.findings);
     if let BaselineOutcome::Saved(p) = &outcome {
         println!(
@@ -632,6 +656,7 @@ fn run_watch(a: &WatchArgs) -> i32 {
         baseline: None,
         fail_on_regression: false,
         brief: false,
+        min_confidence: None,
     };
     println!(
         "Watching {} (every {}ms) — Ctrl-C to stop.\n",
