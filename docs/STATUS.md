@@ -41,7 +41,13 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     **`--gate new-only`** + `--base <ref>` (git change detection in `mollify-core/git.rs`,
     file-level introduced/inherited attribution — line-level base-worktree is the documented
     upgrade); framework entry-point plugins (done in Phase 2). Agent hooks now use `--gate new-only`.
-  - ⏳ Still open: `.mollifyrc` actually read by analysis, `fix` command, line-level gate.
+  - ✅ **`.mollifyrc.json`** now read (`mollify-core/config.rs`): per-rule/category severity
+    overrides (so teams can make rules `error` → CI/hooks block), `ignore` path substrings,
+    complexity thresholds. Applied across every engine.
+  - ✅ **`mollify fix`** (`mollify-core/fix.rs`): removes only `certain` + `auto_fixable`
+    unused symbols, bottom-up; dry-run by default, `--apply` to write. Verified.
+  - ⏳ Still open (nice-to-have): line-level gate (base-worktree), named arch presets,
+    churn×complexity ranking, LSP, runtime/type intelligence (Phase 4).
 - **Phase 2 — dupes + complexity + arch:** ✅ (all three engines done, tested, in `audit`)
   - ✅ **Framework plugins** (`mollify-core/plugins.rs`) — decorator registry (routes, tasks,
     fixtures, signal receivers, CLI commands, validators…) marks registered symbols reached;
