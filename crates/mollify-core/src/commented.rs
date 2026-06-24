@@ -46,43 +46,47 @@ fn looks_like_code(body: &str) -> bool {
 pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     for m in &graph.modules {
-        let Some(src) = mollify_graph::read_source(&m.path) else {
+        if let Some(src) = mollify_graph::read_source(&m.path) {
+            findings.extend(analyze_source(&m.path, &src));
+        }
+    }
+    findings
+}
+
+/// Commented-code findings from a file's source text (also the live LSP path).
+pub fn analyze_source(path: &camino::Utf8Path, src: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for (i, line) in src.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let Some(body) = trimmed.strip_prefix('#') else {
             continue;
         };
-        for (i, line) in src.lines().enumerate() {
-            let trimmed = line.trim_start();
-            let Some(body) = trimmed.strip_prefix('#') else {
-                continue;
-            };
-            // Only treat a *whole-line* comment as candidate code (not trailing).
-            if !looks_like_code(body) {
-                continue;
-            }
-            let rule = "commented-code";
-            let line_no = i as u32 + 1;
-            findings.push(Finding {
-                fingerprint: fingerprint(rule, &[m.path.as_str(), &line_no.to_string()]),
-                rule: rule.into(),
-                category: Category::DeadCode,
-                severity: Severity::Warn,
-                confidence: Confidence::Likely,
-                attribution: None,
-                reason: format!("commented-out code: `{}`", body.trim()),
-                location: Location {
-                    path: m.path.clone(),
-                    line: line_no,
-                    column: 0,
-                    end_line: None,
-                },
-                actions: vec![Action {
-                    kind: "remove-commented-code".into(),
-                    description: "Delete the commented-out code (version control remembers it)"
-                        .into(),
-                    auto_fixable: false,
-                    suppression_comment: Some("# mollify: ignore[commented-code]".into()),
-                }],
-            });
+        if !looks_like_code(body) {
+            continue;
         }
+        let rule = "commented-code";
+        let line_no = i as u32 + 1;
+        findings.push(Finding {
+            fingerprint: fingerprint(rule, &[path.as_str(), &line_no.to_string()]),
+            rule: rule.into(),
+            category: Category::DeadCode,
+            severity: Severity::Warn,
+            confidence: Confidence::Likely,
+            attribution: None,
+            reason: format!("commented-out code: `{}`", body.trim()),
+            location: Location {
+                path: path.to_owned(),
+                line: line_no,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![Action {
+                kind: "remove-commented-code".into(),
+                description: "Delete the commented-out code (version control remembers it)".into(),
+                auto_fixable: false,
+                suppression_comment: Some("# mollify: ignore[commented-code]".into()),
+            }],
+        });
     }
     findings
 }

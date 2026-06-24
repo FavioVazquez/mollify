@@ -45,32 +45,42 @@ fn cwe_for(rule: &str) -> Option<&'static str> {
 pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     for m in &graph.modules {
-        for hit in &m.parsed.security_hits {
-            findings.push(Finding {
-                fingerprint: fingerprint(hit.rule, &[m.path.as_str(), &hit.line.to_string()]),
-                rule: hit.rule.to_string(),
-                category: Category::Security,
-                severity: Severity::Warn,
-                confidence: confidence_for(hit.rule),
-                attribution: None,
-                reason: match cwe_for(hit.rule) {
-                    Some(cwe) => format!("{} [{cwe}]", hit.detail),
-                    None => hit.detail.clone(),
-                },
-                location: Location {
-                    path: m.path.clone(),
-                    line: hit.line,
-                    column: 0,
-                    end_line: None,
-                },
-                actions: vec![Action {
-                    kind: "review-security".into(),
-                    description: "Review this security candidate; confirm before acting".into(),
-                    auto_fixable: false,
-                    suppression_comment: Some(format!("# mollify: ignore[{}]", hit.rule)),
-                }],
-            });
-        }
+        findings.extend(analyze_parsed(&m.path, &m.parsed));
+    }
+    findings
+}
+
+/// Security findings for a single parsed module (also used by the live LSP path).
+pub fn analyze_parsed(
+    path: &camino::Utf8Path,
+    parsed: &mollify_parse::ParsedModule,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for hit in &parsed.security_hits {
+        findings.push(Finding {
+            fingerprint: fingerprint(hit.rule, &[path.as_str(), &hit.line.to_string()]),
+            rule: hit.rule.to_string(),
+            category: Category::Security,
+            severity: Severity::Warn,
+            confidence: confidence_for(hit.rule),
+            attribution: None,
+            reason: match cwe_for(hit.rule) {
+                Some(cwe) => format!("{} [{cwe}]", hit.detail),
+                None => hit.detail.clone(),
+            },
+            location: Location {
+                path: path.to_owned(),
+                line: hit.line,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![Action {
+                kind: "review-security".into(),
+                description: "Review this security candidate; confirm before acting".into(),
+                auto_fixable: false,
+                suppression_comment: Some(format!("# mollify: ignore[{}]", hit.rule)),
+            }],
+        });
     }
     findings
 }

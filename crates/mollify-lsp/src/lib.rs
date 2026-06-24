@@ -3,7 +3,8 @@
 //! A minimal, dependency-light **Language Server Protocol** server over stdio
 //! (`Content-Length`-framed JSON-RPC 2.0). It gives editors real-time mollify
 //! diagnostics: on open/save it runs the unified audit for the workspace and
-//! publishes per-file diagnostics.
+//! publishes per-file diagnostics; on **didChange** it runs fast file-local
+//! analysis on the live (unsaved) buffer for keystroke-latency feedback.
 //!
 //! Protocol invariant: **all logging goes to stderr**; stdout carries only
 //! framed protocol messages. Determinism is inherited from `mollify-core`.
@@ -40,6 +41,26 @@ struct Server {
     exit: bool,
 }
 
+/// Extract the full document text from a didOpen/didChange notification (we
+/// advertise Full sync, so `contentChanges[0].text` is the whole buffer).
+fn doc_text(msg: &Value) -> Option<String> {
+    let params = msg.get("params")?;
+    if let Some(t) = params
+        .get("textDocument")
+        .and_then(|d| d.get("text"))
+        .and_then(|t| t.as_str())
+    {
+        return Some(t.to_string());
+    }
+    params
+        .get("contentChanges")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.last())
+        .and_then(|c| c.get("text"))
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string())
+}
+
 impl Server {
     /// Handle one incoming message, returning zero or more messages to send.
     fn handle(&mut self, msg: &Value) -> Vec<Value> {
@@ -64,8 +85,11 @@ impl Server {
                 self.exit = true;
                 vec![]
             }
+            // Open/save → full workspace audit (cross-file rules).
             "textDocument/didOpen" | "textDocument/didSave" => self.diagnose(msg),
-            // didChange/initialized and other notifications: no response.
+            // Change → fast file-local diagnostics from the live buffer.
+            "textDocument/didChange" => self.diagnose_buffer(msg),
+            // initialized and other notifications: no response.
             _ => vec![],
         }
     }
@@ -94,6 +118,31 @@ impl Server {
             .findings
             .iter()
             .filter(|f| same_file(&root, &f.location.path, &file_abs))
+            .map(to_diagnostic)
+            .collect();
+        vec![notification(
+            "textDocument/publishDiagnostics",
+            json!({ "uri": uri, "diagnostics": diagnostics }),
+        )]
+    }
+}
+
+impl Server {
+    /// Live file-local diagnostics from the edited buffer (no disk read).
+    fn diagnose_buffer(&self, msg: &Value) -> Vec<Value> {
+        let Some(uri) = msg
+            .get("params")
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(|u| u.as_str())
+        else {
+            return vec![];
+        };
+        let (Some(path), Some(text)) = (uri_to_path(uri), doc_text(msg)) else {
+            return vec![];
+        };
+        let diagnostics: Vec<Value> = mollify_core::analyze_text(&path, &text)
+            .iter()
             .map(to_diagnostic)
             .collect();
         vec![notification(
@@ -260,6 +309,22 @@ mod tests {
             uri_to_path("file:///home/u/a%20b.py").unwrap().as_str(),
             "/home/u/a b.py"
         );
+    }
+
+    #[test]
+    fn diagnose_buffer_reports_file_local_findings_live() {
+        let s = Server::default();
+        // Unsaved buffer with a hardcoded secret + an unused local — no disk.
+        let text =
+            "def f():\n    api_key = \"sk-abcdefghij\"\n    dead = compute()\n    return 1\n";
+        let note = json!({"jsonrpc":"2.0","method":"textDocument/didChange",
+            "params":{"textDocument":{"uri":"file:///tmp/buf.py"},
+                      "contentChanges":[{"text": text}]}});
+        let out = s.diagnose_buffer(&note);
+        let diags = out[0]["params"]["diagnostics"].as_array().unwrap();
+        let codes: Vec<&str> = diags.iter().filter_map(|d| d["code"].as_str()).collect();
+        assert!(codes.contains(&"hardcoded-secret"), "got {codes:?}");
+        assert!(codes.contains(&"unused-variable"), "got {codes:?}");
     }
 
     #[test]

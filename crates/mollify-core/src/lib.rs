@@ -218,6 +218,97 @@ pub fn inspect(root: &Utf8Path, file: &str) -> Inspection {
     }
 }
 
+/// File-local diagnostics from an in-memory buffer (no disk, no graph) — the
+/// live LSP path for `textDocument/didChange`. Covers the intra-file rules
+/// (security, unused variables/parameters, complexity, commented-out code);
+/// cross-file rules (dead exports, deps, architecture) are produced by the full
+/// audit on save. Returns sorted findings, honoring inline suppressions.
+pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
+    let mut parser = match mollify_parse::PyParser::new() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    let Ok(parsed) = parser.parse(path, source) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    findings.extend(security::analyze_parsed(path, &parsed));
+    findings.extend(commented::analyze_source(path, source));
+    // Unused local variables / parameters.
+    for s in &parsed.scope_findings {
+        let (rule, kind, confidence) = if s.is_param {
+            (
+                "unused-parameter",
+                "parameter",
+                mollify_types::Confidence::Uncertain,
+            )
+        } else {
+            (
+                "unused-variable",
+                "local variable",
+                mollify_types::Confidence::Likely,
+            )
+        };
+        findings.push(Finding {
+            fingerprint: fingerprint::fingerprint(
+                rule,
+                &[path.as_str(), &s.name, &s.line.to_string()],
+            ),
+            rule: rule.into(),
+            category: Category::DeadCode,
+            severity: Severity::Warn,
+            confidence,
+            attribution: None,
+            reason: format!("{kind} `{}` is assigned but never used", s.name),
+            location: mollify_types::Location {
+                path: path.to_owned(),
+                line: s.line,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![],
+        });
+    }
+    // High complexity over default thresholds.
+    for f in &parsed.functions {
+        if f.cyclomatic > complexity::DEFAULT_CYCLOMATIC
+            || f.cognitive > complexity::DEFAULT_COGNITIVE
+        {
+            findings.push(Finding {
+                fingerprint: fingerprint::fingerprint("high-complexity", &[path.as_str(), &f.name]),
+                rule: "high-complexity".into(),
+                category: Category::Complexity,
+                severity: Severity::Warn,
+                confidence: mollify_types::Confidence::Certain,
+                attribution: None,
+                reason: format!(
+                    "function `{}` is complex (cyclomatic {}, cognitive {})",
+                    f.name, f.cyclomatic, f.cognitive
+                ),
+                location: mollify_types::Location {
+                    path: path.to_owned(),
+                    line: f.line,
+                    column: 0,
+                    end_line: Some(f.end_line),
+                },
+                actions: vec![],
+            });
+        }
+    }
+    // Honor inline `# mollify: ignore[...]` on the buffer's own lines.
+    let mut sup: rustc_hash::FxHashMap<u32, Vec<&str>> = rustc_hash::FxHashMap::default();
+    for (line, rule) in &parsed.ignores {
+        sup.entry(*line).or_default().push(rule.as_str());
+    }
+    findings.retain(|f| {
+        sup.get(&f.location.line)
+            .map(|rules| !rules.iter().any(|r| *r == "*" || *r == f.rule))
+            .unwrap_or(true)
+    });
+    sort_findings(&mut findings);
+    findings
+}
+
 /// Export the module import graph as Graphviz DOT or Mermaid `flowchart`.
 pub fn graph_export(root: &Utf8Path, mermaid: bool) -> String {
     let graph = build_graph(root);
