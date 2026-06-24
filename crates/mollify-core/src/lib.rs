@@ -161,6 +161,86 @@ pub fn supply_chain_report_with(
 /// The default advisory DB path checked by `audit` when present.
 pub const DEFAULT_ADVISORY_DB: &str = ".mollify/advisories.json";
 
+/// A per-file evidence bundle: the matched module, its findings, and its import
+/// neighborhood. Shared by `mollify inspect` (CLI) and the `mollify_inspect`
+/// MCP tool.
+pub struct Inspection {
+    pub file: String,
+    pub module: Option<String>,
+    pub findings: Vec<Finding>,
+    pub imports: Vec<String>,
+    pub imported_by: Vec<String>,
+}
+
+/// Returns true if `path` matches the user's `file` argument (exact, or as a
+/// trailing path fragment).
+fn path_matches(path: &str, file: &str) -> bool {
+    path == file || path.ends_with(file) || path.ends_with(&format!("/{file}"))
+}
+
+/// Build the evidence bundle for a single file.
+pub fn inspect(root: &Utf8Path, file: &str) -> Inspection {
+    let report = audit_report(root);
+    let findings: Vec<Finding> = report
+        .findings
+        .into_iter()
+        .filter(|f| path_matches(f.location.path.as_str(), file))
+        .collect();
+    let graph = build_graph(root);
+    let module = graph
+        .modules
+        .iter()
+        .find(|m| path_matches(m.path.as_str(), file))
+        .map(|m| m.dotted.clone());
+    let trace = module.as_deref().and_then(|d| trace::module(&graph, d));
+    Inspection {
+        file: file.to_string(),
+        module,
+        findings,
+        imports: trace
+            .as_ref()
+            .map(|t| t.imports.clone())
+            .unwrap_or_default(),
+        imported_by: trace
+            .as_ref()
+            .map(|t| t.imported_by.clone())
+            .unwrap_or_default(),
+    }
+}
+
+/// Topology listing for `mollify list` / `mollify_list`.
+pub fn list_topology(root: &Utf8Path, kind: &str) -> Vec<String> {
+    let graph = build_graph(root);
+    let mut rows: Vec<String> = match kind {
+        "files" => graph
+            .modules
+            .iter()
+            .map(|m| format!("{}\t{}", m.dotted, m.path))
+            .collect(),
+        "frameworks" => {
+            let mut fw: std::collections::BTreeSet<String> = Default::default();
+            for m in &graph.modules {
+                for d in &m.parsed.definitions {
+                    if plugins::is_framework_entry(d) {
+                        for dec in &d.decorators {
+                            fw.insert(dec.split('.').next().unwrap_or(dec).to_string());
+                        }
+                    }
+                }
+            }
+            fw.into_iter().collect()
+        }
+        _ => graph
+            .modules
+            .iter()
+            .filter(|m| m.is_entry)
+            .map(|m| format!("{}\t{}", m.dotted, m.path))
+            .collect(),
+    };
+    rows.sort();
+    rows
+}
+
 /// `mollify audit` — the unified pass across all engines. Produces a quality
 /// score over the combined findings.
 pub fn audit_report(root: &Utf8Path) -> AuditReport {

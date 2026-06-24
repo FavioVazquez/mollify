@@ -10,9 +10,11 @@
 //!
 //! Tools exposed: `mollify_audit`, `mollify_dead_code`, `mollify_deps`,
 //! `mollify_arch`, `mollify_complexity`, `mollify_dupes`, `mollify_types`,
-//! `mollify_security`, `mollify_coverage`, `mollify_explain`, `mollify_trace`.
+//! `mollify_security`, `mollify_coverage`, `mollify_supply_chain`,
+//! `mollify_explain`, `mollify_trace`, `mollify_inspect`, `mollify_list`.
 //! Analysis tools accept `{ "path": "<dir>" }` (default ".") and return the
-//! kind-discriminated JSON report as text content.
+//! kind-discriminated JSON report as text content. (`watch` is a long-running
+//! loop and stays CLI-only.)
 
 use camino::Utf8PathBuf;
 use serde_json::{json, Value};
@@ -106,6 +108,21 @@ fn tool_list() -> Value {
         },
         "required": ["module"]
     });
+    let inspect_schema = json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Project root to analyze (default \".\")." },
+            "file": { "type": "string", "description": "File to inspect (path or trailing fragment)." }
+        },
+        "required": ["file"]
+    });
+    let list_schema = json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Project root to analyze (default \".\")." },
+            "kind": { "type": "string", "enum": ["entry-points", "files", "frameworks"], "description": "What to list (default entry-points)." }
+        }
+    });
     let supply_chain_schema = json!({
         "type": "object",
         "properties": {
@@ -126,6 +143,8 @@ fn tool_list() -> Value {
         { "name": "mollify_supply_chain", "description": "Match pinned/locked dependency versions against a local advisory DB (vulnerable-dependency).", "inputSchema": supply_chain_schema },
         { "name": "mollify_explain", "description": "Explain a rule id (semantics, confidence, action). Omit `rule` to list all rules.", "inputSchema": explain_schema },
         { "name": "mollify_trace", "description": "A module's import neighborhood: what it imports and what imports it.", "inputSchema": trace_schema },
+        { "name": "mollify_inspect", "description": "Per-file evidence bundle: that file's findings plus its import neighborhood.", "inputSchema": inspect_schema },
+        { "name": "mollify_list", "description": "Project topology: entry-points, files, or detected frameworks.", "inputSchema": list_schema },
     ])
 }
 
@@ -182,6 +201,26 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
             serde_json::to_string_pretty(&Report::Security(mollify_core::supply_chain_report(
                 &root, &db,
             )))
+        }
+        "mollify_inspect" => {
+            let Some(file) = arg_str("file") else {
+                return error(id, -32602, "mollify_inspect requires `file`");
+            };
+            let ins = mollify_core::inspect(&root, file);
+            let body = json!({
+                "kind": "inspect",
+                "file": ins.file,
+                "module": ins.module,
+                "findings": ins.findings,
+                "imports": ins.imports,
+                "imported_by": ins.imported_by,
+            });
+            serde_json::to_string_pretty(&body)
+        }
+        "mollify_list" => {
+            let kind = arg_str("kind").unwrap_or("entry-points");
+            let rows = mollify_core::list_topology(&root, kind);
+            serde_json::to_string_pretty(&json!({ "kind": "list", "of": kind, "items": rows }))
         }
         "mollify_explain" => {
             let body = match arg_str("rule") {
@@ -267,6 +306,8 @@ mod tests {
             "mollify_supply_chain",
             "mollify_explain",
             "mollify_trace",
+            "mollify_inspect",
+            "mollify_list",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
