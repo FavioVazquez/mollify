@@ -1,8 +1,11 @@
 //! The `mollify` command-line interface.
 //!
-//! Mirrors fallow's surface incrementally. Implemented today: `audit`,
-//! `dead-code`, `deps`, `init`, `version`. Each supports `--format human|json`
-//! and `--path`. JSON is the kind-discriminated contract from `mollify-types`.
+//! Analysis: `audit`, `dead-code`, `deps`, `arch`, `complexity`, `dupes`,
+//! `types`, `security`, `coverage`, `supply-chain`. Workflow: `fix`, `explain`,
+//! `trace`, `inspect`, `list`, `watch`, `init`, `mcp`. Analysis commands support
+//! `--format human|json|sarif`, `--path`, `--gate`, and regression baselines
+//! (`--save-baseline`/`--baseline`/`--fail-on-regression`/`--brief`). JSON is the
+//! kind-discriminated contract from `mollify-types`.
 
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -52,6 +55,10 @@ enum Command {
     Trace(TraceArgs),
     /// Re-run `audit` whenever a Python file changes (poll-based; Ctrl-C to stop).
     Watch(WatchArgs),
+    /// Evidence bundle for a single file: its findings plus its import neighborhood.
+    Inspect(InspectArgs),
+    /// List project topology: entry points, modules, and detected frameworks.
+    List(ListArgs),
     /// Scaffold a .mollifyrc and report detected layout.
     Init(Scope),
     /// Run the Model Context Protocol server over stdio (for coding agents).
@@ -103,6 +110,39 @@ struct SupplyChainArgs {
 }
 
 #[derive(clap::Args)]
+struct InspectArgs {
+    /// File to inspect (path, or trailing path fragment).
+    file: String,
+    /// Project root to analyze.
+    #[arg(long, default_value = ".")]
+    path: Utf8PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    format: Format,
+}
+
+#[derive(clap::Args)]
+struct ListArgs {
+    /// What to list.
+    #[arg(value_enum, default_value_t = ListKind::EntryPoints)]
+    kind: ListKind,
+    /// Project root to analyze.
+    #[arg(long, default_value = ".")]
+    path: Utf8PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    format: Format,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum ListKind {
+    #[value(name = "entry-points")]
+    EntryPoints,
+    Files,
+    Frameworks,
+}
+
+#[derive(clap::Args)]
 struct WatchArgs {
     /// Project root to analyze.
     #[arg(long, default_value = ".")]
@@ -136,6 +176,18 @@ struct Scope {
     /// Base git ref to diff against for `--gate new-only` (e.g. origin/main).
     #[arg(long)]
     base: Option<String>,
+    /// Write a regression baseline (set of finding fingerprints) to this path and exit 0.
+    #[arg(long)]
+    save_baseline: Option<Utf8PathBuf>,
+    /// Compare against a saved baseline; mark/keep only findings new since then.
+    #[arg(long)]
+    baseline: Option<Utf8PathBuf>,
+    /// With `--baseline`, exit non-zero if any new findings appeared (CI gate).
+    #[arg(long)]
+    fail_on_regression: bool,
+    /// Advisory mode: print the report but always exit 0 (never gate CI).
+    #[arg(long)]
+    brief: bool,
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -209,6 +261,8 @@ fn main() {
         Command::Explain(a) => run_explain(&a),
         Command::Trace(a) => run_trace(&a),
         Command::Watch(a) => run_watch(&a),
+        Command::Inspect(a) => run_inspect(&a),
+        Command::List(a) => run_list(&a),
         Command::Init(s) => run_init(&s),
         Command::Mcp => match mollify_mcp::run() {
             Ok(()) => 0,
@@ -221,9 +275,70 @@ fn main() {
     std::process::exit(code);
 }
 
+/// Outcome of applying baseline options to a findings set.
+enum BaselineOutcome {
+    /// `--save-baseline` wrote a snapshot; the caller should print + exit 0.
+    Saved(Utf8PathBuf),
+    /// `--baseline` filtered to findings new since the snapshot; `usize` is how many.
+    Filtered(usize),
+    /// No baseline options in effect.
+    None,
+}
+
+/// Apply `--save-baseline` / `--baseline` to `findings`. With `--baseline`,
+/// retains only findings that are new relative to the snapshot.
+fn handle_baseline(s: &Scope, findings: &mut Vec<mollify_types::Finding>) -> BaselineOutcome {
+    use mollify_core::baseline::{split_new, Baseline};
+    if let Some(path) = &s.save_baseline {
+        let b = Baseline::from_findings(findings);
+        if let Err(e) = b.save(path) {
+            eprintln!("error: could not write baseline {path}: {e}");
+        }
+        return BaselineOutcome::Saved(path.clone());
+    }
+    if let Some(path) = &s.baseline {
+        let Some(b) = Baseline::load(path) else {
+            eprintln!("mollify: baseline {path} missing or invalid; reporting all findings.");
+            return BaselineOutcome::None;
+        };
+        let new_count = {
+            let (new, _known) = split_new(findings, &b);
+            let keep: std::collections::HashSet<String> =
+                new.iter().map(|f| f.fingerprint.clone()).collect();
+            findings.retain(|f| keep.contains(&f.fingerprint));
+            findings.len()
+        };
+        return BaselineOutcome::Filtered(new_count);
+    }
+    BaselineOutcome::None
+}
+
+/// Final exit code honoring `--brief` (always 0) and `--fail-on-regression`.
+fn gated_exit(s: &Scope, errors: usize, outcome: &BaselineOutcome) -> i32 {
+    if s.brief {
+        return 0;
+    }
+    if s.fail_on_regression {
+        if let BaselineOutcome::Filtered(n) = outcome {
+            if *n > 0 {
+                return 1;
+            }
+        }
+    }
+    exit_code(errors)
+}
+
 fn run_audit(s: &Scope) -> i32 {
     let mut report = mollify_core::audit_report(&s.path);
     apply_gate(s, &mut report.findings);
+    let outcome = handle_baseline(s, &mut report.findings);
+    if let BaselineOutcome::Saved(p) = &outcome {
+        println!(
+            "Wrote baseline with {} fingerprint(s) to {p}",
+            report.findings.len()
+        );
+        return 0;
+    }
     report.summary =
         mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
     let errors = report.summary.errors;
@@ -247,7 +362,7 @@ fn run_audit(s: &Scope) -> i32 {
             print_findings(&report.findings);
         }
     }
-    exit_code(errors)
+    gated_exit(s, errors, &outcome)
 }
 
 fn run_findings(
@@ -258,6 +373,14 @@ fn run_findings(
 ) -> i32 {
     let mut report = f(&s.path);
     apply_gate(s, &mut report.findings);
+    let outcome = handle_baseline(s, &mut report.findings);
+    if let BaselineOutcome::Saved(p) = &outcome {
+        println!(
+            "Wrote baseline with {} fingerprint(s) to {p}",
+            report.findings.len()
+        );
+        return 0;
+    }
     report.summary =
         mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
     let errors = report.summary.errors;
@@ -277,7 +400,7 @@ fn run_findings(
             print_findings(&report.findings);
         }
     }
-    exit_code(errors)
+    gated_exit(s, errors, &outcome)
 }
 
 fn run_coverage(a: &CoverageArgs) -> i32 {
@@ -459,6 +582,10 @@ fn run_watch(a: &WatchArgs) -> i32 {
         format: Format::Human,
         gate: Gate::All,
         base: None,
+        save_baseline: None,
+        baseline: None,
+        fail_on_regression: false,
+        brief: false,
     };
     println!(
         "Watching {} (every {}ms) — Ctrl-C to stop.\n",
@@ -475,6 +602,116 @@ fn run_watch(a: &WatchArgs) -> i32 {
         }
         std::thread::sleep(std::time::Duration::from_millis(a.interval_ms));
     }
+}
+
+fn run_inspect(a: &InspectArgs) -> i32 {
+    // All findings for the project, filtered to the requested file.
+    let report = mollify_core::audit_report(&a.path);
+    let matches: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|f| {
+            let p = f.location.path.as_str();
+            p == a.file || p.ends_with(&a.file) || p.ends_with(&format!("/{}", a.file))
+        })
+        .collect();
+    // Import neighborhood (best-effort): match the file's module by path stem.
+    let graph = mollify_core::build_graph(&a.path);
+    let module = graph
+        .modules
+        .iter()
+        .find(|m| {
+            let p = m.path.as_str();
+            p == a.file || p.ends_with(&a.file) || p.ends_with(&format!("/{}", a.file))
+        })
+        .map(|m| m.dotted.clone());
+    let trace = module
+        .as_deref()
+        .and_then(|d| mollify_core::trace::module(&graph, d));
+
+    match a.format {
+        Format::Json => {
+            let body = serde_json::json!({
+                "kind": "inspect",
+                "file": a.file,
+                "module": module,
+                "findings": matches,
+                "imports": trace.as_ref().map(|t| &t.imports),
+                "imported_by": trace.as_ref().map(|t| &t.imported_by),
+            });
+            println!("{}", serde_json::to_string_pretty(&body).unwrap());
+        }
+        _ => {
+            println!("Mollify inspect — {}", a.file);
+            if let Some(m) = &module {
+                println!("module: {m}");
+            }
+            if let Some(t) = &trace {
+                println!(
+                    "imports {} module(s); imported by {} module(s)",
+                    t.imports.len(),
+                    t.imported_by.len()
+                );
+            }
+            println!("{} finding(s):", matches.len());
+            print_findings_refs(&matches);
+        }
+    }
+    0
+}
+
+fn run_list(a: &ListArgs) -> i32 {
+    let graph = mollify_core::build_graph(&a.path);
+    let mut rows: Vec<String> = match a.kind {
+        ListKind::EntryPoints => graph
+            .modules
+            .iter()
+            .filter(|m| m.is_entry)
+            .map(|m| format!("{}  ({})", m.dotted, m.path))
+            .collect(),
+        ListKind::Files => graph
+            .modules
+            .iter()
+            .map(|m| format!("{}  ({})", m.dotted, m.path))
+            .collect(),
+        ListKind::Frameworks => {
+            let mut fw: std::collections::BTreeSet<String> = Default::default();
+            for m in &graph.modules {
+                for d in &m.parsed.definitions {
+                    if mollify_core::plugins::is_framework_entry(d) {
+                        for dec in &d.decorators {
+                            fw.insert(dec.split('.').next().unwrap_or(dec).to_string());
+                        }
+                    }
+                }
+            }
+            fw.into_iter().collect()
+        }
+    };
+    rows.sort();
+    let label = match a.kind {
+        ListKind::EntryPoints => "entry-points",
+        ListKind::Files => "files",
+        ListKind::Frameworks => "frameworks",
+    };
+    match a.format {
+        Format::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({ "kind": "list", "of": label, "items": rows })
+                )
+                .unwrap()
+            );
+        }
+        _ => {
+            println!("Mollify list:{label} — {} item(s)", rows.len());
+            for r in &rows {
+                println!("  {r}");
+            }
+        }
+    }
+    0
 }
 
 fn run_init(s: &Scope) -> i32 {
@@ -512,6 +749,11 @@ fn print_summary(s: &Summary) {
 }
 
 fn print_findings(findings: &[Finding]) {
+    let refs: Vec<&Finding> = findings.iter().collect();
+    print_findings_refs(&refs);
+}
+
+fn print_findings_refs(findings: &[&Finding]) {
     if findings.is_empty() {
         println!("  No findings. ✓");
         return;

@@ -33,7 +33,22 @@ cargo build --release
 | `mollify explain [<rule>]` | Explain a rule (semantics/confidence/action); lists all rules with no argument. |
 | `mollify trace <module>` | A module's import neighborhood: what it imports and what imports it. |
 | `mollify watch [--interval-ms]` | Re-run `audit` whenever a Python file changes (poll-based; Ctrl-C to stop). |
+| `mollify inspect <file>` | Evidence bundle for one file: its findings plus its import neighborhood. |
+| `mollify list [entry-points\|files\|frameworks]` | Project topology. |
 | `mollify init` | Write a starter `.mollifyrc.json`. |
+
+### Regression baselines (CI gate without git)
+
+`--save-baseline <f>` snapshots the current finding fingerprints; later runs use
+`--baseline <f>` to report only what's **new** since then, and
+`--fail-on-regression` exits non-zero when any new finding appears. `--brief`
+prints the report but always exits 0 (advisory). This works without git and
+survives file moves (fingerprints are content-derived).
+
+```bash
+mollify audit --save-baseline .mollify/baseline.json     # once, on a clean main
+mollify audit --baseline .mollify/baseline.json --fail-on-regression   # in CI
+```
 | `mollify mcp` | Start the MCP server for coding agents (stdio). |
 
 Common flags: `--path <dir>`, `--format human|json|sarif`,
