@@ -1,0 +1,24 @@
+description = "Run a Mollify audit and summarize prioritized dead-code & dependency findings"
+prompt = """
+You are reviewing this repository with Mollify, a deterministic, Rust-native Python
+code-intelligence engine. Mollify emits evidence, not decisions — every finding has
+a stable fingerprint, a confidence tier, and a human-readable reason.
+
+Here is the current audit output:
+!{mollify audit --format json {{args}}}
+
+Using ONLY this output (do not grep, do not guess, do not invent findings):
+
+1. Summarize the findings grouped by `kind` and `confidence`. Note the
+   `quality_score` and the `summary` counts (total, errors, warnings,
+   files_analyzed). For each finding cite `location.path:location.line`, its
+   `rule`, `severity`, and `reason`.
+2. Call out every finding with `confidence: certain`, and specifically those whose
+   actions are `auto_fixable: true` — these are the safe, high-confidence candidates.
+3. Before recommending any deletion, advise tracing the symbol's callers/usages to
+   confirm there are no reachable references. (Note: there is no `mollify trace`
+   command — do NOT claim one exists; suggest manual verification or review instead.)
+4. Propose a concrete fix plan ordered by confidence and severity, using each
+   finding's `suppression_comment` for known-good cases where deletion is not wanted.
+   Do NOT run any fixes or modify files without explicit user confirmation.
+"""

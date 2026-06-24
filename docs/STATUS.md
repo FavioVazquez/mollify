@@ -41,7 +41,14 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     SARIF output, framework entry-point plugins (Django/FastAPI/pytest decorators),
     config file (`.mollifyrc`) actually read, `fix` command.
 - **Phase 2 — dupes + complexity + arch:** ⬜ (scaffold next)
-- **Phase 3 — AI/MCP + plugins:** ⬜
+- **Phase 3 — AI/MCP + plugins:** 🟡 (MCP server done; plugins pending)
+  - ✅ `mollify-mcp` — a minimal, dependency-light **MCP stdio server** (newline-delimited
+    JSON-RPC 2.0): `initialize`/`ping`/`tools/list`/`tools/call`, tools `mollify_audit`/
+    `mollify_dead_code`/`mollify_deps`, kind-discriminated text results, stderr-only logging.
+    5 unit tests + verified end-to-end over real stdio (initialize → tools/list → tools/call
+    audit returns kind=audit score=77). Wired as `mollify mcp`.
+  - **This makes every platform's MCP registration functional** (one server, many front-ends).
+  - ⬜ framework entry-point plugins, LSP, agent-skills repo packaging.
 - **Phase 4 — runtime/type intelligence:** ⬜
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
@@ -53,6 +60,13 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     because the `--gate new-only` blocking gate is not built yet. Upgrade them to
     blocking once the gate + `attribution` land. README.md added.
   - User confirmed `.devin` = hooks/skills/rules, `.windsurf` = workflows.
+  - **All four other platforms shipped** (generated + verified via a dynamic Workflow —
+    parallel generate → adversarial verify gate → fix loop; all passed first-pass):
+    - **Claude Code:** `.mcp.json`, `.claude/skills/mollify/SKILL.md` (+ references), `.claude/commands/mollify-{audit,cleanup}.md`, `.claude/settings.json` (PostToolUse+Stop hooks → mollify-report.sh).
+    - **Codex:** `AGENTS.md` (delimited block), `.codex/config.toml` (`[mcp_servers.mollify]`), `.agents/skills/mollify/SKILL.md` (+ references) — the portable open-standard skill.
+    - **Cursor:** `.cursor/rules/mollify.mdc` (glob comma-string), `.cursor/mcp.json`, `.cursor/commands/mollify-audit.md`.
+    - **Gemini CLI:** `GEMINI.md`, `.gemini/settings.json`, `.gemini/commands/mollify/audit.toml`.
+    - All JSON/TOML validated; all reference only real commands; MCP all → `mollify mcp`.
 
 ## Verification protocol (every commit)
 1. `cargo build` clean. 2. `cargo test` green. 3. `cargo clippy` (best-effort). 4. Update this file. 5. Commit with a descriptive message (author: Favio Vázquez).
