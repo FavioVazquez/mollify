@@ -56,6 +56,9 @@ pub struct Import {
     pub relative_dots: u8,
     /// Imported names (`from m import a, b` -> [a, b]). Empty for `import m`.
     pub names: Vec<String>,
+    /// Local names this statement binds, honoring aliases: `import a.b` -> [a];
+    /// `import a.b as c` -> [c]; `from m import x as y` -> [y]. Empty for `*`.
+    pub bindings: Vec<String>,
     /// True for `from m import *`.
     pub is_star: bool,
     pub line: u32,
@@ -117,6 +120,10 @@ pub struct ParsedModule {
     /// Every identifier *used* anywhere in the module (call targets, attribute
     /// bases, names in expressions). Coarse but sufficient for reachability v1.
     pub used_names: Vec<String>,
+    /// Identifiers referenced *outside* import statements — lets the unused-import
+    /// engine tell "the name is actually used" from "the name only appears in its
+    /// own import". Sorted + deduped.
+    pub local_uses: Vec<String>,
     /// Occurrence count per identifier across the whole module (includes the
     /// definition site). `count(name) > defs(name)` ⇒ the name is referenced,
     /// not just defined — used by the symbol-usage analysis.
@@ -168,6 +175,7 @@ impl PyParser {
             security_hits: Vec::new(),
             dunder_all: None,
             used_names: Vec::new(),
+            local_uses: Vec::new(),
             name_counts: std::collections::HashMap::new(),
             has_dynamic_sink: false,
             had_errors: root.has_error(),
@@ -178,6 +186,8 @@ impl PyParser {
         collect_top_level(root, bytes, &mut m);
         // Walk the whole tree once for used identifiers and dynamic sinks.
         collect_uses(root, bytes, &mut m);
+        // Uses outside import statements (for unused-import detection).
+        collect_local_uses(root, bytes, &mut m);
         // Per-function complexity.
         collect_complexity(root, bytes, &mut m);
         // Security candidates.
@@ -317,12 +327,25 @@ fn parse_import(node: Node, bytes: &[u8], m: &mut ParsedModule, from: bool) {
         // `import a.b.c, d` -> one Import per dotted_name / aliased_import.
         let mut c = node.walk();
         for ch in node.named_children(&mut c) {
-            let module = match ch.kind() {
-                "dotted_name" => node_text(ch, bytes).to_string(),
-                "aliased_import" => ch
-                    .child_by_field_name("name")
-                    .map(|n| node_text(n, bytes).to_string())
-                    .unwrap_or_default(),
+            let (module, binding) = match ch.kind() {
+                // `import a.b.c` binds the top-level name `a`.
+                "dotted_name" => {
+                    let m = node_text(ch, bytes).to_string();
+                    let b = m.split('.').next().unwrap_or(&m).to_string();
+                    (m, b)
+                }
+                // `import a.b as c` binds the alias `c`.
+                "aliased_import" => {
+                    let m = ch
+                        .child_by_field_name("name")
+                        .map(|n| node_text(n, bytes).to_string())
+                        .unwrap_or_default();
+                    let b = ch
+                        .child_by_field_name("alias")
+                        .map(|n| node_text(n, bytes).to_string())
+                        .unwrap_or_else(|| m.split('.').next().unwrap_or(&m).to_string());
+                    (m, b)
+                }
                 _ => continue,
             };
             if !module.is_empty() {
@@ -330,6 +353,11 @@ fn parse_import(node: Node, bytes: &[u8], m: &mut ParsedModule, from: bool) {
                     module,
                     relative_dots: 0,
                     names: vec![],
+                    bindings: if binding.is_empty() {
+                        vec![]
+                    } else {
+                        vec![binding]
+                    },
                     is_star: false,
                     line,
                 });
@@ -342,6 +370,7 @@ fn parse_import(node: Node, bytes: &[u8], m: &mut ParsedModule, from: bool) {
     let mut module = String::new();
     let mut relative_dots = 0u8;
     let mut names = Vec::new();
+    let mut bindings = Vec::new();
     let mut is_star = false;
     let mut c = node.walk();
     let mut seen_module = false;
@@ -364,10 +393,22 @@ fn parse_import(node: Node, bytes: &[u8], m: &mut ParsedModule, from: bool) {
                 seen_module = true;
             }
             "wildcard_import" => is_star = true,
-            "dotted_name" => names.push(node_text(ch, bytes).to_string()),
+            "dotted_name" => {
+                let n = node_text(ch, bytes).to_string();
+                bindings.push(n.clone());
+                names.push(n);
+            }
             "aliased_import" => {
                 if let Some(n) = ch.child_by_field_name("name") {
                     names.push(node_text(n, bytes).to_string());
+                }
+                // The local binding is the alias when present, else the name.
+                let bind = ch
+                    .child_by_field_name("alias")
+                    .or_else(|| ch.child_by_field_name("name"))
+                    .map(|n| node_text(n, bytes).to_string());
+                if let Some(b) = bind {
+                    bindings.push(b);
                 }
             }
             _ => {}
@@ -377,6 +418,7 @@ fn parse_import(node: Node, bytes: &[u8], m: &mut ParsedModule, from: bool) {
         module,
         relative_dots,
         names,
+        bindings,
         is_star,
         line,
     });
@@ -754,6 +796,29 @@ fn collect_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
     }
     m.used_names.sort();
     m.used_names.dedup();
+}
+
+/// Collect identifiers that appear *outside* `import` / `from ... import`
+/// statements, so the unused-import engine doesn't count an import's own
+/// binding site as a use.
+fn collect_local_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        // Do not descend into import statements — their identifiers are bindings,
+        // not uses.
+        if matches!(node.kind(), "import_statement" | "import_from_statement") {
+            continue;
+        }
+        if node.kind() == "identifier" {
+            m.local_uses.push(node_text(node, bytes).to_string());
+        }
+        let mut c = node.walk();
+        for ch in node.children(&mut c) {
+            stack.push(ch);
+        }
+    }
+    m.local_uses.sort();
+    m.local_uses.dedup();
 }
 
 #[cfg(test)]

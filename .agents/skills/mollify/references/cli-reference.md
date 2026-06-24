@@ -15,7 +15,7 @@
 | `mollify security` | Security candidates (eval/exec, shell=True, hardcoded secrets, …). |
 | `mollify coverage --coverage-file <f>` | Cold-path analysis from a coverage.py JSON report. |
 | `mollify supply-chain [--advisory-db <f>]` | Pinned/locked versions vs a local CVE/advisory DB (`vulnerable-dependency`). |
-| `mollify fix [--apply]` | Remove `certain` + `auto_fixable` unused symbols. Dry-run unless `--apply`. |
+| `mollify fix [--apply]` | Remove `certain` + `auto_fixable` unused symbols **and unused imports**. Dry-run unless `--apply`. |
 | `mollify explain [<rule>]` | Explain a rule id (semantics, confidence, action). No argument lists all rules. |
 | `mollify trace <module>` | Import neighborhood of a module: what it imports and what imports it. |
 | `mollify watch [--interval-ms]` | Re-run `audit` on any `.py` change (poll-based; Ctrl-C to stop). |
@@ -35,7 +35,7 @@
 Severities are `warn` by default; raise rules/categories to `error` in `.mollifyrc.json` to gate CI.
 
 ## Rules emitted
-`unused-file`, `unused-export`, `unused-dependency`, `missing-dependency`,
+`unused-file`, `unused-export`, `unused-import`, `unused-dependency`, `missing-dependency`,
 `circular-dependency`, `layer-violation`, custom policy ids, `high-complexity`,
 `duplication`, `untyped-function`, `dangerous-eval`, `subprocess-shell-true`,
 `unsafe-yaml-load`, `unsafe-deserialization`, `tls-verify-disabled`,

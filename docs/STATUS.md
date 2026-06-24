@@ -111,9 +111,14 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     (25k+ advisories). +tests.
   - ✅ **MCP server exposes every engine** (`mollify-mcp`): audit/dead-code/deps/arch/
     complexity/dupes/types/security/coverage/supply-chain + explain + trace. +tests.
+  - ✅ **Unused-import detection + autofix** (`deadcode.rs::unused_imports`) — parser
+    now tracks import *bindings* (alias-aware) and *local uses* (identifiers outside
+    import statements); flags whole-statement-unused imports (`unused-import`), certain
+    + auto-fixable in regular modules, uncertain in `__init__.py` (re-export idiom).
+    `mollify fix` removes them. +tests.
   - ⬜ LSP server; line-level (vs file-level) gate attribution; LibCST
-    format-preserving autofix (current `fix` is line-range deletion of certain
-    unused symbols).
+    format-preserving autofix (current `fix` is line-range deletion); partial-line
+    unused-import removal (only whole-statement today).
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
   - `.devin/rules/mollify.md` (glob `**/*.py`)
