@@ -1,0 +1,15 @@
+[package]
+name = "mollify-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Shared serde data contract for Mollify — findings, confidence tiers, and the kind-discriminated output envelope."
+
+[dependencies]
+serde.workspace = true
+camino.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
