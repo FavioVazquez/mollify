@@ -27,7 +27,7 @@ Each row maps a fallow capability → Mollify's Python implementation → the Py
 | Dead code via module/symbol reachability | Mark-reachable BFS/DFS from entry-point roots over the import + symbol graph; flag unreached files/exports/members | Confidence-tiered verdicts (certain/likely/uncertain); dead members (methods, properties, `__all__` entries, enum members); whole-file unreachability | v1 |
 | Unused / missing / transitive / dev-vs-prod deps | deptry-equivalent: reconcile first-party imports vs declared distributions; import-name→distribution mapping table | PEP 735 dependency-groups + extras + `uv` awareness; **unused-AND-vulnerable** composite verdict (join with CVE) | v1 |
 | Unresolved / unlisted imports, circular deps | Resolve via module resolver; cycle detection during graph build | Namespace-package (PEP 420) cycle handling; conditional/`TYPE_CHECKING` import classification | v1 |
-| Duplication (suffix array + LCP, 4 modes) | Port the suffix-array + LCP engine; Python tokenizer with strict/mild/weak/semantic normalization | Semantic (Type-2 renamed-variable) clones — **no actively-maintained Python tool does this**; fingerprinted clone families with refactor suggestions | v2 |
+| Duplication (suffix array + LCP, 4 modes) | Port the SA-IS suffix-array + LCP engine; Python tokenizer with strict/mild/weak/semantic normalization | **SA-IS+LCP whole-corpus sub-quadratic engine + fingerprinted clone families + refactor suggestions + SARIF/MCP** — note Type-2 itself is NOT unprecedented (lizard `-Eduplicate` already does token-normalized Type-2 for Python); the moat is the engine + families + integration, not "first to Type-2" | v2 |
 | Complexity hotspots | Cyclomatic (McCabe) + cognitive (SonarSource model) per function/file | **Churn × complexity hotspot ranking** (git change-frequency × complexity/MI) — empty quadrant in Python; Maintainability Index | v2 |
 | Architecture boundaries (layered/hexagonal/feature-sliced/bulletproof presets) | Named presets compiled to layer/forbidden/independence/cycle contracts over the import graph | Symbol-level public-interface enforcement (which symbols may cross), like tach; named opinionated presets (no Python equivalent exists) | v2 |
 | Dependency hygiene unified with the rest | Single pass folds boundary + dep-hygiene + cycles into one report | Monorepo first-party-vs-external disambiguation via unified workspace model | v2 |
@@ -86,7 +86,7 @@ mollify/
 
 ### 3.2 Parser / AST / semantic foundation — **decision: ruff crates, pinned git rev**
 
-Build on **`ruff_python_parser` + `ruff_python_ast` + `ruff_text_size`** (all **MIT** — license check clean), reusing **`ruff_python_semantic`**'s scope/binding model and module resolver as the starting point for symbol resolution and the import graph.
+Build on **`ruff_python_parser` + `ruff_python_ast` + `ruff_text_size`** (all **MIT** — license check clean), pinning **all** ruff crates to a **single shared git rev** to avoid AST-type mismatches (pyrefly's current rev: `db5aa0a5f1b92cb91d910bf0866a967554dd94f5`). Treat **`ruff_python_semantic`** as a **reference, not a drop-in**: pyrefly — the engine we adopt — consumes only parser+AST+text_size and **hand-rolls its own binding/scope/resolution**; ty's semantic model is a separate Salsa-coupled `ty_python_semantic`. So reuse the parser+AST and build resolution/import-graph ourselves, mirroring pyrefly.
 
 **Rationale.** These are the de-facto Rust Python foundation: both ty (Astral) and pyrefly (Meta) use them. The parser is hand-written recursive-descent, error-resilient, tracks full source ranges, and is battle-tested. RustPython's parser is deprecated (its own README redirects here). tree-sitter-python is a generic untyped CST — a complement for editor latency, not a foundation.
 
@@ -297,3 +297,31 @@ then: integrator agent merges worktrees → cargo test + clippy → reports
 Layered with: **adversarial review** (reviewer sees only the diff + spec, told to refute), **hard test/clippy gates** (Rust concurrency/unsafe bugs that tests miss → `/code-review`), and **`/goal`** as the outer convergence gate after the workflow returns.
 
 **Per-phase recipe:** (1) `/goal` sets the phase done-condition; (2) Workflow fans out one isolated worktree-agent per crate/module from the Phase's deliverables → fresh-context reviewer → fix loop → integrator; (3) `/loop` drives iterate-until-green if integration flakes; (4) gates (adversarial reviewers + `cargo test`/`clippy` + `/code-review`) before anything merges to `main`; (5) **start with one crate to calibrate token cost**, then scale the same script across all crates. Note: the real Workflow API is `agent(prompt, { isolation, schema, label, phase })` — model is inherited unless explicitly overridden.
+
+---
+
+## 11. Agent Integrations (full plan in INTEGRATIONS.md)
+
+Like fallow ships `fallow-skills` + an MCP path, Mollify ships into **every major 2026 coding agent** — but broader. The model is **one MCP server, many front-ends**: build the `mollify mcp` server + the kind-discriminated JSON contract + one canonical `SKILL.md` once, then emit thin per-agent shims (a rule/memory file, an MCP registration block, and a command/workflow where supported) via `mollify init --agents`. Full copy-pasteable artifacts for each platform live in **`INTEGRATIONS.md`**.
+
+Coverage: **Claude Code** (plugin/marketplace + Skill + PostToolUse/Stop gate hook + `.mcp.json` + slash commands), **OpenAI Codex** (`AGENTS.md` + `~/.codex/config.toml` MCP + `.agents/skills/` + hooks/notify), **Cursor** (`.cursor/rules/*.mdc` + `.cursor/mcp.json` + commands + native Skills 2.4+), **Gemini CLI** (`GEMINI.md` + `.gemini/settings.json` + TOML commands + skills), and a matrix for **Copilot / Cline / Aider / Continue**.
+
+**Devin Desktop / Cascade is a featured, first-class target** (the org runs Cascade), built on the modern **`.devin/`** convention which bundles **skills + rules + hooks**, with **`.windsurf/`** for **workflows** (slash commands):
+- **`.devin/skills/mollify/SKILL.md`** — the priority, future-facing artifact (also shipped to portable `.agents/skills/`). Vendor guidance prefers skills over rules; lazy-loaded, folder-bundled.
+- **`.devin/rules/mollify.md`** — glob-triggered ("audit before PRs on `**/*.py`"), pointing at the skill; 12k/6k char limits, `trigger` modes.
+- **`.windsurf/hooks.json`** — deterministic pre/post enforcement (audit on `post_write_code`, block via `exit 2` on `pre_run_command`). `.devin/hooks.json` inferred, unconfirmed.
+- **`.windsurf/workflows/{mollify-audit,mollify-cleanup,mollify-bootstrap}.md`** — `/slash` commands (confirmed path; `.devin/workflows/` unverified).
+- **`~/.codeium/windsurf/mcp_config.json`** — registers the MCP server (~25 tools; 100-tool cap; `${env:VAR}` interpolation).
+
+**ACP forward-path (Cascade EOL ~2026-07-01 → Devin Local):** Mollify is an **MCP server**, and **ACP (agent↔editor) is orthogonal to MCP (agent↔tools)** — so the transition doesn't touch Mollify. Markdown skills/rules/workflows + an MCP server are the most future-proof bet and carry forward with no rework; Devin Local's sub-agents only make a dedicated "audit" sub-agent hammering the Mollify MCP server *more* valuable. (Devin/Windsurf vendor docs were egress-blocked during research — see INTEGRATIONS.md §6 for the explicit re-verify list, especially the `auto_execute_steps` workflow field and the `.devin/hooks.json` path.)
+
+---
+
+## 12. Positioning honesty (2026 currency pass — see RESEARCH.md §8)
+
+A full re-verification against June-2026 releases retired three over-claims; the plan's wedges are reframed accordingly so we never market "first/only" where it's false:
+- **Dead code:** skylos 4.25.0 *already* does whole-project framework-aware reachability (with a single confidence threshold). Our wedge is **determinism + tiered Certain/Likely/Uncertain verdicts with reasons + granular dead-members (enum members, `__all__`, properties, methods) + a focused product** — not "the only reachability tool." (Also: PyDeadCode is Rust too, so "genuinely Rust" alone isn't unique — pair it with determinism + ruff-AST + tiered confidence.)
+- **Duplication:** lizard `-Eduplicate` *already* does token-normalized Type-2 for Python. Our wedge is the **SA-IS+LCP whole-corpus engine + clone families + integration + SARIF/MCP**, not Type-2 itself.
+- **Architecture:** tach *already* does symbol-level public-interface enforcement (`interfaces[].expose`). Our net-new piece is **named presets (layered/hexagonal/feature-sliced/bulletproof) compiled to import-linter/tach contracts**; symbol-level enforcement is "tach parity, extended."
+
+**Where the white space is clean and unchallenged (lead here):** FOSS Python **churn × complexity hotspot ranking**, **CRAP-style coverage-weighted risk**, the **"unused AND vulnerable" composite verdict**, and **a single deterministic Rust-cored audit** unifying all signals with tiered confidence, SARIF/MCP, and safe LibCST autofix. The "Python has no fallow" + Rust-foundation thesis fully holds; the marketing must be honest about which walls are already partly built.
