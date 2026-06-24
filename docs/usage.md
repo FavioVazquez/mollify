@@ -31,6 +31,7 @@ cargo build --release
 | `mollify fix [--apply]` | Remove safe (certain) unused symbols. Dry-run unless `--apply`. |
 | `mollify explain [<rule>]` | Explain a rule (semantics/confidence/action); lists all rules with no argument. |
 | `mollify trace <module>` | A module's import neighborhood: what it imports and what imports it. |
+| `mollify watch [--interval-ms]` | Re-run `audit` whenever a Python file changes (poll-based; Ctrl-C to stop). |
 | `mollify init` | Write a starter `.mollifyrc.json`. |
 | `mollify mcp` | Start the MCP server for coding agents (stdio). |
 
