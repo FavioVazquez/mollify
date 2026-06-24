@@ -12,7 +12,11 @@ are optional.
   },
   "ignore": ["tests/", "migrations/", "generated/"],
   "max_cyclomatic": 10,
-  "max_cognitive": 15
+  "max_cognitive": 15,
+  "architecture": {
+    "preset": "layered",
+    "layers": ["api", "service", "domain", "infra"]
+  }
 }
 ```
 
@@ -26,10 +30,55 @@ Map of **rule id** or **category** → `error` | `warn` | `off`.
 - `off` drops the finding entirely.
 
 Rule ids: `unused-file`, `unused-export`, `unused-dependency`,
-`missing-dependency`, `circular-dependency`, `high-complexity`, `duplication`.
+`missing-dependency`, `circular-dependency`, `layer-violation`,
+`high-complexity`, `duplication`, `cold-code`, `hotspot`, and the
+`type-health` / `security` rule ids.
 
 Categories: `dead-code`, `dependency-hygiene`, `circular-dependency`,
-`complexity`, `architecture`, `duplication`.
+`complexity`, `architecture`, `duplication`, `type-health`, `security`.
+
+## `architecture`
+
+Opt into **layer-boundary** checking. `layers` is an ordered list, top
+(most-dependent) → bottom: a module may import its own or lower layers, but
+importing a *higher* layer is a `layer-violation`. A layer name matches when it
+appears as a path/module segment.
+
+```json
+"architecture": { "layers": ["api", "service", "domain", "infra"] }
+```
+
+`preset` expands to a conventional ordering when you don't supply `layers`:
+
+| preset | layers (top → bottom) |
+| --- | --- |
+| `layered` | presentation, application, domain, infrastructure |
+| `hexagonal` | adapters, application, domain |
+| `feature-sliced` / `bulletproof` | app, features, entities, shared |
+
+## `policies` (rule packs)
+
+Declarative bans, enforced deterministically (a literal match is a `certain`
+finding). Each policy forbids an import and/or a call, optionally scoped to path
+substrings via `in_paths` (omit for project-wide). The `id` becomes the rule id
+and its suppression comment.
+
+```json
+"policies": [
+  {
+    "id": "no-requests-in-domain",
+    "forbid_import": "requests",
+    "in_paths": ["domain/"],
+    "message": "domain must stay I/O-free",
+    "severity": "error"
+  },
+  { "id": "no-print", "forbid_call": "print", "severity": "warn" }
+]
+```
+
+`forbid_import`/`forbid_call` match by prefix: `requests` matches `requests` and
+`requests.get`; `os.system` matches exactly. Policy findings surface under
+`mollify arch` and `mollify audit`.
 
 ## `ignore`
 

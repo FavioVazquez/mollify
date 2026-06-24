@@ -4,7 +4,7 @@ Every `--format json` invocation prints one envelope. Clients **switch on `kind`
 
 ```jsonc
 {
-  "kind": "audit",            // "audit" | "dead-code" | "deps"
+  "kind": "audit",            // audit|dead-code|deps|arch|complexity|dupes|types|security|coverage
   "schema_version": "0.1",
   "quality_score": 77,         // audit only, 0–100
   "summary": {
@@ -20,7 +20,8 @@ Every `--format json` invocation prints one envelope. Clients **switch on `kind`
       "rule": "unused-export",
       "category": "dead-code",                 // dead-code | duplication |
                                                 // circular-dependency | complexity |
-                                                // architecture | dependency-hygiene
+                                                // architecture | dependency-hygiene |
+                                                // type-health | security
       "severity": "warn",                       // error | warn | off
       "confidence": "certain",                  // certain | likely | uncertain
       "attribution": "introduced",              // optional: introduced | inherited

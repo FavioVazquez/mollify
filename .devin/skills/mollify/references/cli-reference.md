@@ -1,6 +1,6 @@
 # Mollify CLI reference
 
-> Status: Phases 0–2 complete + Phase-1 polish. All commands below are implemented and tested.
+> All commands below are implemented and tested.
 
 ## Commands
 | Command | Description |
@@ -8,13 +8,15 @@
 | `mollify audit` | Unified report across all engines + `quality_score` (0–100). |
 | `mollify dead-code` (alias `check`) | Reachability-based unused files and symbols. |
 | `mollify deps` | Dependency hygiene: unused / missing distributions. |
-| `mollify arch` | Architecture: circular-dependency detection. |
-| `mollify complexity` (alias `health`) | Cyclomatic + cognitive complexity hotspots. |
+| `mollify arch` | Architecture: circular dependencies, layer-boundary violations, policy violations. |
+| `mollify complexity` (alias `health`) | Cyclomatic + cognitive complexity hotspots + churn×complexity hotspots. |
 | `mollify dupes` | Duplication / clone families (token-based). |
 | `mollify types` | Type-annotation health (fully-untyped public functions). |
 | `mollify security` | Security candidates (eval/exec, shell=True, hardcoded secrets, …). |
 | `mollify coverage --coverage-file <f>` | Cold-path analysis from a coverage.py JSON report. |
 | `mollify fix [--apply]` | Remove `certain` + `auto_fixable` unused symbols. Dry-run unless `--apply`. |
+| `mollify explain [<rule>]` | Explain a rule id (semantics, confidence, action). No argument lists all rules. |
+| `mollify trace <module>` | Import neighborhood of a module: what it imports and what imports it. |
 | `mollify init` | Write a starter `.mollifyrc.json`. |
 | `mollify mcp` | Run the MCP stdio server (for coding agents). |
 
@@ -32,7 +34,10 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 
 ## Rules emitted
 `unused-file`, `unused-export`, `unused-dependency`, `missing-dependency`,
-`circular-dependency`, `high-complexity`, `duplication`, `untyped-function`, `dangerous-eval`, `subprocess-shell-true`, `unsafe-yaml-load`, `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`, `cold-code`, `hotspot`.
+`circular-dependency`, `layer-violation`, custom policy ids, `high-complexity`,
+`duplication`, `untyped-function`, `dangerous-eval`, `subprocess-shell-true`,
+`unsafe-yaml-load`, `unsafe-deserialization`, `tls-verify-disabled`,
+`hardcoded-secret`, `cold-code`, `hotspot`.
 
 ## `.mollifyrc.json`
 ```json
@@ -40,12 +45,18 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
   "severity": { "dead-code": "error", "duplication": "warn", "unused-dependency": "off" },
   "ignore": ["tests/", "migrations/"],
   "max_cyclomatic": 10,
-  "max_cognitive": 15
+  "max_cognitive": 15,
+  "architecture": { "preset": "layered", "layers": ["api", "service", "domain", "infra"] },
+  "policies": [
+    { "id": "no-requests-in-domain", "forbid_import": "requests", "in_paths": ["domain/"], "severity": "error" },
+    { "id": "no-print", "forbid_call": "print", "severity": "warn" }
+  ]
 }
 ```
 `severity` keys are rule ids or category names (`dead-code`, `duplication`,
 `circular-dependency`, `complexity`, `architecture`, `dependency-hygiene`, `type-health`, `security`).
+See `references/configuration.md` semantics in `docs/configuration.md` for `architecture` and `policies`.
 
 ## Not yet implemented (do not rely on)
-Line-level gate attribution (current gate is file-level), named architecture
-presets, churn×complexity ranking, LSP, runtime/type intelligence. See docs/STATUS.md.
+Line-level gate attribution (current gate is file-level), LSP server, watch mode.
+See docs/STATUS.md.
