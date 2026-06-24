@@ -292,6 +292,28 @@ impl ModuleGraph {
         self.edges.len()
     }
 
+    /// Internal import edges as (importer dotted, imported dotted) pairs.
+    /// Used by the architecture-boundary engine.
+    pub fn import_edges(&self) -> Vec<(&str, &str)> {
+        self.edges
+            .iter()
+            .map(|(a, b)| {
+                (
+                    self.modules[a.0 as usize].dotted.as_str(),
+                    self.modules[b.0 as usize].dotted.as_str(),
+                )
+            })
+            .collect()
+    }
+
+    /// The path of a module by its dotted name (first match), for findings.
+    pub fn path_of_dotted(&self, dotted: &str) -> Option<&Utf8Path> {
+        self.modules
+            .iter()
+            .find(|m| m.dotted == dotted)
+            .map(|m| m.path.as_path())
+    }
+
     /// Find import cycles: strongly-connected components of size > 1, plus
     /// self-loops. Tarjan's algorithm; results are deterministic (each cycle's
     /// members sorted, and the list sorted). Cross-module circular imports.

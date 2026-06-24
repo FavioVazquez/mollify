@@ -14,6 +14,11 @@ pub struct Config {
     pub ignore: Vec<String>,
     pub max_cyclomatic: u32,
     pub max_cognitive: u32,
+    /// Architecture preset name (informational): layered | hexagonal | feature-sliced | bulletproof.
+    pub arch_preset: Option<String>,
+    /// Ordered layer names, top (most dependent) → bottom. A layer may import
+    /// same/lower layers; importing a higher layer is a `layer-violation`.
+    pub arch_layers: Vec<String>,
 }
 
 impl Default for Config {
@@ -23,6 +28,8 @@ impl Default for Config {
             ignore: Vec::new(),
             max_cyclomatic: crate::complexity::DEFAULT_CYCLOMATIC,
             max_cognitive: crate::complexity::DEFAULT_COGNITIVE,
+            arch_preset: None,
+            arch_layers: Vec::new(),
         }
     }
 }
@@ -55,6 +62,18 @@ pub fn load(root: &Utf8Path) -> Config {
     }
     if let Some(c) = v.get("max_cognitive").and_then(|n| n.as_u64()) {
         cfg.max_cognitive = c as u32;
+    }
+    if let Some(arch) = v.get("architecture").and_then(|a| a.as_object()) {
+        cfg.arch_preset = arch
+            .get("preset")
+            .and_then(|p| p.as_str())
+            .map(String::from);
+        if let Some(layers) = arch.get("layers").and_then(|l| l.as_array()) {
+            cfg.arch_layers = layers
+                .iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
+        }
     }
     cfg
 }
