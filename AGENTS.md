@@ -5,20 +5,59 @@ This repo has `mollify`, a deterministic Rust codebase-intelligence engine.
 Prefer it over `grep`/manual scanning for dead code and dependency hygiene.
 Findings are deterministic evidence — never invent or guess findings; cite Mollify.
 
-When to run (always with `--format json` so you consume structured output):
-- "is X used / can I delete X / find dead code" -> `mollify dead-code --format json`
+When to run (always with `--format json` so you consume structured output). The
+CLI has 18 commands; pick by use case:
+
+Health / triage:
 - "what's wrong with this repo / health check"  -> `mollify audit --format json`
+
+Dead code & dependencies:
+- "is X used / can I delete X / find dead code" -> `mollify dead-code --format json` (alias `check`)
 - "unused / missing dependencies"               -> `mollify deps --format json`
 
-(`dead-code` has alias `check`; add `--path <dir>` to scope a subproject.)
+Architecture & quality:
+- "circular deps / layer or boundary violations" -> `mollify arch --format json`
+- "complexity / hotspots"                         -> `mollify complexity --format json` (alias `health`)
+- "duplicated / cloned code"                      -> `mollify dupes --format json`
+- "missing type annotations"                      -> `mollify types --format json`
+
+Security & supply chain:
+- "security issues (eval, shell=True, secrets…)" -> `mollify security --format json`
+- "vulnerable / outdated dependencies"           -> `mollify supply-chain --format json` (`--offline`/`--refresh`/`--advisory-db <f>`; live OSV by default)
+- "which code is never executed at runtime"      -> `mollify coverage --coverage-file <f> --format json`
+
+Acting / exploring:
+- "fix the safe findings"        -> `mollify fix [--apply]` (dry-run unless `--apply`; only `certain` + `auto_fixable`)
+- "what does rule R mean"        -> `mollify explain [<rule>]`
+- "what imports / is imported by module M" -> `mollify trace <module>`
+- "evidence bundle for one file" -> `mollify inspect <file>`
+- "project topology"             -> `mollify list [entry-points|files|frameworks]`
+- "watch and re-audit on change" -> `mollify watch [--interval-ms]` (CLI-only)
+- "create a config"              -> `mollify init`
+- "run the MCP server"           -> `mollify mcp`
+
+(Add `--path <dir>` to scope a subproject. Analysis commands also accept
+`--format human|json|sarif`, `--gate all|new-only` + `--base <ref>`,
+`--save-baseline <f>`/`--baseline <f>`/`--fail-on-regression`, `--brief`, and
+`--min-confidence certain|likely|uncertain`. `--gate new-only` and `--format
+sarif` are fully implemented.)
 
 Reading the kind-discriminated JSON envelope:
 - Top-level `kind` ("audit" | "dead-code" | "deps") discriminates the result;
   switch on it and iterate `findings[]`. `audit` also has `quality_score` (0-100).
-- Each finding has `rule` (unused-file | unused-export | unused-dependency |
-  missing-dependency), `severity` (error|warn|off), `confidence`
-  (certain|likely|uncertain), a stable `fingerprint`, a `reason`, and
-  `location {path, line, end_line}`.
+- `kind` is one of audit | dead-code | deps | arch | complexity | dupes | types |
+  security | coverage | supply-chain.
+- Each finding has `rule`, `category` (dead-code | dependency-hygiene |
+  circular-dependency | complexity | architecture | duplication | type-health |
+  security), `severity` (error|warn|off), `confidence` (certain|likely|uncertain),
+  a stable `fingerprint`, a `reason`, and `location {path, line, end_line}`.
+  Rules: unused-file, unused-export, unused-import, commented-code,
+  unused-dependency, missing-dependency, circular-dependency, layer-violation,
+  forbidden-import, independence-violation, high-complexity, duplication,
+  untyped-function, cold-code, hotspot, dangerous-eval, subprocess-shell-true,
+  sql-injection, unsafe-yaml-load, unsafe-deserialization, tls-verify-disabled,
+  hardcoded-secret, weak-hash, weak-cipher, insecure-random,
+  request-without-timeout, vulnerable-dependency, plus custom policy ids.
 - Act only on `confidence: "certain"` without confirming with the user. Surface
   `likely`/`uncertain` with their reason and ask before changing code.
 - To silence a known-good finding, add its action's `suppression_comment` instead

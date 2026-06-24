@@ -11,14 +11,41 @@ Mollify is a deterministic candidate-producer: every finding has a stable
 decisions. You are the verifier. Never invent findings, and never hand-delete
 code on a guess.
 
-## Running an audit
-- Full report:        `mollify audit --format json`
-- Dead code only:     `mollify dead-code --format json` (alias: `mollify check`)
-- Dependency hygiene: `mollify deps --format json`
+## Commands (18)
+Analysis engines (each takes the global flags below):
+- `mollify audit` — unified report across all engines + `quality_score` (0–100).
+- `mollify dead-code` (alias `check`) — unused files/exports/imports.
+- `mollify deps` — dependency hygiene (unused / missing distributions).
+- `mollify arch` — circular deps, layer/boundary/policy violations.
+- `mollify complexity` (alias `health`) — complexity + churn×complexity hotspots.
+- `mollify dupes` — duplication / clone families.
+- `mollify types` — type-annotation health (untyped public functions).
+- `mollify security` — security candidates (eval/exec, shell=True, secrets, …).
+- `mollify coverage --coverage-file <f>` — cold-path analysis from a coverage.py report.
+- `mollify supply-chain [--offline] [--refresh] [--advisory-db <f>]` — versions vs
+  OSV (live by default; offline DB fallback) → `vulnerable-dependency`.
 
-Add `--path <dir>` to target a subproject. Drop `--format json` for a readable
-human summary. There are only two flags: `--path <dir>` (default `.`) and
-`--format human|json` (default `human`).
+Actions / utilities:
+- `mollify fix [--apply]` — remove `certain` + `auto_fixable` unused symbols and
+  unused imports. Dry-run unless `--apply`.
+- `mollify explain [<rule>]` — explain a rule id; no arg lists all rules.
+- `mollify trace <module>` — import neighborhood of a module.
+- `mollify inspect <file>` — evidence bundle for one file.
+- `mollify list [entry-points|files|frameworks]` — project topology.
+- `mollify watch [--interval-ms]` — re-run `audit` on any `.py` change (CLI-only).
+- `mollify init` — write a starter `.mollifyrc.json`.
+- `mollify mcp` — run the MCP stdio server (for coding agents).
+
+## Global flags (analysis commands)
+- `--path <dir>` (default `.`), `--format human|json|sarif` (default `human`).
+- `--gate all|new-only` (`new-only` keeps only findings in changed files),
+  `--base <ref>` (git base for the gate).
+- `--save-baseline <f>`, `--baseline <f>`, `--fail-on-regression`.
+- `--brief` (advisory: print but exit 0),
+  `--min-confidence certain|likely|uncertain`.
+
+Both `--gate new-only` and `--format sarif` are fully implemented. Drop `--format
+json` for a readable human summary.
 
 ## Reading the JSON (the contract)
 The envelope has a discriminating top-level `kind` (`audit` | `dead-code` |
@@ -27,8 +54,17 @@ files_analyzed}`, and `findings[]`. `audit` also has `quality_score` (0–100).
 
 Each finding:
 - `fingerprint` — stable id (e.g. `unused-export:931a82e6`).
-- `rule` — `unused-file`, `unused-export`, `unused-dependency`, `missing-dependency`.
-- `category` — `dead-code` | `dependency-hygiene` | …
+- `rule` — one of: `unused-file`, `unused-export`, `unused-import`,
+  `commented-code`, `unused-dependency`, `missing-dependency`,
+  `circular-dependency`, `layer-violation`, `forbidden-import`,
+  `independence-violation`, `high-complexity`, `duplication`, `untyped-function`,
+  `cold-code`, `hotspot`, `dangerous-eval`, `subprocess-shell-true`,
+  `sql-injection`, `unsafe-yaml-load`, `unsafe-deserialization`,
+  `tls-verify-disabled`, `hardcoded-secret`, `weak-hash`, `weak-cipher`,
+  `insecure-random`, `request-without-timeout`, `vulnerable-dependency`, plus any
+  custom policy ids from `.mollifyrc.json` `policies`.
+- `category` — `dead-code` | `dependency-hygiene` | `circular-dependency` |
+  `complexity` | `architecture` | `duplication` | `type-health` | `security`.
 - `severity` — `error` | `warn` | `off`.
 - `confidence` — `certain` | `likely` | `uncertain`.
 - `reason`, `location {path, line, end_line}`.
@@ -53,9 +89,20 @@ See `references/cli-reference.md` for all commands/flags and
   confidence to `uncertain` — treat those as review-only.
 - A `missing-dependency` may be a false positive for namespace packages or local
   shadowing; verify before adding to `pyproject.toml`.
-- `mollify fix` removes only `certain` + `auto_fixable` unused symbols (dry-run
-  unless `--apply`). `--gate new-only` and `--format sarif` are available. Do
-  not reference them as working features.
+- `mollify fix` removes only `certain` + `auto_fixable` unused symbols and unused
+  imports (dry-run unless `--apply`).
+- `--gate new-only` and `--format sarif` are fully implemented working features —
+  use them for PR gating and code-scanning output.
+
+## MCP Server Tools
+`mollify mcp` runs a stdio MCP server exposing 14 tools (`watch` is CLI-only):
+`mollify_audit`, `mollify_dead_code`, `mollify_deps`, `mollify_arch`,
+`mollify_complexity`, `mollify_dupes`, `mollify_types`, `mollify_security`,
+`mollify_coverage`, `mollify_supply_chain`, `mollify_explain`, `mollify_trace`,
+`mollify_inspect`, `mollify_list`. Params: `mollify_coverage` requires
+`coverage_file`; `mollify_trace` requires `module`; `mollify_inspect` requires
+`file`; `mollify_supply_chain` takes optional `advisory_db`; `mollify_list` takes
+optional `kind`; all others take optional `path` (default `.`).
 
 ## Exit codes
 - `0` — no `error`-severity findings.
