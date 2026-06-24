@@ -11,6 +11,7 @@
 | `mollify arch` | Architecture: circular-dependency detection. |
 | `mollify complexity` (alias `health`) | Cyclomatic + cognitive complexity hotspots. |
 | `mollify dupes` | Duplication / clone families (token-based). |
+| `mollify types` | Type-annotation health (fully-untyped public functions). |
 | `mollify fix [--apply]` | Remove `certain` + `auto_fixable` unused symbols. Dry-run unless `--apply`. |
 | `mollify init` | Write a starter `.mollifyrc.json`. |
 | `mollify mcp` | Run the MCP stdio server (for coding agents). |
@@ -29,7 +30,7 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 
 ## Rules emitted
 `unused-file`, `unused-export`, `unused-dependency`, `missing-dependency`,
-`circular-dependency`, `high-complexity`, `duplication`.
+`circular-dependency`, `high-complexity`, `duplication`, `untyped-function`.
 
 ## `.mollifyrc.json`
 ```json
@@ -41,7 +42,7 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 }
 ```
 `severity` keys are rule ids or category names (`dead-code`, `duplication`,
-`circular-dependency`, `complexity`, `architecture`, `dependency-hygiene`).
+`circular-dependency`, `complexity`, `architecture`, `dependency-hygiene`, `type-health`).
 
 ## Not yet implemented (do not rely on)
 Line-level gate attribution (current gate is file-level), named architecture
