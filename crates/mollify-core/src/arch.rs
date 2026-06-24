@@ -70,6 +70,89 @@ pub fn analyze_layers(graph: &ModuleGraph, layers: &[String]) -> Vec<Finding> {
     findings
 }
 
+/// Does a dotted module name fall under a contract prefix?
+fn under(dotted: &str, prefix: &str) -> bool {
+    dotted == prefix || dotted.starts_with(&format!("{prefix}."))
+}
+
+/// Evaluate declarative import contracts (forbidden + independence).
+pub fn analyze_contracts(
+    graph: &ModuleGraph,
+    contracts: &crate::config::Contracts,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let edges = graph.import_edges();
+    let path_of = |dotted: &str| {
+        graph
+            .path_of_dotted(dotted)
+            .map(|p| p.to_owned())
+            .unwrap_or_default()
+    };
+    let mut push = |rule: &'static str, importer: &str, imported: &str, reason: String| {
+        findings.push(Finding {
+            fingerprint: fingerprint(rule, &[importer, imported]),
+            rule: rule.into(),
+            category: Category::Architecture,
+            severity: Severity::Warn,
+            confidence: Confidence::Certain,
+            attribution: None,
+            reason,
+            location: Location {
+                path: path_of(importer),
+                line: 1,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![Action {
+                kind: "respect-contract".into(),
+                description: "Invert or relocate the dependency to satisfy the contract.".into(),
+                auto_fixable: false,
+                suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+            }],
+        });
+    };
+
+    for (importer, imported) in &edges {
+        // Forbidden contracts.
+        for c in &contracts.forbidden {
+            if under(importer, &c.from) && c.to.iter().any(|t| under(imported, t)) {
+                push(
+                    "forbidden-import",
+                    importer,
+                    imported,
+                    format!(
+                        "contract violation: `{importer}` must not import `{imported}` (forbidden from `{}`)",
+                        c.from
+                    ),
+                );
+            }
+        }
+        // Independence groups: two distinct members must not import each other.
+        for group in &contracts.independent {
+            let ia = group.iter().find(|m| under(importer, m));
+            let ib = group.iter().find(|m| under(imported, m));
+            if let (Some(a), Some(b)) = (ia, ib) {
+                if a != b {
+                    push(
+                        "independence-violation",
+                        importer,
+                        imported,
+                        format!("independence violation: `{a}` and `{b}` must not depend on each other (`{importer}` → `{imported}`)"),
+                    );
+                }
+            }
+        }
+    }
+    findings.sort_by(|a, b| {
+        a.location
+            .path
+            .cmp(&b.location.path)
+            .then(a.reason.cmp(&b.reason))
+    });
+    findings.dedup_by(|a, b| a.fingerprint == b.fingerprint);
+    findings
+}
+
 /// Emit one finding per import cycle.
 pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -159,6 +242,35 @@ mod tests {
         assert!(
             f.iter()
                 .any(|x| x.rule == "layer-violation" && x.reason.contains("domain")),
+            "got {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn reports_forbidden_and_independence() {
+        let d = temp("contracts");
+        write(&d, "domain/__init__.py", "");
+        write(&d, "domain/core.py", "import web.views\n");
+        write(&d, "web/__init__.py", "");
+        write(&d, "web/views.py", "");
+        write(&d, "featurea/__init__.py", "");
+        write(&d, "featurea/x.py", "import featureb.y\n");
+        write(&d, "featureb/__init__.py", "");
+        write(&d, "featureb/y.py", "");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let contracts = crate::config::Contracts {
+            forbidden: vec![crate::config::ForbiddenContract {
+                from: "domain".into(),
+                to: vec!["web".into()],
+            }],
+            independent: vec![vec!["featurea".into(), "featureb".into()]],
+        };
+        let f = analyze_contracts(&g, &contracts);
+        assert!(f.iter().any(|x| x.rule == "forbidden-import"), "got {f:?}");
+        assert!(
+            f.iter().any(|x| x.rule == "independence-violation"),
             "got {f:?}"
         );
         std::fs::remove_dir_all(&d).ok();

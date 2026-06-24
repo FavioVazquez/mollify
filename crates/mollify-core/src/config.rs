@@ -21,6 +21,23 @@ pub struct Config {
     pub arch_layers: Vec<String>,
     /// Declarative rule packs: banned imports / calls, optionally path-scoped.
     pub policies: Vec<Policy>,
+    /// Declarative import contracts (import-linter / tach style).
+    pub contracts: Contracts,
+}
+
+/// Module-boundary contracts checked against the import graph.
+#[derive(Debug, Clone, Default)]
+pub struct Contracts {
+    /// `from` module(s) must not import any `to` module (by dotted prefix).
+    pub forbidden: Vec<ForbiddenContract>,
+    /// Each group is a set of modules that must not import one another.
+    pub independent: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForbiddenContract {
+    pub from: String,
+    pub to: Vec<String>,
 }
 
 /// One declarative policy ("rule pack" entry): forbid an import and/or a call,
@@ -50,6 +67,7 @@ impl Default for Config {
             arch_preset: None,
             arch_layers: Vec::new(),
             policies: Vec::new(),
+            contracts: Contracts::default(),
         }
     }
 }
@@ -99,6 +117,43 @@ pub fn load(root: &Utf8Path) -> Config {
         if cfg.arch_layers.is_empty() {
             if let Some(preset) = cfg.arch_preset.as_deref() {
                 cfg.arch_layers = preset_layers(preset);
+            }
+        }
+    }
+    if let Some(contracts) = v.get("contracts").and_then(|c| c.as_object()) {
+        if let Some(arr) = contracts.get("forbidden").and_then(|f| f.as_array()) {
+            for c in arr {
+                let Some(from) = c.get("from").and_then(|x| x.as_str()) else {
+                    continue;
+                };
+                let to: Vec<String> = c
+                    .get("to")
+                    .and_then(|t| t.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !to.is_empty() {
+                    cfg.contracts.forbidden.push(ForbiddenContract {
+                        from: from.to_string(),
+                        to,
+                    });
+                }
+            }
+        }
+        if let Some(arr) = contracts.get("independent").and_then(|i| i.as_array()) {
+            for group in arr {
+                if let Some(members) = group.as_array() {
+                    let g: Vec<String> = members
+                        .iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect();
+                    if g.len() >= 2 {
+                        cfg.contracts.independent.push(g);
+                    }
+                }
             }
         }
     }

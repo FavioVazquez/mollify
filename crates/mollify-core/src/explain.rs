@@ -39,6 +39,16 @@ pub fn text(rule: &str) -> Option<&'static str> {
             (per `architecture.layers`). Confidence: certain. Action: invert or relocate \
             the dependency so lower layers never depend on higher ones."
         }
+        "forbidden-import" => {
+            "An import that violates a declarative `contracts.forbidden` rule in \
+            `.mollifyrc` (module must not depend on another). Confidence: certain. \
+            Action: invert or relocate the dependency."
+        }
+        "independence-violation" => {
+            "Two modules declared independent (`contracts.independent`) import each \
+            other. Confidence: certain. Action: extract shared code to a common \
+            lower module."
+        }
         "high-complexity" => {
             "A function whose cyclomatic or cognitive complexity exceeds the \
             configured threshold. Action: decompose it; extract helpers and flatten branches."
@@ -130,6 +140,8 @@ pub const RULES: &[&str] = &[
     "missing-dependency",
     "circular-dependency",
     "layer-violation",
+    "forbidden-import",
+    "independence-violation",
     "high-complexity",
     "duplication",
     "cold-code",
