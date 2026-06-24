@@ -89,11 +89,16 @@ for all commands.
   working features.
 
 ## MCP server tools
-`mollify mcp` exposes 14 tools (`watch` is CLI-only): `mollify_audit`,
+`mollify mcp` exposes 15 tools (`watch` and `lsp` are CLI-only): `mollify_audit`,
 `mollify_dead_code`, `mollify_deps`, `mollify_arch`, `mollify_complexity`,
 `mollify_dupes`, `mollify_types`, `mollify_security`, `mollify_coverage`,
 `mollify_supply_chain`, `mollify_explain`, `mollify_trace`, `mollify_inspect`,
-`mollify_list`. Params: `mollify_coverage` requires `coverage_file`;
-`mollify_trace` requires `module`; `mollify_inspect` requires `file`;
-`mollify_supply_chain` takes optional `advisory_db`; `mollify_list` takes optional
-`kind`; all others take optional `path` (default `.`).
+`mollify_list`, `mollify_metrics`. Params: `mollify_coverage` requires
+`coverage_file`; `mollify_trace` requires `module`; `mollify_inspect` requires
+`file`; `mollify_supply_chain` takes optional `advisory_db`; `mollify_list` takes
+optional `kind`; all others take optional `path` (default `.`).
+
+## LSP server
+`mollify lsp` runs a stdio Language Server (Content-Length framed JSON-RPC) that
+publishes real-time diagnostics on document open/save. Register it as the Python
+language server in any LSP-capable editor (command: `mollify lsp`).
