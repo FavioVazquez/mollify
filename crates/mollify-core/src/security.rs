@@ -10,13 +10,36 @@ use mollify_types::{Action, Category, Confidence, Finding, Location, Severity};
 fn confidence_for(rule: &str) -> Confidence {
     match rule {
         // Provable-ish footguns.
-        "subprocess-shell-true" | "tls-verify-disabled" | "unsafe-yaml-load" => Confidence::Likely,
-        // Depends on whether input is trusted.
-        "dangerous-eval" | "unsafe-deserialization" => Confidence::Uncertain,
+        "subprocess-shell-true"
+        | "tls-verify-disabled"
+        | "unsafe-yaml-load"
+        | "weak-hash"
+        | "weak-cipher" => Confidence::Likely,
+        // Depends on whether input is trusted / context.
+        "dangerous-eval" | "unsafe-deserialization" | "sql-injection" => Confidence::Uncertain,
+        // Noisy without context: stdlib random is fine for non-security use.
+        "insecure-random" | "request-without-timeout" => Confidence::Uncertain,
         // Could be a placeholder / test fixture.
         "hardcoded-secret" => Confidence::Likely,
         _ => Confidence::Likely,
     }
+}
+
+/// Best-effort CWE id for a rule, surfaced in the reason for compliance/SARIF.
+fn cwe_for(rule: &str) -> Option<&'static str> {
+    Some(match rule {
+        "dangerous-eval" => "CWE-95",
+        "subprocess-shell-true" => "CWE-78",
+        "sql-injection" => "CWE-89",
+        "unsafe-yaml-load" => "CWE-20",
+        "unsafe-deserialization" => "CWE-502",
+        "tls-verify-disabled" => "CWE-295",
+        "hardcoded-secret" => "CWE-798",
+        "weak-hash" | "weak-cipher" => "CWE-327",
+        "insecure-random" => "CWE-330",
+        "request-without-timeout" => "CWE-400",
+        _ => return None,
+    })
 }
 
 pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
@@ -30,7 +53,10 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
                 severity: Severity::Warn,
                 confidence: confidence_for(hit.rule),
                 attribution: None,
-                reason: hit.detail.clone(),
+                reason: match cwe_for(hit.rule) {
+                    Some(cwe) => format!("{} [{cwe}]", hit.detail),
+                    None => hit.detail.clone(),
+                },
                 location: Location {
                     path: m.path.clone(),
                     line: hit.line,
@@ -82,6 +108,37 @@ mod tests {
         assert!(rules.contains(&"hardcoded-secret"), "got {rules:?}");
         assert!(rules.contains(&"subprocess-shell-true"), "got {rules:?}");
         assert!(f.iter().all(|x| x.category == Category::Security));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn surfaces_expanded_rules_with_cwe() {
+        let d = temp("sec2");
+        write(
+            &d,
+            "__init__.py",
+            "import hashlib, os, random\nhashlib.md5(b'x')\nos.system(cmd)\nrandom.random()\ncur.execute(f\"select {x}\")\nrequests.get(url)\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let rules: Vec<_> = f.iter().map(|x| x.rule.as_str()).collect();
+        for expected in [
+            "weak-hash",
+            "subprocess-shell-true",
+            "insecure-random",
+            "sql-injection",
+            "request-without-timeout",
+        ] {
+            assert!(rules.contains(&expected), "missing {expected}: {rules:?}");
+        }
+        // CWE is surfaced in the reason.
+        assert!(f
+            .iter()
+            .find(|x| x.rule == "weak-hash")
+            .unwrap()
+            .reason
+            .contains("CWE-327"));
         std::fs::remove_dir_all(&d).ok();
     }
 }
