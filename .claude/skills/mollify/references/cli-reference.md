@@ -14,7 +14,7 @@
 | `mollify types` | Type-annotation health (fully-untyped public functions). |
 | `mollify security` | Security candidates (eval/exec, shell=True, hardcoded secrets, …). |
 | `mollify coverage --coverage-file <f>` | Cold-path analysis from a coverage.py JSON report. |
-| `mollify supply-chain [--advisory-db <f>]` | Pinned/locked versions vs a local CVE/advisory DB (`vulnerable-dependency`). |
+| `mollify supply-chain [--offline] [--refresh] [--advisory-db <f>]` | Pinned/locked versions vs OSV (live by default; offline DB fallback) → `vulnerable-dependency`. |
 | `mollify fix [--apply]` | Remove `certain` + `auto_fixable` unused symbols **and unused imports**. Dry-run unless `--apply`. |
 | `mollify explain [<rule>]` | Explain a rule id (semantics, confidence, action). No argument lists all rules. |
 | `mollify trace <module>` | Import neighborhood of a module: what it imports and what imports it. |

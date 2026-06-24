@@ -109,6 +109,12 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     reachable). PEP 440-subset version matcher. Folded into `audit` when
     `.mollify/advisories.json` is present. Validated against real OSV data
     (25k+ advisories). +tests.
+    - **Live-by-default** (`crates/mollify-cli/src/osv.rs`, via `ureq`): the
+      `supply-chain` command queries OSV.dev live per pinned package (honors
+      `HTTPS_PROXY`), falling back to the local DB offline. `--offline` forces the
+      deterministic DB path; `--refresh` caches the live feed. `mollify audit`
+      stays fully offline (DB-only). Network I/O is isolated in the CLI so
+      `mollify-core` remains pure.
   - ✅ **MCP server exposes every engine** (`mollify-mcp`): audit/dead-code/deps/arch/
     complexity/dupes/types/security/coverage/supply-chain + explain + trace. +tests.
   - ✅ **Regression baselines** (`baseline.rs`) — `--save-baseline`/`--baseline`/

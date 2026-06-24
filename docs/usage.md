@@ -85,13 +85,26 @@ mollify supply-chain
 ## Supply-chain advisories
 
 `mollify supply-chain` matches **pinned/locked** dependency versions
-(`requirements*.txt` `==` pins, `poetry.lock`, `uv.lock`) against a local
-advisory database in the `mollify-advisories/1` schema. To keep audits
-deterministic and offline, Mollify never fetches advisories itself — regenerate
-the DB with `scripts/fetch-advisories.py` (which pulls from OSV.dev and, as a
-fallback, pyup safety-db) and commit or cache it at `.mollify/advisories.json`.
-When that file is present, `mollify audit` includes supply-chain findings
-automatically. A small real-CVE sample lives at `examples/advisories.sample.json`.
+(`requirements*.txt` `==` pins, `poetry.lock`, `uv.lock`) against vulnerability
+advisories.
+
+**Live by default, offline fallback.** Advisories change constantly, so the
+`supply-chain` command queries **OSV.dev live** for each pinned package (honoring
+`HTTPS_PROXY`). If the network is unavailable, it falls back to the local
+advisory DB. Flags:
+
+- `--refresh` — after a live fetch, cache the advisories to the DB path for later offline runs.
+- `--offline` — skip the network entirely and use the local DB only (fully deterministic).
+- `--advisory-db <path>` — choose the DB (default `.mollify/advisories.json`).
+
+The DB uses the `mollify-advisories/1` schema; regenerate/seed it with
+`scripts/fetch-advisories.py` (OSV.dev export, falling back to pyup safety-db).
+A small real-CVE sample lives at `examples/advisories.sample.json`.
+
+**`mollify audit` stays offline and deterministic** — it folds in supply-chain
+findings only from the local DB (`.mollify/advisories.json`) when present, never
+hitting the network. Use `mollify supply-chain --refresh` (or the script) to keep
+that DB current.
 
 ## Confidence tiers
 

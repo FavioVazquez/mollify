@@ -132,9 +132,18 @@ pub fn coverage_report(root: &Utf8Path, coverage_path: &Utf8Path) -> FindingsRep
 /// local advisory database (`vulnerable-dependency`). The DB is an input file,
 /// so analysis stays deterministic and offline.
 pub fn supply_chain_report(root: &Utf8Path, db_path: &Utf8Path) -> FindingsReport {
-    let graph = build_graph(root);
     let advisories = supplychain::load_db(db_path).unwrap_or_default();
-    let findings = supplychain::analyze(root, &advisories);
+    supply_chain_report_with(root, &advisories)
+}
+
+/// Like [`supply_chain_report`] but against an already-loaded advisory set (e.g.
+/// fetched live by the CLI). Keeps the network out of `mollify-core`.
+pub fn supply_chain_report_with(
+    root: &Utf8Path,
+    advisories: &[supplychain::Advisory],
+) -> FindingsReport {
+    let graph = build_graph(root);
+    let findings = supplychain::analyze(root, advisories);
     finalize(&config::load(root), graph.modules.len(), findings)
 }
 
