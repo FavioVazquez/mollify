@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "post_write_code": [
+      {
+        "command": "bash scripts/mollify-report.sh",
+        "show_output": true
+      }
+    ]
+  }
+}

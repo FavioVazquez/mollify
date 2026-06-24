@@ -43,8 +43,16 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
 - **Phase 2 — dupes + complexity + arch:** ⬜ (scaffold next)
 - **Phase 3 — AI/MCP + plugins:** ⬜
 - **Phase 4 — runtime/type intelligence:** ⬜
-- **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ⬜
-  (user confirmed: `.devin` = hooks/skills/rules, `.windsurf` = workflows)
+- **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
+  - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
+  - `.devin/rules/mollify.md` (glob `**/*.py`)
+  - `.devin/hooks.v1.json` (Devin/Claude-compatible: PostToolUse + Stop) and
+    `.windsurf/hooks.json` (Cascade: post_write_code) → `scripts/mollify-report.sh` (verified)
+  - `.windsurf/workflows/mollify-audit.md`, `mollify-cleanup.md`
+  - **Note:** hooks are *advisory* (run audit + surface findings), not blocking,
+    because the `--gate new-only` blocking gate is not built yet. Upgrade them to
+    blocking once the gate + `attribution` land. README.md added.
+  - User confirmed `.devin` = hooks/skills/rules, `.windsurf` = workflows.
 
 ## Verification protocol (every commit)
 1. `cargo build` clean. 2. `cargo test` green. 3. `cargo clippy` (best-effort). 4. Update this file. 5. Commit with a descriptive message (author: Favio Vázquez).
