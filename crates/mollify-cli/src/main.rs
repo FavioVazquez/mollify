@@ -320,9 +320,18 @@ fn apply_gate(scope: &Scope, findings: &mut Vec<mollify_types::Finding>) {
         eprintln!("mollify: --gate requested but this isn't a git repo; reporting all findings.");
         return;
     };
+    // Prefer line-level attribution (a finding is introduced only if its line is
+    // in a changed hunk); fall back to file-level when no line info is available.
+    let lines = mollify_core::git::changed_lines(&scope.path, scope.base.as_deref());
     for f in findings.iter_mut() {
-        let introduced =
+        let file_changed =
             mollify_core::git::path_is_changed(&scope.path, &f.location.path, &changed);
+        let introduced = match lines.as_ref().and_then(|m| {
+            mollify_core::git::line_is_changed(&scope.path, &f.location.path, f.location.line, m)
+        }) {
+            Some(in_hunk) => in_hunk,
+            None => file_changed,
+        };
         f.attribution = Some(if introduced {
             Attribution::Introduced
         } else {
