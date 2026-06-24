@@ -230,6 +230,19 @@ fn declared_dependencies(value: &toml::Value) -> FxHashSet<String> {
             }
         }
     }
+    // Legacy Poetry (pre-1.2): [tool.poetry.dev-dependencies] — a table keyed by
+    // name, the old home for dev deps before group syntax. Still common in the
+    // wild; without it, declared dev tools look "missing" when imported.
+    if let Some(tbl) = value
+        .get("tool")
+        .and_then(|t| t.get("poetry"))
+        .and_then(|p| p.get("dev-dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        for name in tbl.keys() {
+            set.insert(normalize_dist(name));
+        }
+    }
     // uv: [tool.uv] dev-dependencies (array of specs).
     if let Some(arr) = value
         .get("tool")
@@ -361,6 +374,35 @@ mod tests {
         // requests is declared and used → no finding; os is stdlib → ignored.
         assert!(!f.iter().any(|x| x.reason.contains("requests")));
         assert!(!f.iter().any(|x| x.reason.contains("`os`")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn legacy_poetry_dev_dependencies_count_as_declared() {
+        // Pre-1.2 Poetry put dev deps in [tool.poetry.dev-dependencies]. A tool
+        // declared there and imported in code must NOT be reported as missing.
+        let d = temp("poetry-legacy");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[tool.poetry]\nname = \"x\"\n\n\
+             [tool.poetry.dependencies]\npython = \"^3.10\"\nrequests = \"2.31.0\"\n\n\
+             [tool.poetry.dev-dependencies]\nblack = \"24.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("app.py"),
+            "import black\nimport requests\nblack.format_str('x')\nrequests.get('y')\n",
+        )
+        .unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        assert!(
+            !f.iter().any(|x| x.reason.contains("black")),
+            "black is declared (legacy dev-deps) + used → no finding, got {f:?}"
+        );
+        // requests is also declared + used → clean too.
+        assert!(!f.iter().any(|x| x.reason.contains("requests")));
         std::fs::remove_dir_all(&d).ok();
     }
 
