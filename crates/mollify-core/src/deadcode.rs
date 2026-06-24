@@ -13,7 +13,47 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     unused_files(graph, &mut findings);
     unused_symbols(graph, &mut findings);
     unused_imports(graph, &mut findings);
+    unused_locals(graph, &mut findings);
     findings
+}
+
+/// Flag unused local variables (`unused-variable`, ruff F841) and parameters
+/// (`unused-parameter`) from the parser's per-function scope analysis. Never
+/// auto-fixable: the assignment's right-hand side may have side effects.
+fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
+    for m in &graph.modules {
+        for s in &m.parsed.scope_findings {
+            let (rule, kind, confidence) = if s.is_param {
+                ("unused-parameter", "parameter", Confidence::Uncertain)
+            } else {
+                ("unused-variable", "local variable", Confidence::Likely)
+            };
+            out.push(Finding {
+                fingerprint: fingerprint(rule, &[m.path.as_str(), &s.name, &s.line.to_string()]),
+                rule: rule.into(),
+                category: Category::DeadCode,
+                severity: Severity::Warn,
+                confidence,
+                attribution: None,
+                reason: format!("{kind} `{}` is assigned but never used", s.name),
+                location: Location {
+                    path: m.path.clone(),
+                    line: s.line,
+                    column: 0,
+                    end_line: None,
+                },
+                actions: vec![Action {
+                    kind: "remove-binding".into(),
+                    description: format!(
+                        "Remove the unused {kind} `{}` (or prefix it with `_`)",
+                        s.name
+                    ),
+                    auto_fixable: false,
+                    suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+                }],
+            });
+        }
+    }
 }
 
 /// Flag imports whose every local binding is unused within the module. Skips
@@ -300,6 +340,33 @@ def view():
                 .actions[0]
                 .auto_fixable
         );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn flags_unused_local_and_param_but_not_used_ones() {
+        let d = temp("scope");
+        write(&d, "__main__.py", "import lib\nlib.f(1, 2)\n");
+        write(
+            &d,
+            "lib.py",
+            "def f(used_p, dead_p):\n    dead_local = compute()\n    kept = used_p + 1\n    return kept\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "unused-variable" && x.reason.contains("dead_local")),
+            "got {f:?}"
+        );
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "unused-parameter" && x.reason.contains("dead_p")),
+            "got {f:?}"
+        );
+        assert!(!f.iter().any(|x| x.reason.contains("`kept`")));
+        assert!(!f.iter().any(|x| x.reason.contains("used_p")));
         std::fs::remove_dir_all(&d).ok();
     }
 

@@ -106,6 +106,16 @@ pub struct CallSite {
     pub line: u32,
 }
 
+/// An unused local binding within a function scope: a local variable or a
+/// parameter that is bound but never referenced again in the function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeFinding {
+    pub name: String,
+    pub line: u32,
+    /// True for a parameter, false for a local-variable assignment.
+    pub is_param: bool,
+}
+
 /// The parsed view of one Python module that the graph builds on.
 #[derive(Debug, Clone)]
 pub struct ParsedModule {
@@ -131,6 +141,9 @@ pub struct ParsedModule {
     /// Inline suppressions parsed from `# mollify: ignore[<rule>]` comments:
     /// `(line, rule)` where rule is `"*"` for a bare `# mollify: ignore`.
     pub ignores: Vec<(u32, String)>,
+    /// Unused local variables / parameters discovered by per-function scope
+    /// analysis (conservative: name bound but referenced nowhere else).
+    pub scope_findings: Vec<ScopeFinding>,
     /// Occurrence count per identifier across the whole module (includes the
     /// definition site). `count(name) > defs(name)` ⇒ the name is referenced,
     /// not just defined — used by the symbol-usage analysis.
@@ -184,6 +197,7 @@ impl PyParser {
             used_names: Vec::new(),
             local_uses: Vec::new(),
             ignores: Vec::new(),
+            scope_findings: Vec::new(),
             name_counts: std::collections::HashMap::new(),
             has_dynamic_sink: false,
             had_errors: root.has_error(),
@@ -198,6 +212,8 @@ impl PyParser {
         collect_local_uses(root, bytes, &mut m);
         // Per-function complexity.
         collect_complexity(root, bytes, &mut m);
+        // Per-function unused locals / parameters.
+        collect_scopes(root, bytes, &mut m);
         // Security candidates.
         collect_security(root, bytes, &mut m);
 
@@ -629,6 +645,174 @@ fn collect_complexity(root: Node, bytes: &[u8], m: &mut ParsedModule) {
         }
     }
     m.functions.sort_by_key(|f| f.line);
+}
+
+/// Names whose presence makes scope analysis unreliable — skip the function.
+const SCOPE_DYNAMIC: &[&str] = &["locals", "vars", "globals", "eval", "exec"];
+
+/// Per-function unused local / parameter detection. Conservative: a binding is
+/// flagged only when its name occurs exactly once in the whole function (its
+/// bind site) — i.e. it is never read, augmented, deleted, or closed over.
+fn collect_scopes(root: Node, bytes: &[u8], m: &mut ParsedModule) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "function_definition" {
+            analyze_function_scope(node, bytes, m);
+        }
+        let mut c = node.walk();
+        for ch in node.children(&mut c) {
+            stack.push(ch);
+        }
+    }
+    m.scope_findings.sort_by_key(|s| s.line);
+}
+
+fn analyze_function_scope(func: Node, bytes: &[u8], m: &mut ParsedModule) {
+    // Frequency of every identifier across the whole function subtree (a binding
+    // referenced anywhere — including nested closures — appears more than once).
+    let mut freq: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut sub = vec![func];
+    while let Some(n) = sub.pop() {
+        if n.kind() == "identifier" {
+            *freq.entry(node_text(n, bytes).to_string()).or_insert(0) += 1;
+        }
+        let mut c = n.walk();
+        for ch in n.children(&mut c) {
+            sub.push(ch);
+        }
+    }
+    // Dynamic scope access → don't claim anything is unused.
+    if SCOPE_DYNAMIC.iter().any(|d| freq.contains_key(*d)) {
+        return;
+    }
+    let decorated = func
+        .parent()
+        .map(|p| p.kind() == "decorated_definition")
+        .unwrap_or(false);
+    let fname = func
+        .child_by_field_name("name")
+        .map(|n| node_text(n, bytes))
+        .unwrap_or("");
+    let is_dunder = fname.starts_with("__") && fname.ends_with("__");
+
+    // global/nonlocal-declared names are not locals.
+    let mut declared_global: std::collections::HashSet<String> = Default::default();
+    let mut gn = vec![func];
+    while let Some(n) = gn.pop() {
+        if matches!(n.kind(), "global_statement" | "nonlocal_statement") {
+            let mut c = n.walk();
+            for ch in n.named_children(&mut c) {
+                if ch.kind() == "identifier" {
+                    declared_global.insert(node_text(ch, bytes).to_string());
+                }
+            }
+        }
+        let mut c = n.walk();
+        for ch in n.children(&mut c) {
+            gn.push(ch);
+        }
+    }
+
+    // Unused parameters (Uncertain — interface conformance). Skip decorated /
+    // dunder / stub-bodied functions where unused params are expected.
+    let body_is_stub = func
+        .child_by_field_name("body")
+        .map(is_stub_body)
+        .unwrap_or(true);
+    if !decorated && !is_dunder && !body_is_stub {
+        if let Some(params) = func.child_by_field_name("parameters") {
+            let mut c = params.walk();
+            let mut first = true;
+            for p in params.named_children(&mut c) {
+                let is_first = first;
+                first = false;
+                let pname = param_name(p, bytes);
+                let Some(pname) = pname else { continue };
+                if is_first && (pname == "self" || pname == "cls") {
+                    continue;
+                }
+                if pname.starts_with('_') || declared_global.contains(&pname) {
+                    continue;
+                }
+                if freq.get(&pname).copied().unwrap_or(0) == 1 {
+                    m.scope_findings.push(ScopeFinding {
+                        line: p.start_position().row as u32 + 1,
+                        name: pname,
+                        is_param: true,
+                    });
+                }
+            }
+        }
+    }
+
+    // Unused local variables: top-level `name = expr` whose name occurs once.
+    if let Some(body) = func.child_by_field_name("body") {
+        let mut c = body.walk();
+        for stmt in body.named_children(&mut c) {
+            if stmt.kind() != "expression_statement" {
+                continue;
+            }
+            let Some(assign) = stmt.named_child(0) else {
+                continue;
+            };
+            if assign.kind() != "assignment" {
+                continue;
+            }
+            let Some(left) = assign.child_by_field_name("left") else {
+                continue;
+            };
+            if left.kind() != "identifier" {
+                continue; // skip tuple/attribute/subscript targets
+            }
+            let name = node_text(left, bytes).to_string();
+            if name == "_" || declared_global.contains(&name) {
+                continue;
+            }
+            if freq.get(&name).copied().unwrap_or(0) == 1 {
+                m.scope_findings.push(ScopeFinding {
+                    line: assign.start_position().row as u32 + 1,
+                    name,
+                    is_param: false,
+                });
+            }
+        }
+    }
+}
+
+/// The bound name of a parameter node, honoring typed/default forms. `None` for
+/// `*args` / `**kwargs` (always "used" by convention).
+fn param_name(p: Node, bytes: &[u8]) -> Option<String> {
+    match p.kind() {
+        "identifier" => Some(node_text(p, bytes).to_string()),
+        "typed_parameter" | "default_parameter" | "typed_default_parameter" => {
+            let mut c = p.walk();
+            let kids: Vec<Node> = p.named_children(&mut c).collect();
+            kids.into_iter()
+                .find(|ch| ch.kind() == "identifier")
+                .map(|ch| node_text(ch, bytes).to_string())
+        }
+        _ => None, // list_splat_pattern / dictionary_splat_pattern
+    }
+}
+
+/// Is a function body a stub (only `pass`, `...`, a docstring, or
+/// `raise NotImplementedError`)? Such bodies legitimately ignore parameters.
+fn is_stub_body(body: Node) -> bool {
+    let mut c = body.walk();
+    for stmt in body.named_children(&mut c) {
+        match stmt.kind() {
+            "pass_statement" => {}
+            "raise_statement" => {}
+            "expression_statement" => {
+                let inner = stmt.named_child(0).map(|n| n.kind());
+                if !matches!(inner, Some("string") | Some("ellipsis")) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 const SECRET_NAMES: &[&str] = &[
