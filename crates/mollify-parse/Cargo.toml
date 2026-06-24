@@ -1,0 +1,14 @@
+[package]
+name = "mollify-parse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Python parsing for Mollify. Tree-sitter-backed today (ADR-0001); ruff_python_parser is the future migration when git/vendoring is available."
+
+[dependencies]
+tree-sitter.workspace = true
+tree-sitter-python.workspace = true
+camino.workspace = true
+thiserror.workspace = true
