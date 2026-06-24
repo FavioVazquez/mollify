@@ -23,7 +23,7 @@ evidence with a stable fingerprint, a confidence tier, and a human-readable reas
 Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 > **Project status:** early but real. Phases 0–4 of the [plan](PLAN.md) are
-> substantially implemented, tested (50+ tests), and dogfooded; CI is green.
+> substantially implemented, tested (57+ tests), and dogfooded; CI is green.
 > See [`docs/STATUS.md`](docs/STATUS.md) for exactly what's done vs pending and
 > [`docs/adr/`](docs/adr) for design decisions. Honest about its edges — see
 > *Known limitations* below.
@@ -49,16 +49,20 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 |---|---|---|
 | **Dead code** | `mollify dead-code` | `unused-file`, `unused-export` |
 | **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency` |
-| **Architecture** | `mollify arch` | `circular-dependency` |
+| **Architecture** | `mollify arch` | `circular-dependency`, `layer-violation`, custom policies |
 | **Complexity & hotspots** | `mollify complexity` | `high-complexity`, `hotspot` (churn × complexity) |
 | **Duplication** | `mollify dupes` | `duplication` (clone families) |
 | **Type health** | `mollify types` | `untyped-function` |
 | **Security** | `mollify security` | `dangerous-eval`, `subprocess-shell-true`, `unsafe-yaml-load`, `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret` |
+| **Cold paths** | `mollify coverage --coverage-file` | `cold-code` (reachable but never executed) |
 | **Everything + score** | `mollify audit` | all of the above + a 0–100 quality score |
 
 Also: **Jupyter notebooks (`.ipynb`)** are discovered and analyzed cell-by-cell;
 **framework awareness** (Flask/FastAPI/Django/Celery/pytest/click/Pydantic/…);
-and `mollify fix` to safely remove `certain` unused symbols.
+**architecture presets** (`layered`/`hexagonal`/`feature-sliced`/`bulletproof`) and
+**declarative rule packs** (ban imports/calls per path); `mollify fix` to safely
+remove `certain` unused symbols; `mollify explain <rule>` for rule semantics; and
+`mollify trace <module>` for a module's import neighborhood.
 
 ## Install
 
@@ -130,7 +134,11 @@ agent skills). Clients switch on `kind` and iterate `findings[]`:
   "severity": { "dead-code": "error", "duplication": "warn", "unused-dependency": "off" },
   "ignore": ["tests/", "migrations/"],
   "max_cyclomatic": 10,
-  "max_cognitive": 15
+  "max_cognitive": 15,
+  "architecture": { "layers": ["api", "service", "domain", "infra"] },
+  "policies": [
+    { "id": "no-requests-in-domain", "forbid_import": "requests", "in_paths": ["domain/"], "severity": "error" }
+  ]
 }
 ```
 
@@ -186,8 +194,8 @@ contract — see [RESEARCH.md](RESEARCH.md) for the honest, sourced landscape
 - Symbol usage is name-table-assisted, not full scope/binding resolution.
 - Duplication is Rabin-Karp token matching (SA-IS+LCP is the planned upgrade).
 - `--gate` attribution is file-level (line-level base-worktree is planned).
-- Not yet built: runtime-coverage merge, supply-chain CVE join, LSP, named
-  architecture presets. Tracked in [docs/STATUS.md](docs/STATUS.md).
+- Not yet built: supply-chain CVE join (needs network), an LSP server, and a
+  `watch` mode. Tracked in [docs/STATUS.md](docs/STATUS.md).
 
 ## Contributing
 

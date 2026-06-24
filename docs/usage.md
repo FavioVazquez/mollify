@@ -22,10 +22,15 @@ cargo build --release
 | `mollify audit` | Everything, plus a 0–100 quality score. Start here. |
 | `mollify dead-code` (`check`) | Unused files and unused top-level functions/classes/variables. |
 | `mollify deps` | Declared-but-unused and imported-but-undeclared distributions. |
-| `mollify arch` | Import cycles. |
-| `mollify complexity` (`health`) | Functions over the cyclomatic/cognitive thresholds. |
+| `mollify arch` | Import cycles, layer-boundary violations, and custom policy violations. |
+| `mollify complexity` (`health`) | Functions over the cyclomatic/cognitive thresholds + churn×complexity hotspots. |
 | `mollify dupes` | Duplicated code blocks (clone families). |
+| `mollify types` | Fully-untyped public functions (annotation health). |
+| `mollify security` | Bandit-style security candidates. |
+| `mollify coverage --coverage-file <f>` | Reachable-but-never-executed functions (cold paths) from a coverage.py JSON report. |
 | `mollify fix [--apply]` | Remove safe (certain) unused symbols. Dry-run unless `--apply`. |
+| `mollify explain [<rule>]` | Explain a rule (semantics/confidence/action); lists all rules with no argument. |
+| `mollify trace <module>` | A module's import neighborhood: what it imports and what imports it. |
 | `mollify init` | Write a starter `.mollifyrc.json`. |
 | `mollify mcp` | Start the MCP server for coding agents (stdio). |
 
@@ -50,6 +55,10 @@ mollify audit --format sarif > mollify.sarif
 # Preview safe fixes, then apply
 mollify fix
 mollify fix --apply
+
+# Understand a rule, or trace a module's dependencies
+mollify explain circular-dependency
+mollify trace app.services.billing
 ```
 
 ## Confidence tiers
