@@ -20,7 +20,7 @@ the verifier. **Never invent findings, and never hand-delete code on a guess.**
 If the `mollify` MCP server is connected (launched via `mollify mcp`), call its
 tools directly. Otherwise use the CLI below.
 
-## Commands (18)
+## Commands (21)
 Analysis engines (all take the global flags below):
 `mollify audit` (unified + `quality_score`), `mollify dead-code` (alias `check`),
 `mollify deps`, `mollify arch`, `mollify complexity` (alias `health`),
@@ -32,12 +32,16 @@ default; offline DB fallback).
 Actions / utilities:
 `mollify fix [--apply]` (remove `certain` + `auto_fixable` unused symbols and
 imports; dry-run unless `--apply`), `mollify explain [<rule>]`,
-`mollify trace <module>`, `mollify inspect <file>`,
+`mollify trace <module>`, `mollify inspect <file>`, `mollify metrics`
+(project-wide quantitative metrics), `mollify graph [--mermaid]` (module
+dependency graph; `--mermaid` emits a Mermaid diagram),
 `mollify list [entry-points|files|frameworks]`,
-`mollify watch [--interval-ms]` (CLI-only), `mollify init`, `mollify mcp`.
+`mollify watch [--interval-ms]` (CLI-only), `mollify init`, `mollify mcp`,
+`mollify lsp` (stdio Language Server with real-time diagnostics; CLI-only).
 
 Global flags (analysis commands): `--path <dir>` (default `.`),
-`--format human|json|sarif`, `--gate all|new-only`, `--base <ref>`,
+`--format human|json|sarif|github|junit` (`github` = GitHub Actions annotations,
+`junit` = JUnit XML), `--gate all|new-only`, `--base <ref>`,
 `--save-baseline <f>`, `--baseline <f>`, `--fail-on-regression`, `--brief`,
 `--min-confidence certain|likely|uncertain`. `--gate new-only` and `--format
 sarif` are fully implemented. Drop `--format json` for a human summary; add
@@ -50,6 +54,7 @@ The envelope has a discriminating top-level `kind` (`audit` / `dead-code` /
 `findings[]`. `audit` also has `quality_score` (0-100). `schema_version` is `0.1`.
 Switch on `kind`; iterate `findings[]`. Each finding:
 - `rule` — one of `unused-file`, `unused-export`, `unused-import`,
+  `unused-variable`, `unused-parameter`,
   `commented-code`, `unused-dependency`, `missing-dependency`,
   `circular-dependency`, `layer-violation`, `forbidden-import`,
   `independence-violation`, `high-complexity`, `duplication`, `untyped-function`,
@@ -88,11 +93,16 @@ for all commands and flags.
   fully implemented working features.
 
 ## MCP server tools
-`mollify mcp` exposes 14 tools (`watch` is CLI-only): `mollify_audit`,
+`mollify mcp` exposes 15 tools (`watch` and `lsp` are CLI-only): `mollify_audit`,
 `mollify_dead_code`, `mollify_deps`, `mollify_arch`, `mollify_complexity`,
 `mollify_dupes`, `mollify_types`, `mollify_security`, `mollify_coverage`,
 `mollify_supply_chain`, `mollify_explain`, `mollify_trace`, `mollify_inspect`,
-`mollify_list`. Params: `mollify_coverage` requires `coverage_file`;
-`mollify_trace` requires `module`; `mollify_inspect` requires `file`;
-`mollify_supply_chain` takes optional `advisory_db`; `mollify_list` takes optional
-`kind`; all others take optional `path` (default `.`).
+`mollify_list`, `mollify_metrics`. Params: `mollify_coverage` requires
+`coverage_file`; `mollify_trace` requires `module`; `mollify_inspect` requires
+`file`; `mollify_supply_chain` takes optional `advisory_db`; `mollify_list` takes
+optional `kind`; all others take optional `path` (default `.`).
+
+## LSP server
+`mollify lsp` runs a stdio Language Server (Content-Length framed JSON-RPC) that
+publishes real-time diagnostics on document open/save. Register it as the Python
+language server in any LSP-capable editor (command: `mollify lsp`).
