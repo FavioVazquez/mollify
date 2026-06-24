@@ -1,0 +1,18 @@
+{
+  "PostToolUse": [
+    {
+      "matcher": "^(edit|write|str_replace_editor)$",
+      "hooks": [
+        { "type": "command", "command": "bash scripts/mollify-report.sh", "timeout": 60 }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "matcher": "",
+      "hooks": [
+        { "type": "command", "command": "bash scripts/mollify-report.sh", "timeout": 90 }
+      ]
+    }
+  ]
+}
