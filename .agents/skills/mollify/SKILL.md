@@ -50,7 +50,7 @@ for all commands and flags.
 3. For any deletion, confirm before editing. To silence a known-good finding, add
    its action's `suppression_comment` on the relevant line instead of deleting code.
    (An `auto_fixable` flag marks where automated fixing is intended; `mollify fix`
-   is not yet implemented — apply changes manually after review.)
+   runs `mollify fix --apply` for certain unused symbols; apply other changes manually.)
 4. Re-run the audit afterward and confirm the fingerprint is gone.
 
 ## Honesty rules
@@ -59,4 +59,4 @@ for all commands and flags.
 - A `missing-dependency` may be a false positive for namespace packages or local
   shadowing; verify before adding to `pyproject.toml`.
 - Exit code 0 = no error-severity findings; 1 = error-severity findings or a
-  command error. `--gate new-only`, SARIF, and `fix` are not yet implemented.
+  command error. `--gate new-only`, `--format sarif`, and `mollify fix` are available.

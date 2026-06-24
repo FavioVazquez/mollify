@@ -53,7 +53,8 @@ See `references/cli-reference.md` for all commands/flags and
   confidence to `uncertain` — treat those as review-only.
 - A `missing-dependency` may be a false positive for namespace packages or local
   shadowing; verify before adding to `pyproject.toml`.
-- There is no `fix` command, no `--gate new-only`, and no SARIF output yet. Do
+- `mollify fix` removes only `certain` + `auto_fixable` unused symbols (dry-run
+  unless `--apply`). `--gate new-only` and `--format sarif` are available. Do
   not reference them as working features.
 
 ## Exit codes
