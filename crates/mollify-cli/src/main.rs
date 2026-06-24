@@ -35,6 +35,8 @@ enum Command {
     Complexity(Scope),
     /// Duplication / clone families.
     Dupes(Scope),
+    /// Type-annotation health (fully-untyped public functions).
+    Types(Scope),
     /// Apply safe auto-fixes (certain, auto-fixable unused symbols). Dry-run unless --apply.
     Fix(FixArgs),
     /// Scaffold a .mollifyrc and report detected layout.
@@ -127,6 +129,7 @@ fn main() {
             "complexity",
         ),
         Command::Dupes(s) => run_findings(&s, mollify_core::dupes_report, Report::Dupes, "dupes"),
+        Command::Types(s) => run_findings(&s, mollify_core::types_report, Report::Types, "types"),
         Command::Fix(a) => run_fix(&a),
         Command::Init(s) => run_init(&s),
         Command::Mcp => match mollify_mcp::run() {

@@ -61,7 +61,8 @@ pub struct Import {
     pub line: u32,
 }
 
-/// Per-function complexity metrics (cyclomatic + cognitive).
+/// Per-function complexity metrics (cyclomatic + cognitive) and type-annotation
+/// coverage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionComplexity {
     pub name: String,
@@ -70,6 +71,12 @@ pub struct FunctionComplexity {
     pub cyclomatic: u32,
     /// SonarSource-style cognitive complexity (nesting-weighted).
     pub cognitive: u32,
+    /// Parameters excluding `self`/`cls`.
+    pub params_total: u32,
+    /// Of those, how many carry a type annotation.
+    pub params_annotated: u32,
+    /// Whether the function has a `-> T` return annotation.
+    pub return_annotated: bool,
 }
 
 /// The parsed view of one Python module that the graph builds on.
@@ -465,6 +472,39 @@ fn count_cognitive(node: Node, nesting: u32) -> u32 {
     sum
 }
 
+/// Count (total, annotated) parameters of a function, excluding a leading
+/// `self`/`cls`.
+fn count_params(func: Node, bytes: &[u8]) -> (u32, u32) {
+    let Some(params) = func.child_by_field_name("parameters") else {
+        return (0, 0);
+    };
+    let mut total = 0;
+    let mut annotated = 0;
+    let mut first = true;
+    let mut c = params.walk();
+    for p in params.named_children(&mut c) {
+        let is_first = first;
+        first = false;
+        match p.kind() {
+            "identifier" => {
+                // Skip a leading conventional `self`/`cls`.
+                let name = node_text(p, bytes);
+                if is_first && (name == "self" || name == "cls") {
+                    continue;
+                }
+                total += 1;
+            }
+            "typed_parameter" | "typed_default_parameter" => {
+                total += 1;
+                annotated += 1;
+            }
+            "default_parameter" => total += 1,
+            _ => {}
+        }
+    }
+    (total, annotated.min(total))
+}
+
 fn collect_complexity(root: Node, bytes: &[u8], m: &mut ParsedModule) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
@@ -473,11 +513,15 @@ fn collect_complexity(root: Node, bytes: &[u8], m: &mut ParsedModule) {
                 node.child_by_field_name("name"),
                 node.child_by_field_name("body"),
             ) {
+                let (params_total, params_annotated) = count_params(node, bytes);
                 m.functions.push(FunctionComplexity {
                     name: node_text(name, bytes).to_string(),
                     line: node.start_position().row as u32 + 1,
                     cyclomatic: 1 + count_cyclo(body),
                     cognitive: count_cognitive(body, 0),
+                    params_total,
+                    params_annotated,
+                    return_annotated: node.child_by_field_name("return_type").is_some(),
                 });
             }
         }
@@ -554,6 +598,19 @@ mod tests {
     fn extracts_dunder_all() {
         let m = parse("__all__ = ['foo', 'bar']\n");
         assert_eq!(m.dunder_all, Some(vec!["foo".into(), "bar".into()]));
+    }
+
+    #[test]
+    fn counts_type_annotations() {
+        let m = parse("def f(a: int, b) -> int:\n    return a\n\nclass C:\n    def m(self, x: int):\n        return x\n");
+        let f = m.functions.iter().find(|f| f.name == "f").unwrap();
+        assert_eq!(f.params_total, 2);
+        assert_eq!(f.params_annotated, 1);
+        assert!(f.return_annotated);
+        let mm = m.functions.iter().find(|f| f.name == "m").unwrap();
+        assert_eq!(mm.params_total, 1, "self should be excluded");
+        assert_eq!(mm.params_annotated, 1);
+        assert!(!mm.return_annotated);
     }
 
     #[test]

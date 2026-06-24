@@ -65,6 +65,8 @@ pub enum Category {
     Complexity,
     Architecture,
     DependencyHygiene,
+    /// Type-annotation health (Python-specific; no fallow analog).
+    TypeHealth,
 }
 
 /// A source location, 1-based line/column, workspace-relative path.
@@ -134,6 +136,8 @@ pub enum Report {
     Complexity(FindingsReport),
     /// Duplication / clone families.
     Dupes(FindingsReport),
+    /// Type-annotation health.
+    Types(FindingsReport),
 }
 
 /// A report that is just a sorted list of findings plus a summary.

@@ -71,7 +71,13 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     audit returns kind=audit score=77). Wired as `mollify mcp`.
   - **This makes every platform's MCP registration functional** (one server, many front-ends).
   - ⬜ framework entry-point plugins, LSP, agent-skills repo packaging.
-- **Phase 4 — runtime/type intelligence:** ⬜
+- **Phase 4 — runtime/type intelligence:** 🟡 (type-health shipped; runtime/notebooks/security pending)
+  - ✅ **Type-health** (`typehealth.rs`, `mollify types`) — annotation-coverage engine: parser
+    captures per-function param/return annotation counts (excluding self/cls); flags
+    fully-untyped public functions (`untyped-function`, category `type-health`). A
+    Python-specific differentiator with no fallow analog. Folded into `audit`. 1 test.
+  - ⬜ runtime-coverage merge (coverage.py/sys.monitoring), notebooks (.ipynb), security/secrets,
+    supply-chain CVE join, LSP. Architecture is ready for these.
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
   - `.devin/rules/mollify.md` (glob `**/*.py`)
