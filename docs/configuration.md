@@ -29,10 +29,15 @@ Map of **rule id** or **category** → `error` | `warn` | `off`.
   agent hooks blocking.
 - `off` drops the finding entirely.
 
-Rule ids: `unused-file`, `unused-export`, `unused-dependency`,
-`missing-dependency`, `circular-dependency`, `layer-violation`,
-`high-complexity`, `duplication`, `cold-code`, `hotspot`, and the
-`type-health` / `security` rule ids.
+Rule ids: `unused-file`, `unused-export`, `unused-import`, `commented-code`,
+`unused-dependency`, `missing-dependency`, `circular-dependency`,
+`layer-violation`, `forbidden-import`, `independence-violation`,
+`high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`,
+`vulnerable-dependency`, the security rules (`dangerous-eval`,
+`subprocess-shell-true`, `sql-injection`, `unsafe-yaml-load`,
+`unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`,
+`weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`), and
+any custom policy ids. Run `mollify explain` for the full list.
 
 Categories: `dead-code`, `dependency-hygiene`, `circular-dependency`,
 `complexity`, `architecture`, `duplication`, `type-health`, `security`.
@@ -79,6 +84,21 @@ and its suppression comment.
 `forbid_import`/`forbid_call` match by prefix: `requests` matches `requests` and
 `requests.get`; `os.system` matches exactly. Policy findings surface under
 `mollify arch` and `mollify audit`.
+
+## `contracts` (module boundaries)
+
+Declarative import contracts (import-linter / tach style), checked over the
+import graph. `forbidden` bans a module (by dotted prefix) from importing
+others; `independent` declares a set of modules that must not import one another.
+
+```json
+"contracts": {
+  "forbidden": [ { "from": "app.domain", "to": ["app.web", "requests"] } ],
+  "independent": [ ["features.billing", "features.users"] ]
+}
+```
+
+These emit `forbidden-import` / `independence-violation` (Architecture, certain).
 
 ## Advisory database (supply-chain)
 

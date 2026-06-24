@@ -23,7 +23,7 @@ evidence with a stable fingerprint, a confidence tier, and a human-readable reas
 Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 > **Project status:** early but real. Phases 0–4 of the [plan](PLAN.md) are
-> substantially implemented, tested (68+ tests), and dogfooded; CI is green.
+> substantially implemented, tested (74+ tests), and dogfooded; CI is green.
 > See [`docs/STATUS.md`](docs/STATUS.md) for exactly what's done vs pending and
 > [`docs/adr/`](docs/adr) for design decisions. Honest about its edges — see
 > *Known limitations* below.
@@ -47,13 +47,13 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 | Area | Command | Rules |
 |---|---|---|
-| **Dead code** | `mollify dead-code` | `unused-file`, `unused-export`, `unused-import` |
-| **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency` |
-| **Architecture** | `mollify arch` | `circular-dependency`, `layer-violation`, custom policies |
+| **Dead code** | `mollify dead-code` | `unused-file`, `unused-export`, `unused-import`, `commented-code` |
+| **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency` (pyproject + requirements/uv/pdm) |
+| **Architecture** | `mollify arch` | `circular-dependency`, `layer-violation`, `forbidden-import`, `independence-violation`, custom policies |
 | **Complexity & hotspots** | `mollify complexity` | `high-complexity`, `hotspot` (churn × complexity) |
 | **Duplication** | `mollify dupes` | `duplication` (clone families) |
 | **Type health** | `mollify types` | `untyped-function` |
-| **Security** | `mollify security` | `dangerous-eval`, `subprocess-shell-true`, `unsafe-yaml-load`, `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret` |
+| **Security** | `mollify security` | eval/exec, shell, `sql-injection`, weak hash/cipher, insecure-random, unsafe deserialization, TLS, secrets, missing-timeout — each with a CWE id |
 | **Cold paths** | `mollify coverage --coverage-file` | `cold-code` (reachable but never executed) |
 | **Supply chain** | `mollify supply-chain` | `vulnerable-dependency` (pinned versions vs a local CVE/advisory DB) |
 | **Everything + score** | `mollify audit` | all of the above + a 0–100 quality score |
