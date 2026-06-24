@@ -69,6 +69,10 @@ pub struct ParsedModule {
     /// Every identifier *used* anywhere in the module (call targets, attribute
     /// bases, names in expressions). Coarse but sufficient for reachability v1.
     pub used_names: Vec<String>,
+    /// Occurrence count per identifier across the whole module (includes the
+    /// definition site). `count(name) > defs(name)` ⇒ the name is referenced,
+    /// not just defined — used by the symbol-usage analysis.
+    pub name_counts: std::collections::HashMap<String, u32>,
     /// True if the module contains a dynamic-dispatch sink (`getattr`, `eval`,
     /// `exec`, `__import__`, `importlib`) that should downgrade confidence.
     pub has_dynamic_sink: bool,
@@ -111,6 +115,7 @@ impl PyParser {
             imports: Vec::new(),
             dunder_all: None,
             used_names: Vec::new(),
+            name_counts: std::collections::HashMap::new(),
             has_dynamic_sink: false,
             had_errors: root.has_error(),
         };
@@ -346,7 +351,11 @@ fn collect_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         match node.kind() {
-            "identifier" => m.used_names.push(node_text(node, bytes).to_string()),
+            "identifier" => {
+                let name = node_text(node, bytes).to_string();
+                *m.name_counts.entry(name.clone()).or_insert(0) += 1;
+                m.used_names.push(name);
+            }
             "call" => {
                 if let Some(func) = node.child_by_field_name("function") {
                     let t = node_text(func, bytes);
