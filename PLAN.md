@@ -1,5 +1,7 @@
 # Mollify — Build Plan: Rust-native Codebase Intelligence for Python
 
+> **Grounded in fallow's real source** (`fallow-rs/fallow` v2.102.0, full tree read, not just docs). Surface-area and invariants below reflect that verification — see `RESEARCH.md` for the per-claim corrections (notably: fallow ships ~118 plugins not 122; ~29 CLI subcommands with `check` canonical + `dead-code` as alias; 11 output formats; 25 MCP tools; six ADRs; and graph construction is **not yet incremental** even in fallow).
+
 ## 1. Vision & Positioning
 
 **Mollify is the codebase truth layer for Python coding agents.** It is a Rust-native, sub-second, deterministic codebase-intelligence engine that gives both humans and AI agents structured, inspectable repo truth — dead code, duplication, circular dependencies, complexity hotspots, architecture boundaries, and package hygiene — instead of forcing them to reconstruct structure from `grep`. The core thesis, ported directly from fallow: **no AI invents findings; every result is deterministic, reachability-backed evidence with a stable fingerprint, a confidence level, and a reason.** This is the wedge against both the LLM-judge tools (Sourcery, Qodo — non-deterministic, token-hungry) and the per-file/name-table Python incumbents (pyflakes/ruff are per-file; vulture/deadcode are name-table, not reachability). Two crisp differentiators define us: **(a) Python has no fallow** — fallow is TypeScript/JavaScript-only and will not cross over; **(b) a genuinely Rust core** — the closest Python competitor, Skylos, is Python + tree-sitter + optional LLM, so a real Rust engine (the Ruff playbook, ~100x over Flake8) is a measurable, hard-to-copy moat.
@@ -29,7 +31,7 @@ Each row maps a fallow capability → Mollify's Python implementation → the Py
 | Complexity hotspots | Cyclomatic (McCabe) + cognitive (SonarSource model) per function/file | **Churn × complexity hotspot ranking** (git change-frequency × complexity/MI) — empty quadrant in Python; Maintainability Index | v2 |
 | Architecture boundaries (layered/hexagonal/feature-sliced/bulletproof presets) | Named presets compiled to layer/forbidden/independence/cycle contracts over the import graph | Symbol-level public-interface enforcement (which symbols may cross), like tach; named opinionated presets (no Python equivalent exists) | v2 |
 | Dependency hygiene unified with the rest | Single pass folds boundary + dep-hygiene + cycles into one report | Monorepo first-party-vs-external disambiguation via unified workspace model | v2 |
-| Framework plugins (122, pure data) | `Plugin` trait: static entry-point globs + convention-used symbols + decorator registries + dynamic AST config resolution | Django/FastAPI/Flask/Celery/pytest/SQLAlchemy/Pydantic/click/typer + `[project.scripts]`/`entry_points` (richer, more standardized than JS) | v1 (core set) / v2 (breadth) |
+| Framework plugins (~118 built-in; data + dynamic resolution) | `Plugin` trait: static entry-point globs + convention-used symbols + decorator registries + dynamic AST config resolution | Django/FastAPI/Flask/Celery/pytest/SQLAlchemy/Pydantic/click/typer + `[project.scripts]`/`entry_points` (richer, more standardized than JS) | v1 (core set) / v2 (breadth) |
 | Caching + git-diff incrementalism | Persistent cache (bitcode), git changed-files, base worktree, introduced-vs-inherited attribution, NewOnly PR gate | Same model, ported directly | v1 (cache) / v2 (worktree attribution) |
 | Parallelism | rayon, eager module-level incrementalism (pyrefly model) | — | v1 |
 | CLI / JSON / SARIF / MCP / LSP / Agent Skills | Full surface; typed JSON contract crate | `mollify-skills` repo; `auto_fixable` actions array | v1 (CLI/JSON/SARIF) / v2 (MCP/LSP/skills) |
@@ -42,6 +44,15 @@ Each row maps a fallow capability → Mollify's Python implementation → the Py
 ---
 
 ## 3. Architecture
+
+### 3.0 Non-negotiable invariants (ported from fallow's ADRs/docs)
+
+These are load-bearing — verified in fallow's `CLAUDE.md`/`docs/`, and Mollify must keep them:
+- **Determinism.** Identical input → byte-identical output across runs/platforms/CI. No AI in the analyzer; any randomness seeded. Use deterministic-iteration maps (Rust `FxHashMap`, fallow ADR-003) and **path-sorted stable FileIds** (ADR-004). Rust gives us this for free where Python tools struggle.
+- **Candidate-producer vs. verifier separation.** Mollify emits *evidence* (candidates, traces, metrics, confidence) and never decides the irreversible verdict. `fix` previews by default; auto-apply is explicit and gated to `Certain` findings. Security/dead-code surface candidates; the agent/human owns judgement.
+- **Versioned output contract.** Every command emits a JSON envelope with a discriminating top-level `kind`; ship a first-class JSON Schema. Clients depend on the JSON shape, not Rust structs — the `types` crate's serde output *is* the public API.
+- **Five co-equal analysis areas.** Unused code · circular deps · duplication · complexity hotspots · boundary violations — sharing one discovery/parse pass. Lead with dead-code for the MVP, but architect all five from day one. Never market Mollify as "just a dead-code tool."
+- **Evidence-preserving findings.** Every issue carries its trace (import chain, reachability proof, reference counts) so it can be audited.
 
 ### 3.1 Workspace layout (Cargo workspace, `crates/*`, shared version)
 
@@ -125,7 +136,7 @@ Persistent cache under `.mollify/cache/`, encoded with **bitcode**, extraction c
 
 ### 3.10 Parallelism
 
-**rayon** throughout: parallel cache-aware parsing, per-module binding/lowering, per-file complexity, parallel suffix-array tokenization. Eager module-level incrementalism (re-process changed module + dependents).
+**rayon** throughout: parallel cache-aware parsing, per-module binding/lowering, per-file complexity, parallel suffix-array tokenization. Eager module-level incrementalism (re-process changed module + dependents). **Realistic scope note:** even fallow's graph construction is single-threaded and not yet incremental (its `watch` rebuilds the full graph; only extraction + audit base-snapshots are cached). So Mollify v1 targets **full-project speed** (parse/extract in parallel, fast single-pass graph), with audit base-snapshot caching in v2 and true incremental graph (the Salsa option) deferred to the LSP/watch phase — exactly fallow's own trajectory.
 
 ---
 
@@ -179,11 +190,13 @@ Mirrors fallow. Binary: `mollify`.
 | `mollify init` | Scaffold config, detect frameworks |
 | `mollify license` | Activate/refresh paid runtime |
 
+> **Naming note (from fallow's real CLI):** fallow's canonical command is `check` with `dead-code` as an alias, and `audit` with `review` as an alias; it exposes ~29 subcommands total (incl. `flags`, `explain`, `schema`, `list`, `workspaces`, `migrate`, `telemetry`, `decision-surface`). Mollify keeps the clearer names as canonical (`dead-code`, `audit`) and adds tooling subcommands (`list`, `explain`, `*-schema`, `migrate` to import vulture/deptry/jscpd config) as we grow. Scoping flags to port: `--changed-since`/`--base`, `--diff-file`/`--diff-stdin`, **`--churn-file`** (non-git VCS history for churn×complexity on hg/perforce), `--gate new-only|all`, `--group-by owner|directory`.
+
 **Config file `.mollifyrc`** (precedence: `.mollifyrc.json` > `.mollifyrc.jsonc` > `.mollifyrc.toml` > `pyproject.toml [tool.mollify]`). Declares: source roots, entry-point selectors, framework preset list, architecture preset, rule severities (`error` CI-fail / `warn` exit 0 / `off`), duplication thresholds, ignore/allowlists, baseline paths, cache dir.
 
-**Output formats** (in `cli/report/`): **human** (default), **JSON** (typed contract from `types`), **SARIF** (CI/code-scanning), plus compact, markdown, CodeClimate. Severity model and eight finding categories mirror fallow. **Suppression:** inline `# mollify-ignore-next-line <rule>`, `# mollify-ignore-file`, docstring/comment markers (`@public`/`@internal`/`@expected-unused`), and declarative rule packs (`banned-call`/`banned-import`).
+**Output formats** (in `cli/report/`, mirroring fallow's 11): **human** (default), **JSON** (typed contract from `types`, with a discriminating top-level `kind`), **SARIF** (CI/code-scanning), compact, markdown, CodeClimate (gitlab-code-quality), plus the CI envelope formats **pr-comment-github / pr-comment-gitlab / review-github / review-gitlab** and **badge**. Severity model (`error`/`warn`/`off`) and the five co-equal analysis areas mirror fallow. **Suppression:** inline `# mollify-ignore-next-line <kind>`, `# mollify-ignore-file [kinds] -- <reason>`, docstring/comment markers (`@public`/`@internal`/`@expected-unused`), scoped policy tokens `<pack>/<rule-id>`, and declarative rule packs (`banned-call`/`banned-import`).
 
-**MCP server** (stdio, `mcp` crate): tools `inspect_target` (combined trace + dead-code + dupes + complexity bundle), `security_candidates` (ranked, no new passes). Every JSON finding carries an `actions` array with an `auto_fixable` flag so the agent decides whether to call a fix tool. Typed contract version-pinned to the CLI.
+**MCP server** (stdio, `mcp` crate): fallow exposes **25 tools**, and Mollify mirrors the shape — analysis (`analyze`, `check_changed`, `audit`, `dead_code`, `find_dupes`, `check_health`), tracing (`trace_export`/`trace_file`/`trace_dependency`/`trace_clone`), the bundled `inspect_target` (file-scoped trace + dupes + complexity + candidates + impact closure), `fix_preview`/`fix_apply`, `project_info`, `decision_surface`, `explain`, `list_boundaries`, `security_candidates`, and the read-only `code_execute` sandbox; coverage-gated tools (`hot_paths`, `blast_radius`, `cleanup_candidates`) arrive with the runtime layer. Every JSON finding carries an `actions` array with an `auto_fixable` flag so the agent decides whether to call a fix tool. Typed contract version-pinned to the CLI.
 
 **Agent skills:** a separate version-matched **`mollify-skills`** repo (distributed via `@mollify/*` npm + bundled), teaching agents which commands/flags to use and how to read output — supporting Claude Code, Cursor, Codex, Gemini CLI. This is the parity-plus move vs Skylos (no published skills repo, no version-pinned typed import).
 
