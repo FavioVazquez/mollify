@@ -18,9 +18,9 @@ the verifier. **Never invent findings, and never hand-delete code on a guess.**
 
 ## Prefer the MCP server
 If the `mollify` MCP server is connected (launched via `mollify mcp`), call its
-14 tools directly (see "MCP server tools" below). Otherwise use the CLI.
+15 tools directly (see "MCP server tools" below). Otherwise use the CLI.
 
-## Commands (18)
+## Commands (21)
 Analysis engines (all take the global flags below):
 `mollify audit` (unified + `quality_score`), `mollify dead-code` (alias `check`),
 `mollify deps`, `mollify arch`, `mollify complexity` (alias `health`),
@@ -32,12 +32,16 @@ default; offline DB fallback).
 Actions / utilities:
 `mollify fix [--apply]` (remove `certain` + `auto_fixable` unused symbols and
 imports; dry-run unless `--apply`), `mollify explain [<rule>]`,
-`mollify trace <module>`, `mollify inspect <file>`,
+`mollify trace <module>`, `mollify inspect <file>`, `mollify metrics`
+(project-wide quantitative metrics), `mollify graph [--mermaid]` (module
+dependency graph; `--mermaid` emits a Mermaid diagram),
 `mollify list [entry-points|files|frameworks]`,
-`mollify watch [--interval-ms]` (CLI-only), `mollify init`, `mollify mcp`.
+`mollify watch [--interval-ms]` (CLI-only), `mollify init`, `mollify mcp`,
+`mollify lsp` (stdio Language Server with real-time diagnostics; CLI-only).
 
 Global flags (analysis commands): `--path <dir>` (default `.`),
-`--format human|json|sarif`, `--gate all|new-only`, `--base <ref>`,
+`--format human|json|sarif|github|junit` (`github` = GitHub Actions annotations,
+`junit` = JUnit XML), `--gate all|new-only`, `--base <ref>`,
 `--save-baseline <f>`, `--baseline <f>`, `--fail-on-regression`, `--brief`,
 `--min-confidence certain|likely|uncertain`. `--gate new-only` and `--format
 sarif` are fully implemented. Drop `--format json` for a human summary; add
@@ -48,6 +52,7 @@ The envelope has a discriminating top-level `kind` (`audit` / `dead-code` /
 `deps`), a `summary`, and `findings[]`. `audit` also has `quality_score` (0–100).
 Each finding:
 - `rule` — one of `unused-file`, `unused-export`, `unused-import`,
+  `unused-variable`, `unused-parameter`,
   `commented-code`, `unused-dependency`, `missing-dependency`,
   `circular-dependency`, `layer-violation`, `forbidden-import`,
   `independence-violation`, `high-complexity`, `duplication`, `untyped-function`,
