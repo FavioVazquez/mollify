@@ -39,7 +39,7 @@ Rule ids: `unused-file`, `unused-export`, `unused-import`, `unused-variable`,
 `subprocess-shell-true`, `sql-injection`, `unsafe-yaml-load`,
 `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`,
 `weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`), and
-any custom policy ids. Run `mollify explain` for the full list.
+`policy-violation` and any custom policy ids. Run `mollify explain` for the full list.
 
 Categories: `dead-code`, `dependency-hygiene`, `circular-dependency`,
 `complexity`, `architecture`, `duplication`, `type-health`, `security`.

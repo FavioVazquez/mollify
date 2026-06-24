@@ -60,7 +60,7 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 `dangerous-eval`, `subprocess-shell-true`, `sql-injection`, `unsafe-yaml-load`,
 `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`,
 `weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`,
-`vulnerable-dependency`, plus any custom policy ids from `.mollifyrc.json`
+`vulnerable-dependency`, `policy-violation` (+ custom policy ids) from `.mollifyrc.json`
 `policies`.
 
 ## MCP tools (`mollify mcp`)
