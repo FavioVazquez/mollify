@@ -18,7 +18,9 @@ else
   exit 0
 fi
 
-REPORT="$("$BIN" audit --format json 2>/dev/null || true)"
+# Prefer newly-introduced findings (gate); falls back to all if not a git repo.
+REPORT="$("$BIN" audit --gate new-only --format json 2>/dev/null || true)"
+[ -z "$REPORT" ] && REPORT="$("$BIN" audit --format json 2>/dev/null || true)"
 [ -z "$REPORT" ] && exit 0
 
 if command -v jq >/dev/null 2>&1; then

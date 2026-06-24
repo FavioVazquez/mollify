@@ -49,12 +49,50 @@ struct Scope {
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Human)]
     format: Format,
+    /// Attribution gate: `all` (default) or `new-only` (only findings in changed files).
+    #[arg(long, value_enum, default_value_t = Gate::All)]
+    gate: Gate,
+    /// Base git ref to diff against for `--gate new-only` (e.g. origin/main).
+    #[arg(long)]
+    base: Option<String>,
 }
 
 #[derive(Copy, Clone, ValueEnum)]
 enum Format {
     Human,
     Json,
+    Sarif,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum Gate {
+    All,
+    #[value(name = "new-only")]
+    NewOnly,
+}
+
+/// Apply introduced/inherited attribution from git, and (for `new-only`) filter
+/// to introduced findings. Returns nothing; mutates `findings` in place.
+fn apply_gate(scope: &Scope, findings: &mut Vec<mollify_types::Finding>) {
+    use mollify_types::Attribution;
+    if scope.gate == Gate::All && scope.base.is_none() {
+        return; // no attribution requested
+    }
+    let Some(changed) = mollify_core::git::changed_files(&scope.path, scope.base.as_deref()) else {
+        eprintln!("mollify: --gate requested but this isn't a git repo; reporting all findings.");
+        return;
+    };
+    for f in findings.iter_mut() {
+        let introduced = mollify_core::git::path_is_changed(&scope.path, &f.location.path, &changed);
+        f.attribution = Some(if introduced {
+            Attribution::Introduced
+        } else {
+            Attribution::Inherited
+        });
+    }
+    if scope.gate == Gate::NewOnly {
+        findings.retain(|f| f.attribution == Some(Attribution::Introduced));
+    }
 }
 
 fn main() {
@@ -83,12 +121,16 @@ fn main() {
 }
 
 fn run_audit(s: &Scope) -> i32 {
-    let report = mollify_core::audit_report(&s.path);
+    let mut report = mollify_core::audit_report(&s.path);
+    apply_gate(s, &mut report.findings);
+    report.summary = mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
+    let errors = report.summary.errors;
     match s.format {
-        Format::Json => {
-            let env = Report::Audit(report.clone());
-            println!("{}", serde_json::to_string_pretty(&env).unwrap());
-        }
+        Format::Json => println!("{}", serde_json::to_string_pretty(&Report::Audit(report)).unwrap()),
+        Format::Sarif => println!(
+            "{}",
+            serde_json::to_string_pretty(&mollify_core::sarif::to_sarif(&report.findings, env!("CARGO_PKG_VERSION"))).unwrap()
+        ),
         Format::Human => {
             println!("Mollify audit — {}", s.path);
             println!("Quality score: {}/100", report.quality_score);
@@ -96,7 +138,7 @@ fn run_audit(s: &Scope) -> i32 {
             print_findings(&report.findings);
         }
     }
-    exit_code(report.summary.errors)
+    exit_code(errors)
 }
 
 fn run_findings(
@@ -105,12 +147,16 @@ fn run_findings(
     wrap: fn(mollify_types::FindingsReport) -> Report,
     label: &str,
 ) -> i32 {
-    let report = f(&s.path);
+    let mut report = f(&s.path);
+    apply_gate(s, &mut report.findings);
+    report.summary = mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
     let errors = report.summary.errors;
     match s.format {
-        Format::Json => {
-            println!("{}", serde_json::to_string_pretty(&wrap(report)).unwrap());
-        }
+        Format::Json => println!("{}", serde_json::to_string_pretty(&wrap(report)).unwrap()),
+        Format::Sarif => println!(
+            "{}",
+            serde_json::to_string_pretty(&mollify_core::sarif::to_sarif(&report.findings, env!("CARGO_PKG_VERSION"))).unwrap()
+        ),
         Format::Human => {
             println!("Mollify {label} — {}", s.path);
             print_summary(&report.summary);
