@@ -2,7 +2,7 @@
   "hooks": {
     "post_write_code": [
       {
-        "command": "bash scripts/mollify-report.sh",
+        "command": "bash /home/user/mollify/scripts/mollify-report.sh",
         "show_output": true
       }
     ]

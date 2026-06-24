@@ -1,0 +1,12 @@
+description = "Evidence bundle for one file: its findings + import neighborhood"
+prompt = """
+Inspect a single file with Mollify: its findings plus its import neighborhood.
+Pass the file path as the argument (e.g. app/services/billing.py).
+
+Here is the inspection:
+!{mollify inspect {{args}}}
+
+Summarize the file's findings (rule, confidence, reason, fingerprint, location)
+and its import neighborhood (what it imports and what imports it). Do NOT modify
+the file; present findings and let the user decide on any action.
+"""

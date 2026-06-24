@@ -1,0 +1,16 @@
+description = "Preview and (on approval) apply safe automated fixes"
+prompt = """
+You are using Mollify's auto-fixer on this repository. Mollify only auto-fixes
+`certain` + `auto_fixable` findings (unused symbols and unused imports).
+
+Here is the dry-run preview (no changes applied):
+!{mollify fix {{args}}}
+
+1. Present the proposed changes — one line per finding: `fingerprint`,
+   file:line, the action description. WAIT for explicit user approval.
+2. On approval, run `mollify fix --apply` to apply the changes.
+3. Re-run `mollify audit --format json` to confirm fingerprints are gone and no
+   new findings appeared, then run the test suite.
+4. `mollify fix` never touches likely/uncertain findings — handle those manually
+   or via the finding's `suppression_comment`.
+"""

@@ -3,7 +3,7 @@
     {
       "matcher": "^(edit|write|str_replace_editor)$",
       "hooks": [
-        { "type": "command", "command": "bash scripts/mollify-report.sh", "timeout": 60 }
+        { "type": "command", "command": "bash /home/user/mollify/scripts/mollify-report.sh", "timeout": 60 }
       ]
     }
   ],
@@ -11,7 +11,7 @@
     {
       "matcher": "",
       "hooks": [
-        { "type": "command", "command": "bash scripts/mollify-report.sh", "timeout": 90 }
+        { "type": "command", "command": "bash /home/user/mollify/scripts/mollify-report.sh", "timeout": 90 }
       ]
     }
   ]

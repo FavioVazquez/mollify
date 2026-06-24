@@ -16,20 +16,48 @@ Mollify is a **deterministic candidate-producer**: it emits *evidence* — every
 finding has a stable `fingerprint`, a `confidence` tier, and a `reason`. You are
 the verifier. **Never invent findings, and never hand-delete code on a guess.**
 
-## Running an audit
-1. Full report:        `mollify audit --format json`
-2. Dead code only:     `mollify dead-code --format json`
-3. Dependency hygiene: `mollify deps --format json`
+## Prefer the MCP server
+If the `mollify` MCP server is connected (launched via `mollify mcp`), call its
+14 tools directly (see "MCP server tools" below). Otherwise use the CLI.
 
-(Add `--path <dir>` to target a subproject. Drop `--format json` for a readable
-summary.)
+## Commands (18)
+Analysis engines (all take the global flags below):
+`mollify audit` (unified + `quality_score`), `mollify dead-code` (alias `check`),
+`mollify deps`, `mollify arch`, `mollify complexity` (alias `health`),
+`mollify dupes`, `mollify types`, `mollify security`,
+`mollify coverage --coverage-file <f>`,
+`mollify supply-chain [--offline] [--refresh] [--advisory-db <f>]` (live OSV by
+default; offline DB fallback).
+
+Actions / utilities:
+`mollify fix [--apply]` (remove `certain` + `auto_fixable` unused symbols and
+imports; dry-run unless `--apply`), `mollify explain [<rule>]`,
+`mollify trace <module>`, `mollify inspect <file>`,
+`mollify list [entry-points|files|frameworks]`,
+`mollify watch [--interval-ms]` (CLI-only), `mollify init`, `mollify mcp`.
+
+Global flags (analysis commands): `--path <dir>` (default `.`),
+`--format human|json|sarif`, `--gate all|new-only`, `--base <ref>`,
+`--save-baseline <f>`, `--baseline <f>`, `--fail-on-regression`, `--brief`,
+`--min-confidence certain|likely|uncertain`. `--gate new-only` and `--format
+sarif` are fully implemented. Drop `--format json` for a human summary; add
+`--path <dir>` to target a subproject. See `references/cli-reference.md`.
 
 ## Reading the JSON (the contract)
 The envelope has a discriminating top-level `kind` (`audit` / `dead-code` /
 `deps`), a `summary`, and `findings[]`. `audit` also has `quality_score` (0–100).
 Each finding:
-- `rule` — e.g. `unused-export`, `unused-file`, `unused-dependency`, `missing-dependency`
-- `category` — `dead-code` | `dependency-hygiene` | … 
+- `rule` — one of `unused-file`, `unused-export`, `unused-import`,
+  `commented-code`, `unused-dependency`, `missing-dependency`,
+  `circular-dependency`, `layer-violation`, `forbidden-import`,
+  `independence-violation`, `high-complexity`, `duplication`, `untyped-function`,
+  `cold-code`, `hotspot`, `dangerous-eval`, `subprocess-shell-true`,
+  `sql-injection`, `unsafe-yaml-load`, `unsafe-deserialization`,
+  `tls-verify-disabled`, `hardcoded-secret`, `weak-hash`, `weak-cipher`,
+  `insecure-random`, `request-without-timeout`, `vulnerable-dependency`, plus
+  custom policy ids
+- `category` — `dead-code` | `dependency-hygiene` | `circular-dependency` |
+  `complexity` | `architecture` | `duplication` | `type-health` | `security`
 - `confidence` — `certain` | `likely` | `uncertain`
 - `severity` — `error` | `warn` | `off`
 - `reason`, `location {path, line, end_line}`, `fingerprint`
@@ -52,3 +80,15 @@ for all commands.
   confidence to `uncertain` — treat those as review-only.
 - A `missing-dependency` may be a false positive for namespace packages or local
   shadowing; verify before adding to `pyproject.toml`.
+- `--gate new-only`, `--format sarif`, and `mollify fix` are all fully implemented
+  working features.
+
+## MCP server tools
+`mollify mcp` exposes 14 tools (`watch` is CLI-only): `mollify_audit`,
+`mollify_dead_code`, `mollify_deps`, `mollify_arch`, `mollify_complexity`,
+`mollify_dupes`, `mollify_types`, `mollify_security`, `mollify_coverage`,
+`mollify_supply_chain`, `mollify_explain`, `mollify_trace`, `mollify_inspect`,
+`mollify_list`. Params: `mollify_coverage` requires `coverage_file`;
+`mollify_trace` requires `module`; `mollify_inspect` requires `file`;
+`mollify_supply_chain` takes optional `advisory_db`; `mollify_list` takes optional
+`kind`; all others take optional `path` (default `.`).

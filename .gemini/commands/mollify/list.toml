@@ -1,0 +1,12 @@
+description = "Report project topology (entry-points | files | frameworks)"
+prompt = """
+List project topology with Mollify. Pass an optional kind argument:
+entry-points, files, or frameworks (default lists all).
+
+Here is the topology:
+!{mollify list {{args}}}
+
+Summarize the requested topology: entry points (reachability roots), analyzed
+files, and/or detected frameworks. This is read-only context — use it to
+understand the project before running deeper analysis commands.
+"""

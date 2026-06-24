@@ -1,0 +1,19 @@
+description = "Analyze architecture: circular deps, layer/boundary/policy violations"
+prompt = """
+You are reviewing this repository with Mollify, a deterministic Python
+code-intelligence engine. Mollify emits evidence, not decisions.
+
+Here is the current architecture output:
+!{mollify arch --format json {{args}}}
+
+Using ONLY this output (do not grep, do not guess, do not invent findings):
+
+1. Group findings by `rule` (`circular-dependency`, `layer-violation`,
+   `forbidden-import`, `independence-violation`) and by `confidence`, with counts.
+2. List each finding with `location.path:location.line`, its `reason`, and the
+   `fingerprint`. For circular dependencies, describe the cycle.
+3. Layer and policy rules come from `.mollifyrc.json` (`architecture` and
+   `policies`).
+4. Propose a remediation plan ordered by severity. Do NOT modify files without
+   explicit user confirmation.
+"""

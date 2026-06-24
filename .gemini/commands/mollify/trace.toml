@@ -1,0 +1,12 @@
+description = "Show a module's import neighborhood (imports and importers)"
+prompt = """
+Trace a module's import neighborhood with Mollify: what it imports and what
+imports it. Pass the module as the argument (e.g. app.services.billing).
+
+Here is the trace:
+!{mollify trace {{args}}}
+
+Summarize the outgoing imports, the incoming importers, and any cycle the module
+participates in. Use this to verify reachability before treating a dead-code
+finding as safe to delete. Reachability is static; dynamic imports may not appear.
+"""

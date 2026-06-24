@@ -1,0 +1,16 @@
+description = "Check type-annotation health (fully-untyped public functions)"
+prompt = """
+You are reviewing this repository with Mollify, a deterministic Python
+code-intelligence engine. Mollify emits evidence, not decisions.
+
+Here is the current type-health output:
+!{mollify types --format json {{args}}}
+
+Using ONLY this output (do not grep, do not guess, do not invent findings):
+
+1. Group findings by `confidence`, with counts. The `rule` is `untyped-function`.
+2. List each fully-untyped public function with `location.path:location.line`,
+   its `reason`, and the `fingerprint`.
+3. Propose where to add annotations, ordered by impact. Do NOT modify files
+   without explicit user confirmation.
+"""

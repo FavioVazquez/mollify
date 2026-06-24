@@ -1,0 +1,23 @@
+description = "Find dead code (unused files/exports/imports) and summarize prioritized candidates"
+prompt = """
+You are reviewing this repository with Mollify, a deterministic Python
+code-intelligence engine. Mollify emits evidence, not decisions — every finding
+has a stable fingerprint, a confidence tier, and a human-readable reason.
+
+Here is the current dead-code output:
+!{mollify dead-code --format json {{args}}}
+
+Using ONLY this output (do not grep, do not guess, do not invent findings):
+
+1. Group findings by `rule` (`unused-file`, `unused-export`, `unused-import`,
+   `commented-code`) and by `confidence` (certain/likely/uncertain), with counts.
+2. List every `confidence: certain` finding with `location.path:location.line`,
+   its `reason`, the `fingerprint`, and whether an action is `auto_fixable: true`.
+3. Before recommending deletion, verify reachability with `mollify trace <module>`
+   or `mollify inspect <file>`. Reachability is static; dynamic imports
+   (`getattr`/`importlib`) downgrade confidence to `uncertain` — review-only.
+4. Propose a fix plan ordered by confidence/severity. `mollify fix --apply`
+   auto-removes certain unused symbols and imports; for known-good cases use the
+   finding's `suppression_comment` instead of deleting. Do NOT modify files
+   without explicit user confirmation.
+"""
