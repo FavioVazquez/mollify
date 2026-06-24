@@ -41,11 +41,26 @@
 Severities are `warn` by default; raise rules/categories to `error` in `.mollifyrc.json` to gate CI.
 
 ## Rules emitted
-`unused-file`, `unused-export`, `unused-import`, `unused-dependency`, `missing-dependency`,
-`circular-dependency`, `layer-violation`, custom policy ids, `high-complexity`,
-`duplication`, `untyped-function`, `dangerous-eval`, `subprocess-shell-true`,
-`unsafe-yaml-load`, `unsafe-deserialization`, `tls-verify-disabled`,
-`hardcoded-secret`, `cold-code`, `hotspot`, `vulnerable-dependency`.
+`unused-file`, `unused-export`, `unused-import`, `commented-code`,
+`unused-dependency`, `missing-dependency`, `circular-dependency`,
+`layer-violation`, `forbidden-import`, `independence-violation`,
+`high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`,
+`dangerous-eval`, `subprocess-shell-true`, `sql-injection`, `unsafe-yaml-load`,
+`unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`,
+`weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`,
+`vulnerable-dependency`, plus any custom policy ids from `.mollifyrc.json`
+`policies`.
+
+## MCP tools (`mollify mcp`)
+The stdio MCP server exposes 14 tools (`watch` is CLI-only):
+`mollify_audit`, `mollify_dead_code`, `mollify_deps`, `mollify_arch`,
+`mollify_complexity`, `mollify_dupes`, `mollify_types`, `mollify_security`,
+`mollify_coverage`, `mollify_supply_chain`, `mollify_explain`, `mollify_trace`,
+`mollify_inspect`, `mollify_list`.
+Params: `mollify_coverage` requires `coverage_file`; `mollify_trace` requires
+`module`; `mollify_inspect` requires `file`; `mollify_supply_chain` takes optional
+`advisory_db`; `mollify_list` takes optional `kind`; all others take optional
+`path` (default `.`).
 
 ## `.mollifyrc.json`
 ```json
@@ -66,5 +81,5 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 See `references/configuration.md` semantics in `docs/configuration.md` for `architecture` and `policies`.
 
 ## Not yet implemented (do not rely on)
-Line-level gate attribution (current gate is file-level), an LSP server, and a
-supply-chain CVE join. See docs/STATUS.md.
+Line-level gate attribution (current gate is file-level) and an LSP server.
+See docs/STATUS.md.
