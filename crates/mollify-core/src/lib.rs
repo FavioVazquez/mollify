@@ -13,10 +13,12 @@ use mollify_types::{
 };
 
 pub mod arch;
+pub mod config;
 pub mod complexity;
 pub mod deadcode;
 pub mod deps;
 pub mod dupes;
+pub mod fix;
 pub mod fingerprint;
 pub mod git;
 pub mod sarif;
@@ -29,70 +31,61 @@ pub fn build_graph(root: &Utf8Path) -> ModuleGraph {
     ModuleGraph::build(root, &files)
 }
 
-/// `mollify dead-code` — reachability-based unused files/symbols.
-pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
-    let graph = build_graph(root);
-    let mut findings = deadcode::analyze(&graph);
+/// Sort, apply `.mollifyrc` (severity overrides + ignore), and summarize.
+fn finalize(cfg: &config::Config, files: usize, mut findings: Vec<Finding>) -> FindingsReport {
+    config::apply(cfg, &mut findings);
     sort_findings(&mut findings);
-    let files = graph.modules.len();
     FindingsReport {
         schema_version: SCHEMA_VERSION.into(),
         summary: Summary::from_findings(&findings, files),
         findings,
     }
+}
+
+/// `mollify dead-code` — reachability-based unused files/symbols.
+pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
+    let graph = build_graph(root);
+    finalize(&config::load(root), graph.modules.len(), deadcode::analyze(&graph))
 }
 
 /// `mollify deps` — dependency hygiene.
 pub fn deps_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    let mut findings = deps::analyze(root, &graph);
-    sort_findings(&mut findings);
-    let files = graph.modules.len();
-    FindingsReport {
-        schema_version: SCHEMA_VERSION.into(),
-        summary: Summary::from_findings(&findings, files),
-        findings,
-    }
-}
-
-/// Build a single-category findings report from a closure.
-fn findings_report(root: &Utf8Path, f: impl Fn(&ModuleGraph) -> Vec<Finding>) -> FindingsReport {
-    let graph = build_graph(root);
-    let mut findings = f(&graph);
-    sort_findings(&mut findings);
-    let files = graph.modules.len();
-    FindingsReport {
-        schema_version: SCHEMA_VERSION.into(),
-        summary: Summary::from_findings(&findings, files),
-        findings,
-    }
+    finalize(&config::load(root), graph.modules.len(), deps::analyze(root, &graph))
 }
 
 /// `mollify arch` — circular dependencies (boundary presets later).
 pub fn arch_report(root: &Utf8Path) -> FindingsReport {
-    findings_report(root, arch::analyze)
+    let graph = build_graph(root);
+    finalize(&config::load(root), graph.modules.len(), arch::analyze(&graph))
 }
 
 /// `mollify complexity` / `mollify health` — complexity hotspots.
 pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
-    findings_report(root, complexity::analyze)
+    let graph = build_graph(root);
+    let cfg = config::load(root);
+    let findings = complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive);
+    finalize(&cfg, graph.modules.len(), findings)
 }
 
 /// `mollify dupes` — duplication / clone families.
 pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
-    findings_report(root, dupes::analyze)
+    let graph = build_graph(root);
+    finalize(&config::load(root), graph.modules.len(), dupes::analyze(&graph))
 }
 
 /// `mollify audit` — the unified pass across all engines. Produces a quality
 /// score over the combined findings.
 pub fn audit_report(root: &Utf8Path) -> AuditReport {
     let graph = build_graph(root);
+    let cfg = config::load(root);
     let mut findings: Vec<Finding> = Vec::new();
     findings.extend(deadcode::analyze(&graph));
     findings.extend(deps::analyze(root, &graph));
     findings.extend(arch::analyze(&graph));
-    findings.extend(complexity::analyze(&graph));
+    findings.extend(complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive));
     findings.extend(dupes::analyze(&graph));
+    config::apply(&cfg, &mut findings);
     sort_findings(&mut findings);
     let files = graph.modules.len();
     let summary = Summary::from_findings(&findings, files);

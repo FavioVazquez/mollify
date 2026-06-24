@@ -35,10 +35,22 @@ enum Command {
     Complexity(Scope),
     /// Duplication / clone families.
     Dupes(Scope),
+    /// Apply safe auto-fixes (certain, auto-fixable unused symbols). Dry-run unless --apply.
+    Fix(FixArgs),
     /// Scaffold a .mollifyrc and report detected layout.
     Init(Scope),
     /// Run the Model Context Protocol server over stdio (for coding agents).
     Mcp,
+}
+
+#[derive(clap::Args)]
+struct FixArgs {
+    /// Project root.
+    #[arg(long, default_value = ".")]
+    path: Utf8PathBuf,
+    /// Write the changes (default is a dry-run preview).
+    #[arg(long)]
+    apply: bool,
 }
 
 #[derive(clap::Args)]
@@ -108,6 +120,7 @@ fn main() {
             run_findings(&s, mollify_core::complexity_report, Report::Complexity, "complexity")
         }
         Command::Dupes(s) => run_findings(&s, mollify_core::dupes_report, Report::Dupes, "dupes"),
+        Command::Fix(a) => run_fix(&a),
         Command::Init(s) => run_init(&s),
         Command::Mcp => match mollify_mcp::run() {
             Ok(()) => 0,
@@ -164,6 +177,39 @@ fn run_findings(
         }
     }
     exit_code(errors)
+}
+
+fn run_fix(a: &FixArgs) -> i32 {
+    let edits = mollify_core::fix::plan(&a.path);
+    if edits.is_empty() {
+        println!("No auto-fixable findings (only `certain` unused symbols are auto-fixed). ✓");
+        return 0;
+    }
+    println!(
+        "{} safe fix(es){}:",
+        edits.len(),
+        if a.apply {
+            ""
+        } else {
+            " (dry-run — pass --apply to write)"
+        }
+    );
+    for e in &edits {
+        println!("  {}:{}-{}  {}", e.path, e.start_line, e.end_line, e.description);
+    }
+    if !a.apply {
+        return 0;
+    }
+    match mollify_core::fix::apply(&edits) {
+        Ok(n) => {
+            println!("Applied {n} fix(es). Re-run `mollify audit` to confirm.");
+            0
+        }
+        Err(e) => {
+            eprintln!("error: applying fixes: {e}");
+            1
+        }
+    }
 }
 
 fn run_init(s: &Scope) -> i32 {
