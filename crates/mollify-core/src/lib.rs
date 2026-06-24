@@ -12,6 +12,7 @@ use mollify_types::{
     SCHEMA_VERSION,
 };
 
+pub mod agents;
 pub mod arch;
 pub mod baseline;
 pub mod cohesion;

@@ -1,0 +1,60 @@
+# PyPI packaging for the `mollify` CLI.
+#
+# Mollify is a Rust binary; this builds a binary-only wheel (no Python module)
+# via maturin's `bin` bindings — the same model `ruff` uses. The compiled
+# `mollify` executable is placed in the wheel's scripts directory, so
+# `uvx mollify`, `uv tool install mollify`, and `pip install mollify` all put
+# `mollify` on the PATH.
+#
+# Build locally:   maturin build --release
+# Run without install: uvx mollify --help
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "mollify"
+description = "Deterministic codebase intelligence for Python — dead code, duplication, circular dependencies, complexity, architecture, dependency hygiene, type health, and security as evidence, not guesses."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+authors = [{ name = "Favio Vázquez", email = "favio.vazquezp@gmail.com" }]
+keywords = [
+    "python",
+    "static-analysis",
+    "dead-code",
+    "code-quality",
+    "complexity",
+    "architecture",
+    "circular-dependencies",
+    "duplication",
+    "dependency-hygiene",
+    "security",
+    "mcp",
+    "lsp",
+    "agent-skills",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+# Version is read from crates/mollify-cli/Cargo.toml by maturin.
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/FavioVazquez/mollify"
+Repository = "https://github.com/FavioVazquez/mollify"
+Issues = "https://github.com/FavioVazquez/mollify/issues"
+Changelog = "https://github.com/FavioVazquez/mollify/blob/main/CHANGELOG.md"
+
+[tool.maturin]
+# Build the `mollify` binary (no Python extension module) from the CLI crate
+# in this Cargo workspace.
+bindings = "bin"
+manifest-path = "crates/mollify-cli/Cargo.toml"
+strip = true

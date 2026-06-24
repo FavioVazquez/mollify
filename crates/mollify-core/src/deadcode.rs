@@ -89,7 +89,14 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                     Confidence::Certain
                 };
                 out.push(Finding {
-                    fingerprint: fingerprint(rule, &[m.path.as_str(), &imp.line.to_string()]),
+                    fingerprint: fingerprint(
+                        rule,
+                        &[
+                            m.path.as_str(),
+                            &imp.line.to_string(),
+                            &imp.bindings.join(","),
+                        ],
+                    ),
                     rule: rule.into(),
                     category: Category::DeadCode,
                     severity: Severity::Warn,
@@ -397,6 +404,27 @@ def view():
         );
         assert!(!f.iter().any(|x| x.reason.contains("`kept`")));
         assert!(!f.iter().any(|x| x.reason.contains("used_p")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn comma_import_unused_names_get_distinct_fingerprints() {
+        let d = temp("commaimp");
+        write(&d, "__main__.py", "print('hi')\n");
+        write(&d, "lib.py", "import os, sys\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let imps: Vec<_> = f.iter().filter(|x| x.rule == "unused-import").collect();
+        assert_eq!(
+            imps.len(),
+            2,
+            "expected one finding per unused name, got {imps:?}"
+        );
+        assert_ne!(
+            imps[0].fingerprint, imps[1].fingerprint,
+            "fingerprints must be unique per finding: {imps:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

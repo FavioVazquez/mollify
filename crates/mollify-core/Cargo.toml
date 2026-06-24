@@ -8,15 +8,19 @@ repository.workspace = true
 description = "Analysis orchestration for Mollify: dead-code and dependency-hygiene engines (more to come)."
 
 [dependencies]
-mollify-types = { path = "../mollify-types" }
-mollify-parse = { path = "../mollify-parse" }
-mollify-graph = { path = "../mollify-graph" }
+mollify-types = { path = "../mollify-types", version = "0.1.0" }
+mollify-parse = { path = "../mollify-parse", version = "0.1.0" }
+mollify-graph = { path = "../mollify-graph", version = "0.1.0" }
 camino.workspace = true
 xxhash-rust.workspace = true
 rustc-hash.workspace = true
 toml = "0.9"
 serde.workspace = true
 serde_json.workspace = true
+# Embeds the per-agent skill/hook/workflow/rule artifacts (the repo's `.claude`,
+# `.cursor`, `.gemini`, `.codex`, `.agents`, `.devin`, `.windsurf` trees) into
+# the binary so `mollify init --agent <name>` can scaffold them into any repo.
+include_dir = "0.7"
 
 [dev-dependencies]
 serde_json.workspace = true

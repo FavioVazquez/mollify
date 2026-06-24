@@ -1,0 +1,6 @@
+[mcp_servers.mollify]
+command = "mollify"
+args = ["mcp"]
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+enabled = true

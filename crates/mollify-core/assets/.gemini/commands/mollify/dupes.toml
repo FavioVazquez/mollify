@@ -1,0 +1,17 @@
+description = "Find duplicated / cloned code (token-based clone families)"
+prompt = """
+You are reviewing this repository with Mollify, a deterministic Python
+code-intelligence engine. Mollify emits evidence, not decisions.
+
+Here is the current duplication output:
+!{mollify dupes --format json {{args}}}
+
+Using ONLY this output (do not grep, do not guess, do not invent findings):
+
+1. Group findings by `confidence`, with counts. The `rule` is `duplication`.
+2. For each clone family, list the member locations
+   (`location.path:location.line`), the `reason`, and the `fingerprint`.
+3. Some clones are intentional — surface them and let the user decide.
+4. Propose a de-duplication plan. Do NOT modify files without explicit user
+   confirmation.
+"""

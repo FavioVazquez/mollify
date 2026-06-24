@@ -1,0 +1,74 @@
+{
+  "name": "mollify",
+  "version": "0.1.0",
+  "description": "Deterministic codebase intelligence for Python. Dead code, duplication, circular dependencies, complexity, architecture, dependency hygiene, type health, and security as evidence, not guesses. Rust-native CLI + LSP + MCP server, with version-matched agent integrations.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FavioVazquez/mollify.git"
+  },
+  "homepage": "https://github.com/FavioVazquez/mollify",
+  "bugs": {
+    "url": "https://github.com/FavioVazquez/mollify/issues"
+  },
+  "keywords": [
+    "python",
+    "code-intelligence",
+    "static-analysis",
+    "dead-code",
+    "circular-dependencies",
+    "duplication",
+    "complexity",
+    "architecture",
+    "dependency-hygiene",
+    "security",
+    "lsp",
+    "mcp",
+    "agent-skills"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "bin": {
+    "mollify": "bin/mollify",
+    "mollify-mcp": "bin/mollify-mcp",
+    "mollify-lsp": "bin/mollify-lsp"
+  },
+  "exports": {
+    "./types": {
+      "types": "./types/output-contract.d.ts"
+    },
+    "./package.json": "./package.json",
+    "./bin/*": "./bin/*",
+    "./scripts/*": "./scripts/*"
+  },
+  "typesVersions": {
+    "*": {
+      "types": [
+        "./types/output-contract.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "types",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test scripts/*.test.js"
+  },
+  "dependencies": {
+    "detect-libc": "^2.0.3"
+  },
+  "optionalDependencies": {
+    "@mollify-cli/darwin-arm64": "0.1.0",
+    "@mollify-cli/darwin-x64": "0.1.0",
+    "@mollify-cli/linux-x64-gnu": "0.1.0",
+    "@mollify-cli/linux-arm64-gnu": "0.1.0",
+    "@mollify-cli/linux-x64-musl": "0.1.0",
+    "@mollify-cli/linux-arm64-musl": "0.1.0",
+    "@mollify-cli/win32-x64-msvc": "0.1.0",
+    "@mollify-cli/win32-arm64-msvc": "0.1.0"
+  }
+}

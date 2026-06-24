@@ -1,0 +1,17 @@
+description = "Explain a Mollify rule (semantics, confidence, action)"
+prompt = """
+Explain a Mollify rule. With no argument, `mollify explain` lists all rules.
+
+Here is the explanation:
+!{mollify explain {{args}}}
+
+Relay the rule's meaning, what triggers it, how confidence is assigned, and the
+recommended action. Valid rule ids include unused-file, unused-export,
+unused-import, commented-code, unused-dependency, missing-dependency,
+circular-dependency, layer-violation, forbidden-import, independence-violation,
+high-complexity, duplication, untyped-function, cold-code, hotspot,
+dangerous-eval, subprocess-shell-true, sql-injection, unsafe-yaml-load,
+unsafe-deserialization, tls-verify-disabled, hardcoded-secret, weak-hash,
+weak-cipher, insecure-random, request-without-timeout, vulnerable-dependency,
+plus custom policy ids.
+"""

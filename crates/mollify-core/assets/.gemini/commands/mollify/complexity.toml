@@ -1,0 +1,18 @@
+description = "Find complexity hotspots (cyclomatic/cognitive + churn x complexity)"
+prompt = """
+You are reviewing this repository with Mollify, a deterministic Python
+code-intelligence engine. Mollify emits evidence, not decisions.
+
+Here is the current complexity output:
+!{mollify complexity --format json {{args}}}
+
+Using ONLY this output (do not grep, do not guess, do not invent findings):
+
+1. Group findings by `rule` (`high-complexity`, `hotspot`) and by `confidence`,
+   with counts.
+2. List each finding with `location.path:location.line`, its `reason` (the
+   cyclomatic/cognitive metrics or churn x complexity), and the `fingerprint`.
+3. Thresholds (`max_cyclomatic`, `max_cognitive`) come from `.mollifyrc.json`.
+4. Propose a prioritized refactor plan. Do NOT modify files without explicit user
+   confirmation.
+"""
