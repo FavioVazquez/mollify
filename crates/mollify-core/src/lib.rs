@@ -41,35 +41,58 @@ pub fn build_graph(root: &Utf8Path) -> ModuleGraph {
     ModuleGraph::build(root, &files)
 }
 
-/// Sort, apply `.mollifyrc` (severity overrides + ignore), and summarize.
-fn finalize(cfg: &config::Config, files: usize, mut findings: Vec<Finding>) -> FindingsReport {
+/// Sort, apply inline `# mollify: ignore[...]` suppressions and `.mollifyrc`
+/// (severity overrides + ignore), then summarize.
+fn finalize(
+    cfg: &config::Config,
+    graph: &ModuleGraph,
+    mut findings: Vec<Finding>,
+) -> FindingsReport {
+    apply_suppressions(graph, &mut findings);
     config::apply(cfg, &mut findings);
     sort_findings(&mut findings);
     FindingsReport {
         schema_version: SCHEMA_VERSION.into(),
-        summary: Summary::from_findings(&findings, files),
+        summary: Summary::from_findings(&findings, graph.modules.len()),
         findings,
     }
+}
+
+/// Drop findings silenced by an inline `# mollify: ignore[<rule>]` comment on
+/// the finding's line (or a bare `# mollify: ignore` matching any rule).
+pub fn apply_suppressions(graph: &ModuleGraph, findings: &mut Vec<Finding>) {
+    use rustc_hash::FxHashMap;
+    // (path, line) -> set of suppressed rules ("*" = all).
+    let mut sup: FxHashMap<(&str, u32), Vec<&str>> = FxHashMap::default();
+    for m in &graph.modules {
+        for (line, rule) in &m.parsed.ignores {
+            sup.entry((m.path.as_str(), *line))
+                .or_default()
+                .push(rule.as_str());
+        }
+    }
+    if sup.is_empty() {
+        return;
+    }
+    findings.retain(|f| {
+        if let Some(rules) = sup.get(&(f.location.path.as_str(), f.location.line)) {
+            !rules.iter().any(|r| *r == "*" || *r == f.rule)
+        } else {
+            true
+        }
+    });
 }
 
 /// `mollify dead-code` — reachability-based unused files/symbols.
 pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(
-        &config::load(root),
-        graph.modules.len(),
-        deadcode::analyze(&graph),
-    )
+    finalize(&config::load(root), &graph, deadcode::analyze(&graph))
 }
 
 /// `mollify deps` — dependency hygiene.
 pub fn deps_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(
-        &config::load(root),
-        graph.modules.len(),
-        deps::analyze(root, &graph),
-    )
+    finalize(&config::load(root), &graph, deps::analyze(root, &graph))
 }
 
 /// `mollify arch` — circular dependencies (boundary presets later).
@@ -79,7 +102,7 @@ pub fn arch_report(root: &Utf8Path) -> FindingsReport {
     let mut findings = arch::analyze(&graph);
     findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
     findings.extend(policy::analyze(&graph, &cfg.policies));
-    finalize(&cfg, graph.modules.len(), findings)
+    finalize(&cfg, &graph, findings)
 }
 
 /// `mollify complexity` / `mollify health` — complexity hotspots.
@@ -88,44 +111,32 @@ pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
     let cfg = config::load(root);
     let mut findings = complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive);
     findings.extend(hotspots::analyze(root, &graph));
-    finalize(&cfg, graph.modules.len(), findings)
+    finalize(&cfg, &graph, findings)
 }
 
 /// `mollify dupes` — duplication / clone families.
 pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(
-        &config::load(root),
-        graph.modules.len(),
-        dupes::analyze(&graph),
-    )
+    finalize(&config::load(root), &graph, dupes::analyze(&graph))
 }
 
 /// `mollify types` — type-annotation health.
 pub fn types_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(
-        &config::load(root),
-        graph.modules.len(),
-        typehealth::analyze(&graph),
-    )
+    finalize(&config::load(root), &graph, typehealth::analyze(&graph))
 }
 
 /// `mollify security` — security candidates (deterministic; review before acting).
 pub fn security_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(
-        &config::load(root),
-        graph.modules.len(),
-        security::analyze(&graph),
-    )
+    finalize(&config::load(root), &graph, security::analyze(&graph))
 }
 
 /// `mollify coverage` — cold-path analysis from a coverage.py JSON report.
 pub fn coverage_report(root: &Utf8Path, coverage_path: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
     let findings = coverage::analyze(root, &graph, coverage_path);
-    finalize(&config::load(root), graph.modules.len(), findings)
+    finalize(&config::load(root), &graph, findings)
 }
 
 /// `mollify supply-chain` — match pinned/locked dependency versions against a
@@ -144,7 +155,7 @@ pub fn supply_chain_report_with(
 ) -> FindingsReport {
     let graph = build_graph(root);
     let findings = supplychain::analyze(root, advisories);
-    finalize(&config::load(root), graph.modules.len(), findings)
+    finalize(&config::load(root), &graph, findings)
 }
 
 /// The default advisory DB path checked by `audit` when present.
@@ -176,6 +187,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     if let Some(advisories) = supplychain::load_db(&db_path) {
         findings.extend(supplychain::analyze(root, &advisories));
     }
+    apply_suppressions(&graph, &mut findings);
     config::apply(&cfg, &mut findings);
     sort_findings(&mut findings);
     let files = graph.modules.len();
@@ -227,6 +239,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         Utf8PathBuf::from_path_buf(base).unwrap()
+    }
+
+    #[test]
+    fn inline_suppression_drops_finding() {
+        let d = temp("suppress");
+        std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
+        // `_dead` is a certain unused-export; the inline comment silences it.
+        std::fs::write(
+            d.join("lib.py"),
+            "def _dead():  # mollify: ignore[unused-export]\n    return 1\n",
+        )
+        .unwrap();
+        let r = dead_code_report(&d);
+        assert!(
+            !r.findings.iter().any(|f| f.reason.contains("_dead")),
+            "suppressed finding leaked: {:?}",
+            r.findings
+        );
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

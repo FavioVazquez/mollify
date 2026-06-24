@@ -61,6 +61,9 @@ pub struct Import {
     pub bindings: Vec<String>,
     /// True for `from m import *`.
     pub is_star: bool,
+    /// True if guarded by `if TYPE_CHECKING:` / `if False:` — a deliberate
+    /// type-only import that must never be flagged as unused.
+    pub type_checking_only: bool,
     pub line: u32,
 }
 
@@ -122,8 +125,12 @@ pub struct ParsedModule {
     pub used_names: Vec<String>,
     /// Identifiers referenced *outside* import statements — lets the unused-import
     /// engine tell "the name is actually used" from "the name only appears in its
-    /// own import". Sorted + deduped.
+    /// own import". Includes names extracted from string/forward-ref annotations.
+    /// Sorted + deduped.
     pub local_uses: Vec<String>,
+    /// Inline suppressions parsed from `# mollify: ignore[<rule>]` comments:
+    /// `(line, rule)` where rule is `"*"` for a bare `# mollify: ignore`.
+    pub ignores: Vec<(u32, String)>,
     /// Occurrence count per identifier across the whole module (includes the
     /// definition site). `count(name) > defs(name)` ⇒ the name is referenced,
     /// not just defined — used by the symbol-usage analysis.
@@ -176,6 +183,7 @@ impl PyParser {
             dunder_all: None,
             used_names: Vec::new(),
             local_uses: Vec::new(),
+            ignores: Vec::new(),
             name_counts: std::collections::HashMap::new(),
             has_dynamic_sink: false,
             had_errors: root.has_error(),
@@ -243,6 +251,17 @@ fn scan_stmt(node: Node, bytes: &[u8], m: &mut ParsedModule) {
             }
         }
         "if_statement" | "try_statement" => {
+            // A `if TYPE_CHECKING:` / `if False:` guard marks deliberately
+            // type-only imports so they are never flagged as unused.
+            let type_checking = node.kind() == "if_statement"
+                && node
+                    .child_by_field_name("condition")
+                    .map(|c| {
+                        let t = node_text(c, bytes);
+                        t.contains("TYPE_CHECKING") || t.trim() == "False"
+                    })
+                    .unwrap_or(false);
+            let before = m.imports.len();
             // Recurse into nested blocks for conditional top-level imports/defs.
             let mut c = node.walk();
             for ch in node.children(&mut c) {
@@ -251,6 +270,11 @@ fn scan_stmt(node: Node, bytes: &[u8], m: &mut ParsedModule) {
                     for stmt in ch.children(&mut bc) {
                         scan_stmt(stmt, bytes, m);
                     }
+                }
+            }
+            if type_checking {
+                for imp in m.imports[before..].iter_mut() {
+                    imp.type_checking_only = true;
                 }
             }
         }
@@ -359,6 +383,7 @@ fn parse_import(node: Node, bytes: &[u8], m: &mut ParsedModule, from: bool) {
                         vec![binding]
                     },
                     is_star: false,
+                    type_checking_only: false,
                     line,
                 });
             }
@@ -420,6 +445,7 @@ fn parse_import(node: Node, bytes: &[u8], m: &mut ParsedModule, from: bool) {
         names,
         bindings,
         is_star,
+        type_checking_only: false,
         line,
     });
 }
@@ -787,6 +813,14 @@ fn collect_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
                     });
                 }
             }
+            "comment" => {
+                if let Some(rules) = parse_ignore_comment(node_text(node, bytes)) {
+                    let line = node.start_position().row as u32 + 1;
+                    for r in rules {
+                        m.ignores.push((line, r));
+                    }
+                }
+            }
             _ => {}
         }
         let mut c = node.walk();
@@ -796,6 +830,31 @@ fn collect_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
     }
     m.used_names.sort();
     m.used_names.dedup();
+}
+
+/// Parse a `# mollify: ignore[rule1,rule2]` (or bare `# mollify: ignore`)
+/// comment into the suppressed rule ids (`["*"]` for a bare ignore).
+fn parse_ignore_comment(text: &str) -> Option<Vec<String>> {
+    let t = text.trim_start_matches('#').trim();
+    let rest = t.strip_prefix("mollify:")?.trim();
+    let rest = rest.strip_prefix("ignore")?;
+    let rest = rest.trim();
+    if let Some(inner) = rest.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+        let rules: Vec<String> = inner
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if rules.is_empty() {
+            Some(vec!["*".into()])
+        } else {
+            Some(rules)
+        }
+    } else if rest.is_empty() {
+        Some(vec!["*".into()])
+    } else {
+        None
+    }
 }
 
 /// Collect identifiers that appear *outside* `import` / `from ... import`
@@ -812,6 +871,14 @@ fn collect_local_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
         if node.kind() == "identifier" {
             m.local_uses.push(node_text(node, bytes).to_string());
         }
+        // Forward-reference / string annotations (`x: "Foo"`, `List["Bar"]`):
+        // the referenced names live inside a string literal, so extract any
+        // identifier-like tokens when the string sits in annotation position.
+        if node.kind() == "string" && in_annotation_position(node) {
+            for tok in identifier_tokens(node_text(node, bytes)) {
+                m.local_uses.push(tok);
+            }
+        }
         let mut c = node.walk();
         for ch in node.children(&mut c) {
             stack.push(ch);
@@ -819,6 +886,44 @@ fn collect_local_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
     }
     m.local_uses.sort();
     m.local_uses.dedup();
+}
+
+/// Is this node within a type-annotation context (param/return/variable type)?
+/// Walks up a few ancestors looking for the annotation-bearing node kinds.
+fn in_annotation_position(node: Node) -> bool {
+    let mut cur = node.parent();
+    for _ in 0..6 {
+        let Some(n) = cur else { return false };
+        match n.kind() {
+            "type" | "typed_parameter" | "typed_default_parameter" => return true,
+            // Stop at statement/function boundaries we know aren't annotations.
+            "expression_statement" | "function_definition" | "block" | "module" => return false,
+            _ => cur = n.parent(),
+        }
+    }
+    false
+}
+
+/// Extract identifier-like tokens (`Foo`, `pkg.Bar` -> `pkg`, `Bar`) from a
+/// string-literal annotation's text, skipping the quotes.
+fn identifier_tokens(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            cur.push(ch);
+        } else {
+            if !cur.is_empty() && !cur.chars().next().unwrap().is_ascii_digit() {
+                out.push(std::mem::take(&mut cur));
+            } else {
+                cur.clear();
+            }
+        }
+    }
+    if !cur.is_empty() && !cur.chars().next().unwrap().is_ascii_digit() {
+        out.push(cur);
+    }
+    out
 }
 
 #[cfg(test)]

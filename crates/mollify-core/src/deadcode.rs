@@ -27,8 +27,8 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
         let dunder_all: Option<&Vec<String>> = m.parsed.dunder_all.as_ref();
         let is_init = m.path.file_name().is_some_and(|f| f == "__init__.py");
         for imp in &m.parsed.imports {
-            if imp.is_star || imp.bindings.is_empty() {
-                continue; // star imports / unparsed bindings: can't be certain
+            if imp.is_star || imp.bindings.is_empty() || imp.type_checking_only {
+                continue; // star imports / unparsed bindings / type-only: skip
             }
             // Used if any binding is referenced outside imports or re-exported.
             let used = imp.bindings.iter().any(|b| {
@@ -299,6 +299,25 @@ def view():
                 .unwrap()
                 .actions[0]
                 .auto_fixable
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn type_checking_and_string_annotation_imports_not_flagged() {
+        let d = temp("tc");
+        write(&d, "__main__.py", "import lib\nlib.f(None)\n");
+        write(
+            &d,
+            "lib.py",
+            "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from collections import OrderedDict\n\ndef f(x: \"OrderedDict\"):\n    return x\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter().any(|x| x.rule == "unused-import"),
+            "TYPE_CHECKING + string-annotation import wrongly flagged: {f:?}"
         );
         std::fs::remove_dir_all(&d).ok();
     }
