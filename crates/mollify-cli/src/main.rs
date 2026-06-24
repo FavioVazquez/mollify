@@ -11,6 +11,8 @@ use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use mollify_types::{Confidence, Finding, Report, Severity, Summary};
 
+mod osv;
+
 #[derive(Parser)]
 #[command(
     name = "mollify",
@@ -104,6 +106,12 @@ struct SupplyChainArgs {
     /// Advisory DB JSON (mollify-advisories/1). Defaults to `.mollify/advisories.json`.
     #[arg(long)]
     advisory_db: Option<Utf8PathBuf>,
+    /// Skip the live OSV fetch; use the local advisory DB only (deterministic).
+    #[arg(long)]
+    offline: bool,
+    /// After a live fetch, write the advisories to the DB path (cache for offline runs).
+    #[arg(long)]
+    refresh: bool,
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Human)]
     format: Format,
@@ -433,14 +441,52 @@ fn run_supply_chain(a: &SupplyChainArgs) -> i32 {
         .advisory_db
         .clone()
         .unwrap_or_else(|| a.path.join(mollify_core::DEFAULT_ADVISORY_DB));
-    if !db.exists() {
-        eprintln!(
-            "No advisory DB at {db}. Generate one with `python3 scripts/fetch-advisories.py {db}` \
-             (pulls from OSV/safety-db), or pass --advisory-db <path>."
-        );
-        return 1;
-    }
-    let report = mollify_core::supply_chain_report(&a.path, &db);
+
+    // Live-first (the advisory feed changes constantly), local DB as fallback.
+    // `--offline` forces the deterministic DB-only path.
+    let report = if a.offline {
+        if !db.exists() {
+            eprintln!(
+                "No advisory DB at {db}. Drop `--offline` to fetch live from OSV, run \
+                 `python3 scripts/fetch-advisories.py {db}`, or pass --advisory-db <path>."
+            );
+            return 1;
+        }
+        eprintln!("supply-chain: offline mode, using advisory DB {db}.");
+        mollify_core::supply_chain_report(&a.path, &db)
+    } else {
+        let pins = mollify_core::supplychain::collect_pins(&a.path);
+        match osv::fetch_for_pins(&pins) {
+            Ok(advisories) => {
+                eprintln!(
+                    "supply-chain: live OSV data for {} pinned package(s).",
+                    pins.len()
+                );
+                if a.refresh {
+                    match osv::write_db(&db, &advisories) {
+                        Ok(()) => eprintln!(
+                            "supply-chain: cached {} advisory(ies) to {db}.",
+                            advisories.len()
+                        ),
+                        Err(e) => eprintln!("supply-chain: could not write cache {db}: {e}"),
+                    }
+                }
+                mollify_core::supply_chain_report_with(&a.path, &advisories)
+            }
+            Err(e) => {
+                if db.exists() {
+                    eprintln!("supply-chain: live fetch failed ({e}); falling back to DB {db}.");
+                    mollify_core::supply_chain_report(&a.path, &db)
+                } else {
+                    eprintln!(
+                        "supply-chain: live fetch failed ({e}) and no local DB at {db}. \
+                         Pass --advisory-db, run scripts/fetch-advisories.py, or check connectivity."
+                    );
+                    mollify_core::supply_chain_report_with(&a.path, &[])
+                }
+            }
+        }
+    };
     let errors = report.summary.errors;
     match a.format {
         Format::Json => println!(

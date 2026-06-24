@@ -103,12 +103,14 @@ mollify audit --gate new-only --base origin/main  # only fail on regressions
 mollify fix                                        # preview safe removals (--apply to write)
 ```
 
-Supply-chain (offline, deterministic — refresh the advisory DB out-of-band):
+Supply-chain (live OSV by default, offline fallback):
 
 ```bash
-python3 scripts/fetch-advisories.py .mollify/advisories.json   # pulls from OSV / safety-db
-mollify supply-chain                                            # match pinned versions vs the DB
-# (audit auto-includes supply-chain when .mollify/advisories.json exists)
+mollify supply-chain                 # query OSV.dev live for pinned versions
+mollify supply-chain --refresh       # …and cache results to .mollify/advisories.json
+mollify supply-chain --offline       # deterministic: local advisory DB only
+# `mollify audit` stays offline — it folds in supply-chain from .mollify/advisories.json when present
+python3 scripts/fetch-advisories.py .mollify/advisories.json   # seed/refresh the DB out-of-band
 ```
 
 ## Confidence tiers
@@ -207,9 +209,9 @@ contract — see [RESEARCH.md](RESEARCH.md) for the honest, sourced landscape
 - Duplication is Rabin-Karp token matching (SA-IS+LCP is the planned upgrade).
 - `--gate` attribution is file-level (line-level base-worktree is planned).
 - Supply-chain matching needs **pinned/locked** versions (requirements `==`,
-  poetry/uv lockfiles); unpinned ranges can't be matched precisely. The advisory
-  DB is refreshed out-of-band (`scripts/fetch-advisories.py`) to keep audits
-  deterministic and offline — Mollify itself never hits the network.
+  poetry/uv lockfiles); unpinned ranges can't be matched precisely. The
+  `supply-chain` command fetches OSV live by default (offline DB fallback);
+  `mollify audit` stays fully offline/deterministic, reading only the cached DB.
 - Not yet built: an LSP server. Tracked in [docs/STATUS.md](docs/STATUS.md).
 
 ## Contributing

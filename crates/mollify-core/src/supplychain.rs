@@ -12,10 +12,10 @@ use crate::known::normalize_dist;
 use crate::version::matches_spec;
 use camino::Utf8Path;
 use mollify_types::{Action, Category, Confidence, Finding, Location, Severity};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One advisory in the normalized `mollify-advisories/1` schema.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Advisory {
     pub id: String,
     pub package: String,
