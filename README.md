@@ -48,9 +48,9 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 | Area | Command | Rules |
 |---|---|---|
 | **Dead code** | `mollify dead-code` | `unused-file`, `unused-export`, `unused-import`, `unused-variable`, `unused-parameter`, `commented-code` |
-| **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency` (pyproject + requirements/uv/pdm) |
+| **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency`, `transitive-dependency` (pyproject + requirements/uv/pdm; venv-aware) |
 | **Architecture** | `mollify arch` | `circular-dependency`, `layer-violation`, `forbidden-import`, `independence-violation`, custom policies |
-| **Complexity & hotspots** | `mollify complexity` | `high-complexity`, `hotspot` (churn × complexity) |
+| **Complexity & cohesion** | `mollify complexity` | `high-complexity`, `hotspot` (churn × complexity), `low-cohesion` (LCOM*) |
 | **Duplication** | `mollify dupes` | `duplication` (clone families) |
 | **Type health** | `mollify types` | `untyped-function` |
 | **Security** | `mollify security` | eval/exec, shell, `sql-injection`, weak hash/cipher, insecure-random, unsafe deserialization, TLS, secrets, missing-timeout — each with a CWE id |

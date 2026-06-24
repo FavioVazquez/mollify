@@ -44,9 +44,9 @@ to target a subproject.
 ## Rules emitted
 `unused-file`, `unused-export`, `unused-import`, `unused-variable`,
 `unused-parameter`, `commented-code`,
-`unused-dependency`, `missing-dependency`, `circular-dependency`,
+`unused-dependency`, `missing-dependency`, `transitive-dependency`, `circular-dependency`,
 `layer-violation`, `forbidden-import`, `independence-violation`,
-`high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`,
+`high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`, `low-cohesion`,
 `dangerous-eval`, `subprocess-shell-true`, `sql-injection`, `unsafe-yaml-load`,
 `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`, `weak-hash`,
 `weak-cipher`, `insecure-random`, `request-without-timeout`,
@@ -86,6 +86,6 @@ list above), `category`, `confidence` (`certain` | `likely` | `uncertain`),
 
 ## Honesty
 Reachability is static. Dynamic imports (`getattr` / `importlib`) downgrade
-confidence to `uncertain` — treat those as review-only. A `missing-dependency`
+confidence to `uncertain` — treat those as review-only. A `missing-dependency`, `transitive-dependency`
 can be a false positive for namespace packages or local shadowing; verify before
 editing `pyproject.toml`.
