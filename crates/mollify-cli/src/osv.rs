@@ -7,9 +7,11 @@
 //! pin each resulting advisory to the exact queried version.
 
 use mollify_core::supplychain::{Advisory, PinnedDep};
+use serde_json::Value;
 use std::time::Duration;
 
-const OSV_QUERY: &str = "https://api.osv.dev/v1/query";
+const OSV_QUERYBATCH: &str = "https://api.osv.dev/v1/querybatch";
+const OSV_VULN: &str = "https://api.osv.dev/v1/vulns/";
 
 fn build_agent() -> ureq::Agent {
     let mut b = ureq::AgentBuilder::new().timeout(Duration::from_secs(20));
@@ -32,54 +34,46 @@ pub fn fetch_for_pins(pins: &[PinnedDep]) -> anyhow::Result<Vec<Advisory>> {
         return Ok(Vec::new());
     }
     let agent = build_agent();
+    // Distinct (name, version) pins, order preserved for result alignment.
     let mut seen = std::collections::HashSet::new();
+    let distinct: Vec<&PinnedDep> = pins
+        .iter()
+        .filter(|p| seen.insert((p.name.clone(), p.version.clone())))
+        .collect();
+
+    // One batched discovery request returns vuln IDs per query (aligned order).
+    let queries: Vec<Value> = distinct
+        .iter()
+        .map(|p| serde_json::json!({ "package": { "name": p.name, "ecosystem": "PyPI" }, "version": p.version }))
+        .collect();
+    let resp = agent
+        .post(OSV_QUERYBATCH)
+        .send_json(serde_json::json!({ "queries": queries }))?;
+    let val: Value = resp.into_json()?;
+    let results = val
+        .get("results")
+        .and_then(|r| r.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Fetch each unique advisory's details once (batch gives only IDs).
+    let mut detail_cache: std::collections::HashMap<String, (String, Vec<String>)> =
+        std::collections::HashMap::new();
     let mut out = Vec::new();
-    for pin in pins {
-        if !seen.insert((pin.name.clone(), pin.version.clone())) {
-            continue;
-        }
-        let body = serde_json::json!({
-            "package": { "name": pin.name, "ecosystem": "PyPI" },
-            "version": pin.version,
-        });
-        let resp = agent.post(OSV_QUERY).send_json(body)?;
-        let val: serde_json::Value = resp.into_json()?;
-        let Some(vulns) = val.get("vulns").and_then(|v| v.as_array()) else {
+    for (pin, result) in distinct.iter().zip(results.iter()) {
+        let Some(vulns) = result.get("vulns").and_then(|v| v.as_array()) else {
             continue;
         };
         for v in vulns {
-            let id = v
-                .get("id")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string();
-            if id.is_empty() {
+            let Some(id) = v.get("id").and_then(|x| x.as_str()) else {
                 continue;
-            }
-            let summary = v
-                .get("summary")
-                .and_then(|x| x.as_str())
-                .or_else(|| v.get("details").and_then(|x| x.as_str()))
-                .unwrap_or("")
-                .lines()
-                .next()
-                .unwrap_or("")
-                .chars()
-                .take(200)
-                .collect::<String>();
-            let aliases = v
-                .get("aliases")
-                .and_then(|a| a.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str())
-                        .filter(|s| s.starts_with("CVE-"))
-                        .map(String::from)
-                        .collect()
-                })
-                .unwrap_or_default();
+            };
+            let (summary, aliases) = detail_cache
+                .entry(id.to_string())
+                .or_insert_with(|| fetch_vuln_detail(&agent, id))
+                .clone();
             out.push(Advisory {
-                id,
+                id: id.to_string(),
                 package: pin.name.clone(),
                 specs: vec![format!("=={}", pin.version)],
                 summary,
@@ -89,6 +83,41 @@ pub fn fetch_for_pins(pins: &[PinnedDep]) -> anyhow::Result<Vec<Advisory>> {
         }
     }
     Ok(out)
+}
+
+/// Fetch one OSV advisory's summary (first line) and CVE aliases by id.
+/// Best-effort: returns empty strings on any failure.
+fn fetch_vuln_detail(agent: &ureq::Agent, id: &str) -> (String, Vec<String>) {
+    let url = format!("{OSV_VULN}{id}");
+    let Ok(resp) = agent.get(&url).call() else {
+        return (String::new(), Vec::new());
+    };
+    let Ok(v) = resp.into_json::<Value>() else {
+        return (String::new(), Vec::new());
+    };
+    let summary = v
+        .get("summary")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.get("details").and_then(|x| x.as_str()))
+        .unwrap_or("")
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect::<String>();
+    let aliases = v
+        .get("aliases")
+        .and_then(|a| a.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .filter(|s| s.starts_with("CVE-"))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    (summary, aliases)
 }
 
 /// Serialize advisories into the `mollify-advisories/1` schema and write to
