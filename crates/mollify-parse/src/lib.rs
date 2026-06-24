@@ -116,6 +116,16 @@ pub struct ScopeFinding {
     pub is_param: bool,
 }
 
+/// A class and, per method, the set of `self.<attr>` it touches — the input to
+/// the LCOM* cohesion metric.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassInfo {
+    pub name: String,
+    pub line: u32,
+    /// `(method_name, set-of-instance-attributes-it-references)`.
+    pub methods: Vec<(String, Vec<String>)>,
+}
+
 /// The parsed view of one Python module that the graph builds on.
 #[derive(Debug, Clone)]
 pub struct ParsedModule {
@@ -144,6 +154,8 @@ pub struct ParsedModule {
     /// Unused local variables / parameters discovered by per-function scope
     /// analysis (conservative: name bound but referenced nowhere else).
     pub scope_findings: Vec<ScopeFinding>,
+    /// Classes with per-method instance-attribute usage (for LCOM cohesion).
+    pub classes: Vec<ClassInfo>,
     /// Occurrence count per identifier across the whole module (includes the
     /// definition site). `count(name) > defs(name)` ⇒ the name is referenced,
     /// not just defined — used by the symbol-usage analysis.
@@ -201,6 +213,7 @@ impl PyParser {
             local_uses: Vec::new(),
             ignores: Vec::new(),
             scope_findings: Vec::new(),
+            classes: Vec::new(),
             name_counts: std::collections::HashMap::new(),
             has_dynamic_sink: false,
             halstead_volume: halstead_volume(root, bytes),
@@ -218,6 +231,8 @@ impl PyParser {
         collect_complexity(root, bytes, &mut m);
         // Per-function unused locals / parameters.
         collect_scopes(root, bytes, &mut m);
+        // Per-class method/attribute map for cohesion (LCOM).
+        collect_classes(root, bytes, &mut m);
         // Security candidates.
         collect_security(root, bytes, &mut m);
 
@@ -863,6 +878,79 @@ fn is_stub_body(body: Node) -> bool {
         }
     }
     true
+}
+
+/// Collect classes with each method's referenced `self.<attr>` set (LCOM input).
+fn collect_classes(root: Node, bytes: &[u8], m: &mut ParsedModule) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "class_definition" {
+            if let Some(ci) = class_info(node, bytes) {
+                m.classes.push(ci);
+            }
+        }
+        let mut c = node.walk();
+        for ch in node.children(&mut c) {
+            stack.push(ch);
+        }
+    }
+    m.classes.sort_by_key(|c| c.line);
+}
+
+fn class_info(class: Node, bytes: &[u8]) -> Option<ClassInfo> {
+    let name = node_text(class.child_by_field_name("name")?, bytes).to_string();
+    let line = class.start_position().row as u32 + 1;
+    let body = class.child_by_field_name("body")?;
+    let mut methods = Vec::new();
+    let mut c = body.walk();
+    let children: Vec<Node> = body.named_children(&mut c).collect();
+    for stmt in children {
+        // A method may be wrapped in `decorated_definition`.
+        let func = if stmt.kind() == "function_definition" {
+            Some(stmt)
+        } else if stmt.kind() == "decorated_definition" {
+            let mut dc = stmt.walk();
+            let kids: Vec<Node> = stmt.children(&mut dc).collect();
+            kids.into_iter().find(|n| n.kind() == "function_definition")
+        } else {
+            None
+        };
+        let Some(func) = func else { continue };
+        let mname = func
+            .child_by_field_name("name")
+            .map(|n| node_text(n, bytes).to_string())
+            .unwrap_or_default();
+        methods.push((mname, self_attrs(func, bytes)));
+    }
+    Some(ClassInfo {
+        name,
+        line,
+        methods,
+    })
+}
+
+/// The distinct `self.<attr>` (and `cls.<attr>`) names referenced in a method.
+fn self_attrs(func: Node, bytes: &[u8]) -> Vec<String> {
+    let mut attrs: std::collections::BTreeSet<String> = Default::default();
+    let mut stack = vec![func];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "attribute" {
+            if let (Some(obj), Some(attr)) = (
+                n.child_by_field_name("object"),
+                n.child_by_field_name("attribute"),
+            ) {
+                let o = node_text(obj, bytes);
+                if o == "self" || o == "cls" {
+                    attrs.insert(node_text(attr, bytes).to_string());
+                }
+            }
+        }
+        let mut c = n.walk();
+        for ch in n.children(&mut c) {
+            stack.push(ch);
+        }
+    }
+    attrs.into_iter().collect()
 }
 
 const SECRET_NAMES: &[&str] = &[
