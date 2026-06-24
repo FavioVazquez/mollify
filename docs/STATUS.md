@@ -7,6 +7,28 @@ every deviation from `PLAN.md` (with rationale).
 Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffolded (compiles, stubbed)
 
 ## Session log
+- **2026-06-24 (real-code eval + two correctness fixes)** — Built a
+  ground-truth corpus (gitignored `local_testing/`: bandit `examples/` for
+  security, deptry fixtures for deps, hand-authored one-signal cases for
+  dead-code/arch/dupes/complexity/types/coverage/supply-chain, and a Flask clone
+  for realism) and ran the **real CLI on real `.py`** for the first time (all
+  prior tests are compilation/unit-level). Engines held up: dead-code, arch,
+  complexity, type-health, coverage, supply-chain hit full recall / zero FP;
+  notebook-awareness validated (a deptry fixture imports `arrow` only in
+  `notebook.ipynb` → correctly not flagged). **Two genuine gaps found + fixed:**
+  1. **`weak-cipher` never emitted.** The parser matcher keyed on a call's final
+     attribute, so import-aliased ciphers (`from Crypto.Cipher import DES as d;
+     d.new(...)`) and `MODE_ECB` (an argument) never matched — 0 hits on bandit's
+     `ciphers.py`. Fixed with import-based detection (`security_imports`, B304) +
+     repaired call matcher (`algorithms.ARC4(...)`) + ECB-as-arg (B305). Now 14
+     hits, CWE-327. +4 tests (incl. strong-cipher/non-crypto negatives).
+  2. **Legacy Poetry `[tool.poetry.dev-dependencies]` unparsed** → declared+used
+     `black` falsely reported `missing-dependency`. Added the table to
+     `declared_dependencies`. +1 test.
+  Open quality items (not bugs), tracked in `local_testing/SCORECARD.md`: clone
+  double-reporting, default scope includes `tests/` (noise), harsh quality score
+  for libraries. **All tests green (parse 13, core 65, +others); clippy -D +
+  fmt clean.**
 - **2026-06-24 (hook path fix)** — The installed agent hooks failed with
   `bash /home/user/mollify/scripts/mollify-report.sh: No such file or directory`.
   Two root causes: (1) the hook command hardcoded a bogus absolute path in

@@ -235,6 +235,14 @@ impl PyParser {
         collect_classes(root, bytes, &mut m);
         // Security candidates.
         collect_security(root, bytes, &mut m);
+        // Import-based weak-cipher candidates (needs the parsed import list).
+        security_imports(&mut m);
+        // Dedup hits sharing a (rule, line) — the import and call passes can both
+        // fire for one construct; keep output (and fingerprints) stable.
+        m.security_hits
+            .sort_by(|a, b| a.line.cmp(&b.line).then(a.rule.cmp(b.rule)));
+        m.security_hits
+            .dedup_by(|a, b| a.rule == b.rule && a.line == b.line);
 
         Ok(m)
     }
@@ -1055,6 +1063,69 @@ fn is_dynamic_string(arg: Node, bytes: &[u8]) -> bool {
     }
 }
 
+/// Cipher primitives considered broken/weak (bandit B304): DES/3DES, RC2/ARC2,
+/// RC4/ARC4, Blowfish, IDEA, CAST, XOR. Matched against import names and direct
+/// constructor calls.
+const WEAK_CIPHERS: &[&str] = &[
+    "DES",
+    "DES3",
+    "TripleDES",
+    "ARC2",
+    "RC2",
+    "ARC4",
+    "RC4",
+    "Blowfish",
+    "IDEA",
+    "CAST",
+    "XOR",
+];
+
+/// Import-based weak-cipher detection (bandit B304). Real cipher usage is
+/// import-aliased — `from Crypto.Cipher import DES as d; d.new(...)` — so the
+/// call site (`d.new`) carries no cipher identity. We flag the *import* of a
+/// weak cipher from a crypto module instead, which is deterministic and matches
+/// bandit's behavior. Covers `from Crypto.Cipher import ARC4`,
+/// `from Cryptodome.Cipher import Blowfish`, the `cryptography` `algorithms`
+/// re-exports, and `import Crypto.Cipher.DES`.
+fn security_imports(m: &mut ParsedModule) {
+    let mut hits: Vec<SecurityHit> = Vec::new();
+    for imp in &m.imports {
+        let from_crypto = imp.module.contains("Crypto") || imp.module.contains("cryptography");
+        if !from_crypto {
+            continue;
+        }
+        // `from <crypto-mod> import <Cipher> [as alias]` — pre-alias names.
+        for name in &imp.names {
+            if WEAK_CIPHERS.contains(&name.as_str()) {
+                hits.push(SecurityHit {
+                    rule: "weak-cipher",
+                    line: imp.line,
+                    detail: format!(
+                        "`{name}` (imported from `{}`) is a broken/weak cipher; use AES-GCM or ChaCha20-Poly1305",
+                        imp.module
+                    ),
+                });
+            }
+        }
+        // `import Crypto.Cipher.DES` — the cipher is the module's last segment.
+        if imp.names.is_empty() {
+            if let Some(seg) = imp.module.rsplit('.').next() {
+                if WEAK_CIPHERS.contains(&seg) {
+                    hits.push(SecurityHit {
+                        rule: "weak-cipher",
+                        line: imp.line,
+                        detail: format!(
+                            "`{}` is a broken/weak cipher; use AES-GCM or ChaCha20-Poly1305",
+                            imp.module
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    m.security_hits.extend(hits);
+}
+
 fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
     let Some(func) = call_func(call) else { return };
     let f = node_text(func, bytes);
@@ -1130,16 +1201,25 @@ fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
             format!("`{f}` is a weak hash; use sha256+ (or pass usedforsecurity=False)"),
         );
     }
-    // Weak ciphers (bandit B304/B305): DES/ARC4/Blowfish or ECB mode.
-    if matches!(last, "DES" | "ARC4" | "Blowfish" | "RC2" | "RC4")
-        && (f.contains("Crypto") || f.contains("cryptography") || f.contains("Cipher"))
-    {
+    // Weak ciphers (bandit B304): a weak cipher constructed directly, e.g.
+    // `algorithms.ARC4(key)` or `DES.new(...)` would surface via the import pass;
+    // here we catch the direct-constructor form where the cipher name is the
+    // callee (the `cryptography` `algorithms.<Cipher>(...)` idiom). Import-aliased
+    // uses (`from Crypto.Cipher import DES as d; d.new(...)`) are caught in
+    // `security_imports`.
+    if WEAK_CIPHERS.contains(&last) {
         hit(
             "weak-cipher",
             format!("`{f}` is a broken/weak cipher; use AES-GCM or ChaCha20-Poly1305"),
         );
     }
-    if last == "MODE_ECB" {
+    // Weak cipher *mode* (bandit B305): ECB leaks plaintext structure. ECB is
+    // referenced as an attribute argument (`cipher.new(key, AES.MODE_ECB)`), so
+    // scan the call's arguments for a `.MODE_ECB` reference.
+    if call_args(call)
+        .map(|a| node_text(a, bytes).contains("MODE_ECB"))
+        .unwrap_or(false)
+    {
         hit(
             "weak-cipher",
             "ECB mode leaks plaintext structure; use an authenticated mode (GCM)".into(),
@@ -1409,6 +1489,78 @@ mod tests {
         // eval on a literal is fine
         let ok = parse("eval(\"1+1\")\n");
         assert!(!ok.security_hits.iter().any(|h| h.rule == "dangerous-eval"));
+    }
+
+    #[test]
+    fn detects_weak_cipher_imports() {
+        // Import-aliased weak ciphers (the bandit ciphers.py idiom): the call
+        // site `pycrypto_des.new(...)` has no cipher identity, so detection must
+        // come from the import.
+        let m = parse(
+            "from Crypto.Cipher import DES as pycrypto_des\n\
+             from Cryptodome.Cipher import ARC4 as ax\n\
+             cipher = pycrypto_des.new(key, pycrypto_des.MODE_CTR)\n\
+             c2 = ax.new(key)\n",
+        );
+        let cipher_hits: Vec<_> = m
+            .security_hits
+            .iter()
+            .filter(|h| h.rule == "weak-cipher")
+            .collect();
+        assert_eq!(
+            cipher_hits.len(),
+            2,
+            "expected DES + ARC4 imports flagged, got {:?}",
+            m.security_hits
+        );
+        // Lines point at the imports (1 and 2), not the call sites.
+        let lines: Vec<u32> = cipher_hits.iter().map(|h| h.line).collect();
+        assert!(lines.contains(&1) && lines.contains(&2), "lines {lines:?}");
+    }
+
+    #[test]
+    fn detects_weak_cipher_direct_constructor_and_ecb() {
+        // `cryptography` idiom: cipher name is the callee (`algorithms.ARC4`).
+        let m = parse(
+            "from cryptography.hazmat.primitives.ciphers import algorithms, modes, Cipher\n\
+             c = Cipher(algorithms.ARC4(key), mode=None)\n",
+        );
+        assert!(
+            m.security_hits.iter().any(|h| h.rule == "weak-cipher"),
+            "expected ARC4 constructor flagged, got {:?}",
+            m.security_hits
+        );
+        // ECB mode passed as an argument attribute (bandit B305).
+        let ecb = parse("from Crypto.Cipher import AES\nc = AES.new(key, AES.MODE_ECB)\n");
+        assert!(
+            ecb.security_hits.iter().any(|h| h.rule == "weak-cipher"),
+            "expected ECB mode flagged, got {:?}",
+            ecb.security_hits
+        );
+    }
+
+    #[test]
+    fn strong_cipher_and_modes_not_flagged() {
+        // AES with an authenticated mode is fine — no weak-cipher noise.
+        let m = parse(
+            "from cryptography.hazmat.primitives.ciphers import algorithms, modes, Cipher\n\
+             c = Cipher(algorithms.AES(key), modes.GCM(iv))\n",
+        );
+        assert!(
+            !m.security_hits.iter().any(|h| h.rule == "weak-cipher"),
+            "AES-GCM should not be flagged, got {:?}",
+            m.security_hits
+        );
+        // A non-crypto import that merely shares a name must not trip detection.
+        let unrelated = parse("from myapp.utils import DES\nDES.do_thing()\n");
+        assert!(
+            !unrelated
+                .security_hits
+                .iter()
+                .any(|h| h.rule == "weak-cipher"),
+            "non-crypto `DES` import should not be flagged, got {:?}",
+            unrelated.security_hits
+        );
     }
 
     #[test]

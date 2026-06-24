@@ -151,4 +151,26 @@ mod tests {
             .contains("CWE-327"));
         std::fs::remove_dir_all(&d).ok();
     }
+
+    #[test]
+    fn surfaces_weak_cipher_with_cwe() {
+        let d = temp("sec3");
+        // Import-aliased weak cipher — the real-world (bandit) idiom that the
+        // previous call-only matcher missed entirely.
+        write(
+            &d,
+            "__init__.py",
+            "from Crypto.Cipher import DES as d\ncipher = d.new(key, d.MODE_ECB)\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let wc = f
+            .iter()
+            .find(|x| x.rule == "weak-cipher")
+            .expect("weak-cipher should be flagged");
+        assert_eq!(wc.category, Category::Security);
+        assert!(wc.reason.contains("CWE-327"), "got {}", wc.reason);
+        std::fs::remove_dir_all(&d).ok();
+    }
 }
