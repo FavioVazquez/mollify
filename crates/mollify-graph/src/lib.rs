@@ -247,6 +247,82 @@ impl ModuleGraph {
     pub fn edge_count(&self) -> usize {
         self.edges.len()
     }
+
+    /// Find import cycles: strongly-connected components of size > 1, plus
+    /// self-loops. Tarjan's algorithm; results are deterministic (each cycle's
+    /// members sorted, and the list sorted). Cross-module circular imports.
+    pub fn find_cycles(&self) -> Vec<Vec<FileId>> {
+        let n = self.modules.len();
+        let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut self_loops: Vec<usize> = Vec::new();
+        for (a, b) in &self.edges {
+            if a == b {
+                self_loops.push(a.0 as usize);
+            } else {
+                adj[a.0 as usize].push(b.0 as usize);
+            }
+        }
+
+        // Iterative Tarjan to avoid stack overflow on large graphs.
+        let mut index = vec![u32::MAX; n];
+        let mut low = vec![0u32; n];
+        let mut on_stack = vec![false; n];
+        let mut stack: Vec<usize> = Vec::new();
+        let mut idx: u32 = 0;
+        let mut out: Vec<Vec<FileId>> = Vec::new();
+
+        // Explicit DFS frame: (node, next child position).
+        for start in 0..n {
+            if index[start] != u32::MAX {
+                continue;
+            }
+            let mut call: Vec<(usize, usize)> = vec![(start, 0)];
+            while let Some(&(v, ci)) = call.last() {
+                if ci == 0 {
+                    index[v] = idx;
+                    low[v] = idx;
+                    idx += 1;
+                    stack.push(v);
+                    on_stack[v] = true;
+                }
+                if ci < adj[v].len() {
+                    let w = adj[v][ci];
+                    call.last_mut().unwrap().1 += 1;
+                    if index[w] == u32::MAX {
+                        call.push((w, 0));
+                    } else if on_stack[w] {
+                        low[v] = low[v].min(index[w]);
+                    }
+                } else {
+                    if low[v] == index[v] {
+                        let mut comp = Vec::new();
+                        loop {
+                            let w = stack.pop().unwrap();
+                            on_stack[w] = false;
+                            comp.push(FileId(w as u32));
+                            if w == v {
+                                break;
+                            }
+                        }
+                        if comp.len() > 1 {
+                            comp.sort();
+                            out.push(comp);
+                        }
+                    }
+                    call.pop();
+                    if let Some(&(parent, _)) = call.last() {
+                        low[parent] = low[parent].min(low[v]);
+                    }
+                }
+            }
+        }
+
+        for s in self_loops {
+            out.push(vec![FileId(s as u32)]);
+        }
+        out.sort();
+        out
+    }
 }
 
 /// Resolve a relative import (`from ..pkg import x` inside `a.b.c`) to a dotted
@@ -307,6 +383,23 @@ mod tests {
         let unused: Vec<_> = g.unused_files().iter().map(|m| m.dotted.clone()).collect();
         assert!(unused.contains(&"orphan".to_string()), "got {unused:?}");
         assert!(!unused.contains(&"used".to_string()));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn detects_import_cycle() {
+        let d = temp("cycle");
+        write(&d, "__init__.py", "import a
+import b
+");
+        write(&d, "a.py", "import b
+");
+        write(&d, "b.py", "import a
+");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let cycles = g.find_cycles();
+        assert!(cycles.iter().any(|c| c.len() == 2), "expected a 2-cycle, got {cycles:?}");
         std::fs::remove_dir_all(&d).ok();
     }
 

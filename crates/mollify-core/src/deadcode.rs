@@ -70,6 +70,12 @@ fn unused_symbols(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                     continue; // declared public API — treat as used
                 }
             }
+            // Framework-registered symbols (routes, tasks, fixtures, CLI
+            // commands, signal receivers, validators, …) are reached even with
+            // zero in-repo callers — the dominant false-positive killer.
+            if crate::plugins::is_framework_entry(d) {
+                continue;
+            }
             let defs_named = def_counts.get(d.name.as_str()).copied().unwrap_or(1);
             if graph.symbol_used(m.id, &d.name, defs_named) {
                 continue;
@@ -165,6 +171,24 @@ mod tests {
         let s = f.iter().find(|x| x.rule == "unused-export").unwrap();
         assert_eq!(s.confidence, Confidence::Certain);
         assert!(s.actions[0].auto_fixable);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn framework_decorator_suppresses_unused() {
+        let d = temp("fw");
+        write(&d, "__main__.py", "import app
+");
+        write(&d, "app.py", "import app
+
+@app.route('/x')
+def view():
+    return 1
+");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(!f.iter().any(|x| x.reason.contains("`view`")), "route should be reached, got {f:?}");
         std::fs::remove_dir_all(&d).ok();
     }
 
