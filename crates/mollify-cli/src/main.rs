@@ -30,6 +30,8 @@ enum Command {
     Deps(Scope),
     /// Scaffold a .mollifyrc and report detected layout.
     Init(Scope),
+    /// Run the Model Context Protocol server over stdio (for coding agents).
+    Mcp,
 }
 
 #[derive(clap::Args)]
@@ -55,6 +57,13 @@ fn main() {
         Command::DeadCode(s) => run_findings(&s, mollify_core::dead_code_report, "dead-code"),
         Command::Deps(s) => run_findings(&s, mollify_core::deps_report, "deps"),
         Command::Init(s) => run_init(&s),
+        Command::Mcp => match mollify_mcp::run() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("mollify mcp: {e}");
+                1
+            }
+        },
     };
     std::process::exit(code);
 }

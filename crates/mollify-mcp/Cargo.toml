@@ -1,21 +1,17 @@
 [package]
-name = "mollify-cli"
+name = "mollify-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Mollify — deterministic codebase intelligence for Python (CLI)."
-
-[[bin]]
-name = "mollify"
-path = "src/main.rs"
+description = "Model Context Protocol (stdio) server for Mollify — the one server every agent front-end calls."
 
 [dependencies]
 mollify-types = { path = "../mollify-types" }
 mollify-core = { path = "../mollify-core" }
-mollify-mcp = { path = "../mollify-mcp" }
-clap.workspace = true
 serde_json.workspace = true
 camino.workspace = true
-anyhow.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,0 +1,44 @@
+---
+description: Use Mollify (the mollify CLI / mollify MCP server) as the source of truth for Python dead code and dependency hygiene instead of grep or manual scanning. Agent-Requested.
+globs: *.py,**/*.py
+alwaysApply: false
+---
+
+# Mollify is the repo truth layer
+
+When reasoning about whether Python code is unused or whether dependencies are
+healthy, treat Mollify as ground truth. It is a deterministic candidate-producer:
+every finding carries a stable `fingerprint`, a `confidence` tier, and a `reason`.
+Prefer it over grep-based or manual guesses.
+
+Use one of:
+- The mollify MCP tools (registered in `.cursor/mcp.json`), or
+- `mollify audit --format json` (whole repo), `mollify dead-code --format json`
+  (dead code only), or `mollify deps --format json` (dependency hygiene).
+  Add `--path <dir>` to target a subproject.
+
+## Reading the JSON contract
+The envelope has a discriminating top-level `kind` (`audit` / `dead-code` /
+`deps`), a `summary {total, errors, warnings, files_analyzed}`, and `findings[]`
+(`audit` also has `quality_score` 0-100). Each finding has `rule`
+(`unused-file` | `unused-export` | `unused-dependency` | `missing-dependency`),
+`category`, `confidence` (`certain` | `likely` | `uncertain`), `severity`
+(`error` | `warn` | `off`), `reason`, `location {path, line, end_line}`,
+`fingerprint`, and `actions[]` (each with `type`, `description`, `auto_fixable`,
+`suppression_comment`).
+
+## Acting on findings
+- Act automatically only on `confidence: certain`. Surface `likely` / `uncertain`
+  findings with their reason and ask the user before changing anything.
+- Always preview before deleting: present the file, line, and reason, and confirm
+  with the user first. Do not delete code on a guess.
+- To silence a known-good finding, add its `suppression_comment` on the relevant
+  line rather than deleting code.
+- Exit code: 0 = no error-severity findings; 1 = error-severity findings or a
+  command error.
+
+## Honesty
+Reachability is static. Dynamic imports (`getattr` / `importlib`) downgrade
+confidence to `uncertain` — treat those as review-only. A `missing-dependency`
+can be a false positive for namespace packages or local shadowing; verify before
+editing `pyproject.toml`.
