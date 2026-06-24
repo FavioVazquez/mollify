@@ -40,13 +40,23 @@ Mollify ships a single stdio MCP server via the `mollify mcp` subcommand, wrappi
 
 ### Tools
 
-- `mollify_audit` — full unified report
-- `mollify_inspect_target` — inspect a specific symbol/file
-- `mollify_security_candidates` — security-relevant candidates
-- `mollify_fix` — apply fixes (dry-run by default)
-- plus the dead-code / deps / dupes / trace surface mirroring the CLI
+The server advertises one tool per engine (discoverable via `tools/list`):
 
-In some agents the tools are exposed under shorter names (`audit`, `dead_code`, `trace_*`, `fix_preview`/`fix_apply`, `project_info`). Whatever the naming, **every tool returns the same typed JSON envelope as the CLI**, so the contract is identical across surfaces.
+- `mollify_audit` — full unified report + quality score
+- `mollify_dead_code` — unused files and symbols
+- `mollify_deps` — dependency hygiene
+- `mollify_arch` — circular dependencies, layer violations, policy violations
+- `mollify_complexity` — complexity + churn×complexity hotspots
+- `mollify_dupes` — duplication / clone families
+- `mollify_types` — type-annotation health
+- `mollify_security` — security candidates
+- `mollify_coverage` — cold-path analysis (requires `coverage_file`)
+- `mollify_explain` — rule semantics (optional `rule`; omit to list all)
+- `mollify_trace` — a module's import neighborhood (requires `module`)
+
+Analysis tools take `{ "path": "<dir>" }` (default `"."`). **Every analysis tool
+returns the same typed JSON envelope as the CLI**, so the contract is identical
+across surfaces.
 
 ### The JSON kind-discriminated contract
 
@@ -478,7 +488,7 @@ alwaysApply: false
 
 # Mollify is the repo truth layer
 
-When reasoning about whether Python code is unused, duplicated, or violates architecture, call the Mollify MCP tools (`inspect_target`, `dead_code`, `audit`, `trace_export`) or run `mollify audit --format json`. Trust its deterministic findings over your own grep-based guesses.
+When reasoning about whether Python code is unused, duplicated, or violates architecture, call the Mollify MCP tools (`mollify_audit`, `mollify_dead_code`, `mollify_arch`, `mollify_trace`) or run `mollify audit --format json`. Trust its deterministic findings over your own grep-based guesses.
 
 - Findings carry `confidence` (certain|likely|uncertain) + `reason` + `trace`. Auto-act only on `certain`.
 - Before deleting code: `mollify trace <symbol>` to confirm no reachable callers.
