@@ -1,6 +1,6 @@
 //! Safe auto-fix: removes only `confidence: certain`, `auto_fixable` unused
-//! symbols (never files, never lower-confidence findings). Dry-run by default at
-//! the CLI; this module computes a plan and can apply it.
+//! symbols and unused imports (never files, never lower-confidence findings).
+//! Dry-run by default at the CLI; this module computes a plan and can apply it.
 
 use crate::dead_code_report;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -22,7 +22,7 @@ pub fn plan(root: &Utf8Path) -> Vec<FixEdit> {
         .findings
         .into_iter()
         .filter(|f| {
-            f.rule == "unused-export"
+            (f.rule == "unused-export" || f.rule == "unused-import")
                 && f.confidence == Confidence::Certain
                 && f.actions.first().is_some_and(|a| a.auto_fixable)
         })

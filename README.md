@@ -23,7 +23,7 @@ evidence with a stable fingerprint, a confidence tier, and a human-readable reas
 Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 > **Project status:** early but real. Phases 0–4 of the [plan](PLAN.md) are
-> substantially implemented, tested (64+ tests), and dogfooded; CI is green.
+> substantially implemented, tested (66+ tests), and dogfooded; CI is green.
 > See [`docs/STATUS.md`](docs/STATUS.md) for exactly what's done vs pending and
 > [`docs/adr/`](docs/adr) for design decisions. Honest about its edges — see
 > *Known limitations* below.
@@ -47,7 +47,7 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 | Area | Command | Rules |
 |---|---|---|
-| **Dead code** | `mollify dead-code` | `unused-file`, `unused-export` |
+| **Dead code** | `mollify dead-code` | `unused-file`, `unused-export`, `unused-import` |
 | **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency` |
 | **Architecture** | `mollify arch` | `circular-dependency`, `layer-violation`, custom policies |
 | **Complexity & hotspots** | `mollify complexity` | `high-complexity`, `hotspot` (churn × complexity) |

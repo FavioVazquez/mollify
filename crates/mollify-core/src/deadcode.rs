@@ -12,7 +12,67 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     unused_files(graph, &mut findings);
     unused_symbols(graph, &mut findings);
+    unused_imports(graph, &mut findings);
     findings
+}
+
+/// Flag imports whose every local binding is unused within the module. Skips
+/// `import *` (opaque), re-export idioms in `__init__.py` (downgraded), and
+/// modules with a dynamic sink. Only whole-statement-unused imports are emitted,
+/// so an autofix that deletes the line never drops a still-used name.
+fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
+    use rustc_hash::FxHashSet;
+    for m in &graph.modules {
+        let local: FxHashSet<&str> = m.parsed.local_uses.iter().map(|s| s.as_str()).collect();
+        let dunder_all: Option<&Vec<String>> = m.parsed.dunder_all.as_ref();
+        let is_init = m.path.file_name().is_some_and(|f| f == "__init__.py");
+        for imp in &m.parsed.imports {
+            if imp.is_star || imp.bindings.is_empty() {
+                continue; // star imports / unparsed bindings: can't be certain
+            }
+            // Used if any binding is referenced outside imports or re-exported.
+            let used = imp.bindings.iter().any(|b| {
+                local.contains(b.as_str()) || dunder_all.is_some_and(|all| all.contains(b))
+            });
+            if used {
+                continue;
+            }
+            let what = if imp.bindings.len() == 1 {
+                format!("`{}`", imp.bindings[0])
+            } else {
+                format!("`{}`", imp.bindings.join("`, `"))
+            };
+            // In __init__.py an import is usually a deliberate re-export; near a
+            // dynamic sink anything may be referenced indirectly.
+            let confidence = if is_init || m.parsed.has_dynamic_sink {
+                Confidence::Uncertain
+            } else {
+                Confidence::Certain
+            };
+            let rule = "unused-import";
+            out.push(Finding {
+                fingerprint: fingerprint(rule, &[m.path.as_str(), &imp.line.to_string()]),
+                rule: rule.into(),
+                category: Category::DeadCode,
+                severity: Severity::Warn,
+                confidence,
+                attribution: None,
+                reason: format!("import {what} is never used in this module"),
+                location: Location {
+                    path: m.path.clone(),
+                    line: imp.line,
+                    column: 0,
+                    end_line: None,
+                },
+                actions: vec![Action {
+                    kind: "remove-import".into(),
+                    description: format!("Remove the unused import {what}"),
+                    auto_fixable: confidence == Confidence::Certain,
+                    suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+                }],
+            });
+        }
+    }
 }
 
 fn unused_files(graph: &ModuleGraph, out: &mut Vec<Finding>) {
@@ -204,6 +264,59 @@ def view():
             !f.iter().any(|x| x.reason.contains("`view`")),
             "route should be reached, got {f:?}"
         );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn flags_unused_import_and_respects_usage_and_aliases() {
+        let d = temp("imp");
+        write(&d, "__main__.py", "print('hi')\n");
+        write(
+            &d,
+            "lib.py",
+            "import os\nimport sys\nfrom typing import List\nfrom typing import Dict\n\ndef f(x: List):\n    return sys.argv\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let imps: Vec<_> = f.iter().filter(|x| x.rule == "unused-import").collect();
+        // `os` and `Dict` are unused; `sys` and `List` are used. (Partial-line
+        // unused names are intentionally not flagged — only whole statements.)
+        assert!(
+            imps.iter().any(|x| x.reason.contains("`os`")),
+            "got {imps:?}"
+        );
+        assert!(
+            imps.iter().any(|x| x.reason.contains("`Dict`")),
+            "got {imps:?}"
+        );
+        assert!(!imps.iter().any(|x| x.reason.contains("`sys`")));
+        assert!(!imps.iter().any(|x| x.reason.contains("`List`")));
+        // Regular-module unused imports are certain + auto-fixable.
+        assert!(
+            imps.iter()
+                .find(|x| x.reason.contains("`os`"))
+                .unwrap()
+                .actions[0]
+                .auto_fixable
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn init_unused_import_is_uncertain_reexport() {
+        let d = temp("impinit");
+        write(&d, "__init__.py", "from .sub import thing\n");
+        write(&d, "sub.py", "thing = 1\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let imp = f.iter().find(|x| x.rule == "unused-import");
+        // Present, but never auto-fixed (re-export idiom).
+        if let Some(imp) = imp {
+            assert_eq!(imp.confidence, Confidence::Uncertain);
+            assert!(!imp.actions[0].auto_fixable);
+        }
         std::fs::remove_dir_all(&d).ok();
     }
 

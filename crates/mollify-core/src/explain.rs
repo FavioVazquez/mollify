@@ -10,6 +10,12 @@ pub fn text(rule: &str) -> Option<&'static str> {
             Confidence: certain when there is no dynamic import sink in the project. \
             Action: delete the file, or mark its module as an entry point."
         }
+        "unused-import" => {
+            "An imported name that is never referenced outside its own import in \
+            the module. Confidence: certain in a regular module with no dynamic \
+            sink (auto-fixable); uncertain in `__init__.py` (likely a re-export). \
+            Action: remove the import."
+        }
         "unused-export" => {
             "A top-level function/class never referenced outside its own \
             module and not listed in `__all__`. Confidence: likely (dynamic access via \
@@ -94,6 +100,7 @@ pub fn text(rule: &str) -> Option<&'static str> {
 pub const RULES: &[&str] = &[
     "unused-file",
     "unused-export",
+    "unused-import",
     "unused-dependency",
     "missing-dependency",
     "circular-dependency",
