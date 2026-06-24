@@ -67,6 +67,8 @@ pub struct Import {
 pub struct FunctionComplexity {
     pub name: String,
     pub line: u32,
+    /// Last line of the function (inclusive) — for coverage range checks.
+    pub end_line: u32,
     /// McCabe cyclomatic complexity (1 + decision points).
     pub cyclomatic: u32,
     /// SonarSource-style cognitive complexity (nesting-weighted).
@@ -532,6 +534,7 @@ fn collect_complexity(root: Node, bytes: &[u8], m: &mut ParsedModule) {
                 m.functions.push(FunctionComplexity {
                     name: node_text(name, bytes).to_string(),
                     line: node.start_position().row as u32 + 1,
+                    end_line: node.end_position().row as u32 + 1,
                     cyclomatic: 1 + count_cyclo(body),
                     cognitive: count_cognitive(body, 0),
                     params_total,
