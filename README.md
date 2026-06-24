@@ -15,10 +15,20 @@ Python and extended.
 ## What works today
 - **Dead code** — reachability-based unused files and top-level
   functions/classes/variables, with `certain` / `likely` / `uncertain`
-  confidence tiers (`__all__`, dunder, and dynamic-import aware).
+  confidence tiers (`__all__`, dunder, framework-decorator, and dynamic-import aware).
 - **Dependency hygiene** — unused and missing distributions from
   `pyproject.toml` (PEP 621 + Poetry + PEP 735), with stdlib + import→distribution
   alias handling.
+- **Architecture** — circular-dependency detection (Tarjan SCC over the import graph).
+- **Complexity** — cyclomatic + cognitive complexity hotspots per function.
+- **Duplication** — token-based clone families (Rabin-Karp).
+- **Type-health** — fully-untyped public functions (Python-specific; no fallow analog).
+- **Framework awareness** — routes/tasks/fixtures/commands/validators are treated
+  as reached (the dead-code false-positive killer).
+- **CI-ready** — `--format human|json|sarif`, `--gate new-only --base <ref>`,
+  `.mollifyrc.json` severity gating, and `mollify fix` for safe removals.
+- **Agent-native** — an MCP server (`mollify mcp`) plus shipped integrations for
+  Devin/Cascade, Claude Code, Codex, Cursor, and Gemini CLI.
 - **Deterministic JSON contract** — a `kind`-discriminated envelope with stable
   fingerprints, designed for CI and coding agents.
 
