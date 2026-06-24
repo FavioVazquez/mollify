@@ -122,7 +122,9 @@ pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
 /// `mollify dupes` — duplication / clone families.
 pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(&config::load(root), &graph, dupes::analyze(&graph))
+    let cfg = config::load(root);
+    let findings = dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines);
+    finalize(&cfg, &graph, findings)
 }
 
 /// `mollify types` — type-annotation health.
@@ -264,7 +266,11 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
         cfg.max_cyclomatic,
         cfg.max_cognitive,
     ));
-    findings.extend(dupes::analyze(&graph));
+    findings.extend(dupes::analyze_with(
+        &graph,
+        cfg.dup_min_tokens,
+        cfg.dup_min_lines,
+    ));
     findings.extend(typehealth::analyze(&graph));
     findings.extend(security::analyze(&graph));
     findings.extend(hotspots::analyze(root, &graph));

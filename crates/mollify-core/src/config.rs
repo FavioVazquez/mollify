@@ -14,6 +14,10 @@ pub struct Config {
     pub ignore: Vec<String>,
     pub max_cyclomatic: u32,
     pub max_cognitive: u32,
+    /// Minimum normalized-token window for a duplication clone (default 40).
+    pub dup_min_tokens: usize,
+    /// Minimum line span for a duplication clone (default 5).
+    pub dup_min_lines: u32,
     /// Architecture preset name (informational): layered | hexagonal | feature-sliced | bulletproof.
     pub arch_preset: Option<String>,
     /// Ordered layer names, top (most dependent) → bottom. A layer may import
@@ -64,6 +68,8 @@ impl Default for Config {
             ignore: Vec::new(),
             max_cyclomatic: crate::complexity::DEFAULT_CYCLOMATIC,
             max_cognitive: crate::complexity::DEFAULT_COGNITIVE,
+            dup_min_tokens: crate::dupes::MIN_TOKENS,
+            dup_min_lines: crate::dupes::MIN_LINES,
             arch_preset: None,
             arch_layers: Vec::new(),
             policies: Vec::new(),
@@ -100,6 +106,14 @@ pub fn load(root: &Utf8Path) -> Config {
     }
     if let Some(c) = v.get("max_cognitive").and_then(|n| n.as_u64()) {
         cfg.max_cognitive = c as u32;
+    }
+    if let Some(dup) = v.get("duplication").and_then(|d| d.as_object()) {
+        if let Some(n) = dup.get("min_tokens").and_then(|x| x.as_u64()) {
+            cfg.dup_min_tokens = n as usize;
+        }
+        if let Some(n) = dup.get("min_lines").and_then(|x| x.as_u64()) {
+            cfg.dup_min_lines = n as u32;
+        }
     }
     if let Some(arch) = v.get("architecture").and_then(|a| a.as_object()) {
         cfg.arch_preset = arch
