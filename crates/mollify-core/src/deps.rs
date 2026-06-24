@@ -12,19 +12,46 @@ use mollify_graph::ModuleGraph;
 use mollify_types::{Action, Category, Confidence, Finding, Location, Severity};
 use rustc_hash::FxHashSet;
 
-/// Analyze dependency hygiene. `root` is the project root (where pyproject lives).
+/// Analyze dependency hygiene. `root` is the project root. Declared dependencies
+/// are gathered from `pyproject.toml` (PEP 621 + Poetry + uv + pdm + PEP 735) and
+/// any `requirements*.txt` files, so projects without a pyproject still work.
 pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     let pyproject_path = root.join("pyproject.toml");
-    let Ok(text) = std::fs::read_to_string(&pyproject_path) else {
-        return findings; // no manifest → nothing to check
-    };
-    // toml 0.9: parse a whole document as a Table, then view it as a Value.
-    let Ok(table) = text.parse::<toml::Table>() else {
-        return findings;
-    };
-    let value = toml::Value::Table(table);
-    let declared = declared_dependencies(&value);
+    let mut declared = FxHashSet::default();
+    // Manifest the findings point at (pyproject if present, else a requirements file).
+    let mut manifest = pyproject_path.clone();
+
+    if let Ok(text) = std::fs::read_to_string(&pyproject_path) {
+        if let Ok(table) = text.parse::<toml::Table>() {
+            declared.extend(declared_dependencies(&toml::Value::Table(table)));
+        }
+    }
+    // requirements*.txt (pip / pip-tools) — `name[extras]op version` per line.
+    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        let fname = entry.file_name();
+        let fname = fname.to_string_lossy();
+        if fname.starts_with("requirements") && fname.ends_with(".txt") {
+            if let Ok(text) = std::fs::read_to_string(entry.path()) {
+                let before = declared.len();
+                for line in text.lines() {
+                    let line = line.split('#').next().unwrap_or("").trim();
+                    if line.is_empty() || line.starts_with('-') {
+                        continue;
+                    }
+                    if let Some(name) = spec_name(line) {
+                        declared.insert(name);
+                    }
+                }
+                if declared.len() > before && !pyproject_path.exists() {
+                    if let Ok(p) = camino::Utf8PathBuf::from_path_buf(entry.path()) {
+                        manifest = p;
+                    }
+                }
+            }
+        }
+    }
+    let pyproject_path = manifest;
     if declared.is_empty() {
         return findings;
     }
@@ -163,6 +190,51 @@ fn declared_dependencies(value: &toml::Value) -> FxHashSet<String> {
             set.insert(normalize_dist(name));
         }
     }
+    // Poetry groups: [tool.poetry.group.<g>.dependencies].
+    if let Some(groups) = value
+        .get("tool")
+        .and_then(|t| t.get("poetry"))
+        .and_then(|p| p.get("group"))
+        .and_then(|g| g.as_table())
+    {
+        for (_g, gv) in groups {
+            if let Some(tbl) = gv.get("dependencies").and_then(|d| d.as_table()) {
+                for name in tbl.keys() {
+                    set.insert(normalize_dist(name));
+                }
+            }
+        }
+    }
+    // uv: [tool.uv] dev-dependencies (array of specs).
+    if let Some(arr) = value
+        .get("tool")
+        .and_then(|t| t.get("uv"))
+        .and_then(|u| u.get("dev-dependencies"))
+        .and_then(|d| d.as_array())
+    {
+        for item in arr {
+            if let Some(name) = item.as_str().and_then(spec_name) {
+                set.insert(name);
+            }
+        }
+    }
+    // pdm: [tool.pdm.dev-dependencies] = { group = [specs...] }.
+    if let Some(tbl) = value
+        .get("tool")
+        .and_then(|t| t.get("pdm"))
+        .and_then(|p| p.get("dev-dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        for (_g, arr) in tbl {
+            if let Some(arr) = arr.as_array() {
+                for item in arr {
+                    if let Some(name) = item.as_str().and_then(spec_name) {
+                        set.insert(name);
+                    }
+                }
+            }
+        }
+    }
     set
 }
 
@@ -259,6 +331,35 @@ mod tests {
         // requests is declared and used → no finding; os is stdlib → ignored.
         assert!(!f.iter().any(|x| x.reason.contains("requests")));
         assert!(!f.iter().any(|x| x.reason.contains("`os`")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn reads_requirements_txt_when_no_pyproject() {
+        let d = temp("req");
+        std::fs::write(
+            d.join("requirements.txt"),
+            "requests==2.0\nunused-lib==1.0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("app.py"),
+            "import requests\nimport numpy\nrequests.get('x')\nnumpy.array([])\n",
+        )
+        .unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "unused-dependency" && x.reason.contains("unused-lib")),
+            "got {f:?}"
+        );
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "missing-dependency" && x.reason.contains("numpy")),
+            "got {f:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 
