@@ -56,10 +56,11 @@ fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
     }
 }
 
-/// Flag imports whose every local binding is unused within the module. Skips
-/// `import *` (opaque), re-export idioms in `__init__.py` (downgraded), and
-/// modules with a dynamic sink. Only whole-statement-unused imports are emitted,
-/// so an autofix that deletes the line never drops a still-used name.
+/// Flag unused imports. A *whole-statement*-unused import (every binding unused)
+/// is `certain` + auto-fixable (the line can be deleted). A *partially*-unused
+/// `from x import a, b` (some names used) reports each unused name as `likely`
+/// (not auto-fixed — rewriting the line precisely is left to the human). Skips
+/// `import *`, `__init__.py` re-exports (downgraded), and dynamic-sink modules.
 fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
     use rustc_hash::FxHashSet;
     for m in &graph.modules {
@@ -70,47 +71,76 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
             if imp.is_star || imp.bindings.is_empty() || imp.type_checking_only {
                 continue; // star imports / unparsed bindings / type-only: skip
             }
-            // Used if any binding is referenced outside imports or re-exported.
-            let used = imp.bindings.iter().any(|b| {
+            let is_used = |b: &String| {
                 local.contains(b.as_str()) || dunder_all.is_some_and(|all| all.contains(b))
-            });
-            if used {
+            };
+            let unused: Vec<&String> = imp.bindings.iter().filter(|b| !is_used(b)).collect();
+            if unused.is_empty() {
                 continue;
             }
-            let what = if imp.bindings.len() == 1 {
-                format!("`{}`", imp.bindings[0])
-            } else {
-                format!("`{}`", imp.bindings.join("`, `"))
-            };
-            // In __init__.py an import is usually a deliberate re-export; near a
-            // dynamic sink anything may be referenced indirectly.
-            let confidence = if is_init || m.parsed.has_dynamic_sink {
-                Confidence::Uncertain
-            } else {
-                Confidence::Certain
-            };
+            let whole = unused.len() == imp.bindings.len();
             let rule = "unused-import";
-            out.push(Finding {
-                fingerprint: fingerprint(rule, &[m.path.as_str(), &imp.line.to_string()]),
-                rule: rule.into(),
-                category: Category::DeadCode,
-                severity: Severity::Warn,
-                confidence,
-                attribution: None,
-                reason: format!("import {what} is never used in this module"),
-                location: Location {
-                    path: m.path.clone(),
-                    line: imp.line,
-                    column: 0,
-                    end_line: None,
-                },
-                actions: vec![Action {
-                    kind: "remove-import".into(),
-                    description: format!("Remove the unused import {what}"),
-                    auto_fixable: confidence == Confidence::Certain,
-                    suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
-                }],
-            });
+            if whole {
+                // Entire statement unused → safe to delete the line.
+                let what = format!("`{}`", imp.bindings.join("`, `"));
+                let confidence = if is_init || m.parsed.has_dynamic_sink {
+                    Confidence::Uncertain
+                } else {
+                    Confidence::Certain
+                };
+                out.push(Finding {
+                    fingerprint: fingerprint(rule, &[m.path.as_str(), &imp.line.to_string()]),
+                    rule: rule.into(),
+                    category: Category::DeadCode,
+                    severity: Severity::Warn,
+                    confidence,
+                    attribution: None,
+                    reason: format!("import {what} is never used in this module"),
+                    location: Location {
+                        path: m.path.clone(),
+                        line: imp.line,
+                        column: 0,
+                        end_line: None,
+                    },
+                    actions: vec![Action {
+                        kind: "remove-import".into(),
+                        description: format!("Remove the unused import {what}"),
+                        auto_fixable: confidence == Confidence::Certain,
+                        suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+                    }],
+                });
+            } else {
+                // Some names still used: report each unused name (not auto-fixed,
+                // since rewriting a shared import line precisely is risky).
+                for name in unused {
+                    out.push(Finding {
+                        fingerprint: fingerprint(
+                            rule,
+                            &[m.path.as_str(), &imp.line.to_string(), name],
+                        ),
+                        rule: rule.into(),
+                        category: Category::DeadCode,
+                        severity: Severity::Warn,
+                        confidence: Confidence::Likely,
+                        attribution: None,
+                        reason: format!(
+                            "imported name `{name}` is never used (other names on this import are)"
+                        ),
+                        location: Location {
+                            path: m.path.clone(),
+                            line: imp.line,
+                            column: 0,
+                            end_line: None,
+                        },
+                        actions: vec![Action {
+                            kind: "remove-import-name".into(),
+                            description: format!("Remove `{name}` from the import"),
+                            auto_fixable: false,
+                            suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+                        }],
+                    });
+                }
+            }
         }
     }
 }
@@ -386,6 +416,28 @@ def view():
             !f.iter().any(|x| x.rule == "unused-import"),
             "TYPE_CHECKING + string-annotation import wrongly flagged: {f:?}"
         );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn flags_partial_unused_import_name() {
+        let d = temp("partial");
+        write(&d, "__main__.py", "import lib\nlib.f()\n");
+        write(
+            &d,
+            "lib.py",
+            "from typing import List, Dict\n\ndef f() -> List:\n    return []\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        // Dict unused (List used) → partial report, not auto-fixable.
+        let dict = f
+            .iter()
+            .find(|x| x.rule == "unused-import" && x.reason.contains("`Dict`"));
+        assert!(dict.is_some(), "got {f:?}");
+        assert!(!dict.unwrap().actions[0].auto_fixable);
+        assert!(!f.iter().any(|x| x.reason.contains("`List`")));
         std::fs::remove_dir_all(&d).ok();
     }
 
