@@ -8,9 +8,11 @@
 //! Determinism/protocol invariant: **all logging goes to stderr**; stdout
 //! carries only protocol messages.
 //!
-//! Tools exposed: `mollify_audit`, `mollify_dead_code`, `mollify_deps`. Each
-//! accepts `{ "path": "<dir>" }` (default ".") and returns the kind-discriminated
-//! JSON report as text content.
+//! Tools exposed: `mollify_audit`, `mollify_dead_code`, `mollify_deps`,
+//! `mollify_arch`, `mollify_complexity`, `mollify_dupes`, `mollify_types`,
+//! `mollify_security`, `mollify_coverage`, `mollify_explain`, `mollify_trace`.
+//! Analysis tools accept `{ "path": "<dir>" }` (default ".") and return the
+//! kind-discriminated JSON report as text content.
 
 use camino::Utf8PathBuf;
 use serde_json::{json, Value};
@@ -84,10 +86,38 @@ fn tool_list() -> Value {
         "type": "object",
         "properties": { "path": { "type": "string", "description": "Project root to analyze (default \".\")." } }
     });
+    let coverage_schema = json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Project root to analyze (default \".\")." },
+            "coverage_file": { "type": "string", "description": "Path to a coverage.py JSON report (`coverage json`)." }
+        },
+        "required": ["coverage_file"]
+    });
+    let explain_schema = json!({
+        "type": "object",
+        "properties": { "rule": { "type": "string", "description": "Rule id to explain (omit to list all rules)." } }
+    });
+    let trace_schema = json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Project root to analyze (default \".\")." },
+            "module": { "type": "string", "description": "Module to trace (dotted name or trailing segment)." }
+        },
+        "required": ["module"]
+    });
     json!([
-        { "name": "mollify_audit", "description": "Full unified report (dead code + dependency hygiene) with a 0-100 quality score, as deterministic JSON.", "inputSchema": path_schema },
+        { "name": "mollify_audit", "description": "Full unified report across all engines with a 0-100 quality score, as deterministic JSON.", "inputSchema": path_schema },
         { "name": "mollify_dead_code", "description": "Reachability-based unused files and top-level symbols, with confidence tiers.", "inputSchema": path_schema },
-        { "name": "mollify_deps", "description": "Dependency hygiene: unused and missing distributions from pyproject.toml.", "inputSchema": path_schema },
+        { "name": "mollify_deps", "description": "Dependency hygiene: unused and missing distributions.", "inputSchema": path_schema },
+        { "name": "mollify_arch", "description": "Architecture: circular dependencies, layer-boundary violations, and policy violations.", "inputSchema": path_schema },
+        { "name": "mollify_complexity", "description": "Cyclomatic + cognitive complexity and churn x complexity hotspots.", "inputSchema": path_schema },
+        { "name": "mollify_dupes", "description": "Duplication / clone families (token-based).", "inputSchema": path_schema },
+        { "name": "mollify_types", "description": "Type-annotation health: fully-untyped public functions.", "inputSchema": path_schema },
+        { "name": "mollify_security", "description": "Security candidates (eval/exec, shell=True, unsafe deserialization, hardcoded secrets, ...).", "inputSchema": path_schema },
+        { "name": "mollify_coverage", "description": "Cold-path analysis: reachable functions never executed in a coverage.py JSON report.", "inputSchema": coverage_schema },
+        { "name": "mollify_explain", "description": "Explain a rule id (semantics, confidence, action). Omit `rule` to list all rules.", "inputSchema": explain_schema },
+        { "name": "mollify_trace", "description": "A module's import neighborhood: what it imports and what imports it.", "inputSchema": trace_schema },
     ])
 }
 
@@ -97,25 +127,71 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
         .and_then(|p| p.get("name"))
         .and_then(|n| n.as_str())
         .unwrap_or("");
-    let path = params
-        .and_then(|p| p.get("arguments"))
-        .and_then(|a| a.get("path"))
-        .and_then(|v| v.as_str())
-        .unwrap_or(".");
+    let args = params.and_then(|p| p.get("arguments"));
+    let arg_str = |key: &str| args.and_then(|a| a.get(key)).and_then(|v| v.as_str());
+    let path = arg_str("path").unwrap_or(".");
     let root = Utf8PathBuf::from(path);
 
+    use mollify_types::Report;
     let report_json = match name {
         "mollify_audit" => {
-            let r = mollify_core::audit_report(&root);
-            serde_json::to_string_pretty(&mollify_types::Report::Audit(r))
+            serde_json::to_string_pretty(&Report::Audit(mollify_core::audit_report(&root)))
         }
         "mollify_dead_code" => {
-            let r = mollify_core::dead_code_report(&root);
-            serde_json::to_string_pretty(&mollify_types::Report::DeadCode(r))
+            serde_json::to_string_pretty(&Report::DeadCode(mollify_core::dead_code_report(&root)))
         }
         "mollify_deps" => {
-            let r = mollify_core::deps_report(&root);
-            serde_json::to_string_pretty(&mollify_types::Report::Deps(r))
+            serde_json::to_string_pretty(&Report::Deps(mollify_core::deps_report(&root)))
+        }
+        "mollify_arch" => {
+            serde_json::to_string_pretty(&Report::Arch(mollify_core::arch_report(&root)))
+        }
+        "mollify_complexity" => serde_json::to_string_pretty(&Report::Complexity(
+            mollify_core::complexity_report(&root),
+        )),
+        "mollify_dupes" => {
+            serde_json::to_string_pretty(&Report::Dupes(mollify_core::dupes_report(&root)))
+        }
+        "mollify_types" => {
+            serde_json::to_string_pretty(&Report::Types(mollify_core::types_report(&root)))
+        }
+        "mollify_security" => {
+            serde_json::to_string_pretty(&Report::Security(mollify_core::security_report(&root)))
+        }
+        "mollify_coverage" => {
+            let Some(cov) = arg_str("coverage_file") else {
+                return error(id, -32602, "mollify_coverage requires `coverage_file`");
+            };
+            serde_json::to_string_pretty(&Report::Coverage(mollify_core::coverage_report(
+                &root,
+                &Utf8PathBuf::from(cov),
+            )))
+        }
+        "mollify_explain" => {
+            let body = match arg_str("rule") {
+                Some(rule) => match mollify_core::explain::text(rule) {
+                    Some(t) => json!({ "rule": rule, "explanation": t }),
+                    None => json!({ "rule": rule, "error": "unknown rule" }),
+                },
+                None => json!({ "rules": mollify_core::explain::RULES }),
+            };
+            serde_json::to_string_pretty(&body)
+        }
+        "mollify_trace" => {
+            let Some(module) = arg_str("module") else {
+                return error(id, -32602, "mollify_trace requires `module`");
+            };
+            let graph = mollify_core::build_graph(&root);
+            let body = match mollify_core::trace::module(&graph, module) {
+                Some(t) => json!({
+                    "kind": "trace", "target": t.target,
+                    "imports": t.imports, "imported_by": t.imported_by,
+                }),
+                None => {
+                    json!({ "kind": "trace", "error": format!("no module matching `{module}`") })
+                }
+            };
+            serde_json::to_string_pretty(&body)
         }
         other => return error(id, -32602, &format!("unknown tool: {other}")),
     };
@@ -157,14 +233,35 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_the_three_tools() {
+    fn tools_list_advertises_all_engines() {
         let req = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
         let resp = dispatch(&req).unwrap();
         let tools = resp["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"mollify_audit"));
-        assert!(names.contains(&"mollify_dead_code"));
-        assert!(names.contains(&"mollify_deps"));
+        for expected in [
+            "mollify_audit",
+            "mollify_dead_code",
+            "mollify_deps",
+            "mollify_arch",
+            "mollify_complexity",
+            "mollify_dupes",
+            "mollify_types",
+            "mollify_security",
+            "mollify_coverage",
+            "mollify_explain",
+            "mollify_trace",
+        ] {
+            assert!(names.contains(&expected), "missing tool {expected}");
+        }
+    }
+
+    #[test]
+    fn explain_tool_returns_rule_text() {
+        let req = json!({"jsonrpc":"2.0","id":7,"method":"tools/call",
+            "params":{"name":"mollify_explain","arguments":{"rule":"circular-dependency"}}});
+        let resp = dispatch(&req).unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("cycle"));
     }
 
     #[test]
