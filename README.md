@@ -23,7 +23,7 @@ evidence with a stable fingerprint, a confidence tier, and a human-readable reas
 Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 > **Project status:** early but real. Phases 0–4 of the [plan](PLAN.md) are
-> substantially implemented, tested (66+ tests), and dogfooded; CI is green.
+> substantially implemented, tested (68+ tests), and dogfooded; CI is green.
 > See [`docs/STATUS.md`](docs/STATUS.md) for exactly what's done vs pending and
 > [`docs/adr/`](docs/adr) for design decisions. Honest about its edges — see
 > *Known limitations* below.
@@ -63,7 +63,10 @@ Also: **Jupyter notebooks (`.ipynb`)** are discovered and analyzed cell-by-cell;
 **architecture presets** (`layered`/`hexagonal`/`feature-sliced`/`bulletproof`) and
 **declarative rule packs** (ban imports/calls per path); `mollify fix` to safely
 remove `certain` unused symbols; `mollify explain <rule>` for rule semantics; and
-`mollify trace <module>` for a module's import neighborhood.
+`mollify trace <module>` for a module's import neighborhood; `mollify inspect
+<file>` for a per-file evidence bundle; `mollify list` for project topology; and
+**regression baselines** (`--save-baseline` / `--baseline --fail-on-regression`)
+to gate CI on *new* issues without git.
 
 ## Install
 

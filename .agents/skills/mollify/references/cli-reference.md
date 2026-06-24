@@ -18,6 +18,8 @@
 | `mollify fix [--apply]` | Remove `certain` + `auto_fixable` unused symbols **and unused imports**. Dry-run unless `--apply`. |
 | `mollify explain [<rule>]` | Explain a rule id (semantics, confidence, action). No argument lists all rules. |
 | `mollify trace <module>` | Import neighborhood of a module: what it imports and what imports it. |
+| `mollify inspect <file>` | Evidence bundle for one file: its findings + import neighborhood. |
+| `mollify list [entry-points\|files\|frameworks]` | Project topology. |
 | `mollify watch [--interval-ms]` | Re-run `audit` on any `.py` change (poll-based; Ctrl-C to stop). |
 | `mollify init` | Write a starter `.mollifyrc.json`. |
 | `mollify mcp` | Run the MCP stdio server (for coding agents). |
@@ -27,6 +29,10 @@
 - `--format human|json|sarif` — output format (default `human`). `json` is the kind-discriminated contract; `sarif` is SARIF 2.1.0 for code scanning.
 - `--gate all|new-only` — `new-only` keeps only findings in changed files (introduced).
 - `--base <ref>` — git base ref for `--gate new-only` (e.g. `origin/main`).
+- `--save-baseline <f>` — write a regression baseline (finding fingerprints) and exit 0.
+- `--baseline <f>` — keep only findings new since that baseline.
+- `--fail-on-regression` — with `--baseline`, exit non-zero if any new findings appeared.
+- `--brief` — advisory mode: print the report but always exit 0.
 
 ## Exit codes
 - `0` — no `error`-severity findings.

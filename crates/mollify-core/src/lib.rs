@@ -13,6 +13,7 @@ use mollify_types::{
 };
 
 pub mod arch;
+pub mod baseline;
 pub mod complexity;
 pub mod config;
 pub mod coverage;

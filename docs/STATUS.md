@@ -111,6 +111,12 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     (25k+ advisories). +tests.
   - ✅ **MCP server exposes every engine** (`mollify-mcp`): audit/dead-code/deps/arch/
     complexity/dupes/types/security/coverage/supply-chain + explain + trace. +tests.
+  - ✅ **Regression baselines** (`baseline.rs`) — `--save-baseline`/`--baseline`/
+    `--fail-on-regression`: snapshot finding fingerprints, then gate on what's *new*
+    (git-free, survives file moves). Complements `--gate new-only`. +tests.
+  - ✅ **`mollify inspect <file>`** — per-file evidence bundle (findings + import
+    neighborhood); **`mollify list`** (entry-points/files/frameworks topology);
+    **`audit --brief`** advisory mode (always exit 0).
   - ✅ **Unused-import detection + autofix** (`deadcode.rs::unused_imports`) — parser
     now tracks import *bindings* (alias-aware) and *local uses* (identifiers outside
     import statements); flags whole-statement-unused imports (`unused-import`), certain
