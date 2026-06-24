@@ -651,95 +651,44 @@ fn run_watch(a: &WatchArgs) -> i32 {
 }
 
 fn run_inspect(a: &InspectArgs) -> i32 {
-    // All findings for the project, filtered to the requested file.
-    let report = mollify_core::audit_report(&a.path);
-    let matches: Vec<&Finding> = report
-        .findings
-        .iter()
-        .filter(|f| {
-            let p = f.location.path.as_str();
-            p == a.file || p.ends_with(&a.file) || p.ends_with(&format!("/{}", a.file))
-        })
-        .collect();
-    // Import neighborhood (best-effort): match the file's module by path stem.
-    let graph = mollify_core::build_graph(&a.path);
-    let module = graph
-        .modules
-        .iter()
-        .find(|m| {
-            let p = m.path.as_str();
-            p == a.file || p.ends_with(&a.file) || p.ends_with(&format!("/{}", a.file))
-        })
-        .map(|m| m.dotted.clone());
-    let trace = module
-        .as_deref()
-        .and_then(|d| mollify_core::trace::module(&graph, d));
-
+    let ins = mollify_core::inspect(&a.path, &a.file);
     match a.format {
         Format::Json => {
             let body = serde_json::json!({
                 "kind": "inspect",
-                "file": a.file,
-                "module": module,
-                "findings": matches,
-                "imports": trace.as_ref().map(|t| &t.imports),
-                "imported_by": trace.as_ref().map(|t| &t.imported_by),
+                "file": ins.file,
+                "module": ins.module,
+                "findings": ins.findings,
+                "imports": ins.imports,
+                "imported_by": ins.imported_by,
             });
             println!("{}", serde_json::to_string_pretty(&body).unwrap());
         }
         _ => {
-            println!("Mollify inspect — {}", a.file);
-            if let Some(m) = &module {
+            println!("Mollify inspect — {}", ins.file);
+            if let Some(m) = &ins.module {
                 println!("module: {m}");
             }
-            if let Some(t) = &trace {
-                println!(
-                    "imports {} module(s); imported by {} module(s)",
-                    t.imports.len(),
-                    t.imported_by.len()
-                );
-            }
-            println!("{} finding(s):", matches.len());
-            print_findings_refs(&matches);
+            println!(
+                "imports {} module(s); imported by {} module(s)",
+                ins.imports.len(),
+                ins.imported_by.len()
+            );
+            println!("{} finding(s):", ins.findings.len());
+            let refs: Vec<&Finding> = ins.findings.iter().collect();
+            print_findings_refs(&refs);
         }
     }
     0
 }
 
 fn run_list(a: &ListArgs) -> i32 {
-    let graph = mollify_core::build_graph(&a.path);
-    let mut rows: Vec<String> = match a.kind {
-        ListKind::EntryPoints => graph
-            .modules
-            .iter()
-            .filter(|m| m.is_entry)
-            .map(|m| format!("{}  ({})", m.dotted, m.path))
-            .collect(),
-        ListKind::Files => graph
-            .modules
-            .iter()
-            .map(|m| format!("{}  ({})", m.dotted, m.path))
-            .collect(),
-        ListKind::Frameworks => {
-            let mut fw: std::collections::BTreeSet<String> = Default::default();
-            for m in &graph.modules {
-                for d in &m.parsed.definitions {
-                    if mollify_core::plugins::is_framework_entry(d) {
-                        for dec in &d.decorators {
-                            fw.insert(dec.split('.').next().unwrap_or(dec).to_string());
-                        }
-                    }
-                }
-            }
-            fw.into_iter().collect()
-        }
-    };
-    rows.sort();
     let label = match a.kind {
         ListKind::EntryPoints => "entry-points",
         ListKind::Files => "files",
         ListKind::Frameworks => "frameworks",
     };
+    let rows = mollify_core::list_topology(&a.path, label);
     match a.format {
         Format::Json => {
             println!(
@@ -753,7 +702,7 @@ fn run_list(a: &ListArgs) -> i32 {
         _ => {
             println!("Mollify list:{label} — {} item(s)", rows.len());
             for r in &rows {
-                println!("  {r}");
+                println!("  {}", r.replace('\t', "  "));
             }
         }
     }
