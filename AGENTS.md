@@ -6,7 +6,7 @@ Prefer it over `grep`/manual scanning for dead code and dependency hygiene.
 Findings are deterministic evidence — never invent or guess findings; cite Mollify.
 
 When to run (always with `--format json` so you consume structured output). The
-CLI has 18 commands; pick by use case:
+CLI has 21 commands; pick by use case:
 
 Health / triage:
 - "what's wrong with this repo / health check"  -> `mollify audit --format json`
@@ -31,16 +31,21 @@ Acting / exploring:
 - "what does rule R mean"        -> `mollify explain [<rule>]`
 - "what imports / is imported by module M" -> `mollify trace <module>`
 - "evidence bundle for one file" -> `mollify inspect <file>`
+- "project metrics (LOC, counts, complexity dist.)" -> `mollify metrics --format json`
+- "module dependency graph"      -> `mollify graph [--mermaid] --format json`
 - "project topology"             -> `mollify list [entry-points|files|frameworks]`
 - "watch and re-audit on change" -> `mollify watch [--interval-ms]` (CLI-only)
 - "create a config"              -> `mollify init`
 - "run the MCP server"           -> `mollify mcp`
+- "run the LSP server (editor diagnostics)" -> `mollify lsp` (CLI-only; stdio
+  Language Server publishing real-time diagnostics on open/save)
 
 (Add `--path <dir>` to scope a subproject. Analysis commands also accept
-`--format human|json|sarif`, `--gate all|new-only` + `--base <ref>`,
+`--format human|json|sarif|github|junit` (`github` = GitHub Actions annotations,
+`junit` = JUnit XML), `--gate all|new-only` + `--base <ref>`,
 `--save-baseline <f>`/`--baseline <f>`/`--fail-on-regression`, `--brief`, and
-`--min-confidence certain|likely|uncertain`. `--gate new-only` and `--format
-sarif` are fully implemented.)
+`--min-confidence certain|likely|uncertain`. `mollify graph` accepts `--mermaid`.
+`--gate new-only` and `--format sarif` are fully implemented.)
 
 Reading the kind-discriminated JSON envelope:
 - Top-level `kind` ("audit" | "dead-code" | "deps") discriminates the result;
@@ -51,7 +56,8 @@ Reading the kind-discriminated JSON envelope:
   circular-dependency | complexity | architecture | duplication | type-health |
   security), `severity` (error|warn|off), `confidence` (certain|likely|uncertain),
   a stable `fingerprint`, a `reason`, and `location {path, line, end_line}`.
-  Rules: unused-file, unused-export, unused-import, commented-code,
+  Rules: unused-file, unused-export, unused-import, unused-variable,
+  unused-parameter, commented-code,
   unused-dependency, missing-dependency, circular-dependency, layer-violation,
   forbidden-import, independence-violation, high-complexity, duplication,
   untyped-function, cold-code, hotspot, dangerous-eval, subprocess-shell-true,
