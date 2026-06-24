@@ -701,17 +701,36 @@ fn has_kwarg(call: Node, bytes: &[u8], name: &str) -> bool {
 }
 
 fn first_positional_is_string(call: Node) -> bool {
-    let Some(args) = call_args(call) else {
-        return false;
-    };
+    first_positional_arg(call).map(|a| a.kind()) == Some("string")
+}
+
+/// The first positional argument node of a call, if any.
+fn first_positional_arg(call: Node) -> Option<Node> {
+    let args = call_args(call)?;
     let mut c = args.walk();
-    for a in args.named_children(&mut c) {
-        if a.kind() == "keyword_argument" {
-            continue;
-        }
-        return a.kind() == "string";
+    let kids: Vec<Node> = args.named_children(&mut c).collect();
+    kids.into_iter().find(|a| a.kind() != "keyword_argument")
+}
+
+/// Does a string node contain `{...}` interpolation (i.e. an f-string)?
+fn string_has_interpolation(string_node: Node) -> bool {
+    let mut c = string_node.walk();
+    let kids: Vec<Node> = string_node.children(&mut c).collect();
+    kids.iter().any(|ch| ch.kind() == "interpolation")
+}
+
+/// Is an argument expression "dynamically built" (f-string / `%`/`+` concat /
+/// `.format(...)`) rather than a static literal?
+fn is_dynamic_string(arg: Node, bytes: &[u8]) -> bool {
+    match arg.kind() {
+        "binary_operator" => true,
+        "string" => string_has_interpolation(arg),
+        "call" => arg
+            .child_by_field_name("function")
+            .map(|fnode| node_text(fnode, bytes).ends_with(".format"))
+            .unwrap_or(false),
+        _ => false,
     }
-    false
 }
 
 fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
@@ -737,7 +756,16 @@ fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
     }
     if matches!(
         f,
-        "pickle.load" | "pickle.loads" | "cPickle.load" | "cPickle.loads"
+        "pickle.load"
+            | "pickle.loads"
+            | "cPickle.load"
+            | "cPickle.loads"
+            | "marshal.load"
+            | "marshal.loads"
+            | "dill.load"
+            | "dill.loads"
+            | "shelve.open"
+            | "jsonpickle.decode"
     ) {
         hit(
             "unsafe-deserialization",
@@ -754,10 +782,94 @@ fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
             "subprocess call with shell=True risks shell injection".into(),
         );
     }
+    // os.system / os.popen always spawn a shell.
+    if matches!(f, "os.system" | "os.popen" | "os.popen2" | "os.popen3") {
+        hit(
+            "subprocess-shell-true",
+            format!("`{f}` runs a command through the shell; prefer subprocess with an argv list"),
+        );
+    }
     if kwarg_is(call, bytes, "verify", "False") {
         hit(
             "tls-verify-disabled",
             "TLS certificate verification disabled (verify=False)".into(),
+        );
+    }
+    if matches!(f, "ssl._create_unverified_context") {
+        hit(
+            "tls-verify-disabled",
+            "ssl._create_unverified_context disables certificate validation".into(),
+        );
+    }
+    // Weak hashes (bandit B303/B324): md5/sha1 used directly.
+    if matches!(f, "hashlib.md5" | "hashlib.sha1" | "md5.new") {
+        hit(
+            "weak-hash",
+            format!("`{f}` is a weak hash; use sha256+ (or pass usedforsecurity=False)"),
+        );
+    }
+    // Weak ciphers (bandit B304/B305): DES/ARC4/Blowfish or ECB mode.
+    if matches!(last, "DES" | "ARC4" | "Blowfish" | "RC2" | "RC4")
+        && (f.contains("Crypto") || f.contains("cryptography") || f.contains("Cipher"))
+    {
+        hit(
+            "weak-cipher",
+            format!("`{f}` is a broken/weak cipher; use AES-GCM or ChaCha20-Poly1305"),
+        );
+    }
+    if last == "MODE_ECB" {
+        hit(
+            "weak-cipher",
+            "ECB mode leaks plaintext structure; use an authenticated mode (GCM)".into(),
+        );
+    }
+    // Insecure randomness for security contexts (bandit B311). Uncertain: the
+    // stdlib `random` is fine for non-security use.
+    if matches!(
+        f,
+        "random.random"
+            | "random.randint"
+            | "random.randrange"
+            | "random.choice"
+            | "random.getrandbits"
+    ) {
+        hit(
+            "insecure-random",
+            format!("`{f}` is not cryptographically secure; use the `secrets` module for tokens"),
+        );
+    }
+    // SQL built from a dynamically-formatted string (bandit B608). Only flags
+    // execute-style sinks whose query argument is f-string/concat/.format.
+    if matches!(
+        last,
+        "execute" | "executemany" | "executescript" | "raw" | "extra"
+    ) {
+        if let Some(arg) = first_positional_arg(call) {
+            if is_dynamic_string(arg, bytes) {
+                hit(
+                    "sql-injection",
+                    format!(
+                        "`{last}(...)` builds SQL from a dynamic string; use parameterized queries"
+                    ),
+                );
+            }
+        }
+    }
+    // requests/httpx call without a timeout can hang forever (bandit-adjacent).
+    if matches!(
+        f,
+        "requests.get"
+            | "requests.post"
+            | "requests.put"
+            | "requests.delete"
+            | "requests.patch"
+            | "requests.head"
+            | "requests.request"
+    ) && !has_kwarg(call, bytes, "timeout")
+    {
+        hit(
+            "request-without-timeout",
+            format!("`{f}` without a timeout= can block indefinitely"),
         );
     }
 }

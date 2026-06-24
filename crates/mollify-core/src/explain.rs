@@ -91,6 +91,26 @@ pub fn text(rule: &str) -> Option<&'static str> {
             "A literal that looks like a credential assigned to a \
             secret-named variable. Action: load it from the environment or a secret manager."
         }
+        "weak-hash" => {
+            "Use of a broken hash (md5/sha1) (CWE-327). Action: use sha256+ \
+            or pass usedforsecurity=False if it's a non-security checksum."
+        }
+        "weak-cipher" => {
+            "A broken/weak cipher or ECB mode (CWE-327). Action: use an \
+            authenticated cipher such as AES-GCM or ChaCha20-Poly1305."
+        }
+        "insecure-random" => {
+            "`random` is not cryptographically secure (CWE-330). Action: use \
+            the `secrets` module for tokens/keys/nonces."
+        }
+        "sql-injection" => {
+            "SQL built from an f-string/concatenation/.format passed to an \
+            execute-style sink (CWE-89). Action: use parameterized queries."
+        }
+        "request-without-timeout" => {
+            "An HTTP request without a timeout can block indefinitely \
+            (CWE-400). Action: pass timeout=."
+        }
         _ => return None,
     };
     Some(t)
@@ -117,6 +137,11 @@ pub const RULES: &[&str] = &[
     "unsafe-deserialization",
     "tls-verify-disabled",
     "hardcoded-secret",
+    "weak-hash",
+    "weak-cipher",
+    "insecure-random",
+    "sql-injection",
+    "request-without-timeout",
     "vulnerable-dependency",
 ];
 
