@@ -67,6 +67,8 @@ pub enum Category {
     DependencyHygiene,
     /// Type-annotation health (Python-specific; no fallow analog).
     TypeHealth,
+    /// Security candidates (syntactic; never confirmed vulnerabilities).
+    Security,
 }
 
 /// A source location, 1-based line/column, workspace-relative path.
@@ -138,6 +140,8 @@ pub enum Report {
     Dupes(FindingsReport),
     /// Type-annotation health.
     Types(FindingsReport),
+    /// Security candidates.
+    Security(FindingsReport),
 }
 
 /// A report that is just a sorted list of findings plus a summary.

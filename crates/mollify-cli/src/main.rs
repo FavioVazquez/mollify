@@ -37,6 +37,8 @@ enum Command {
     Dupes(Scope),
     /// Type-annotation health (fully-untyped public functions).
     Types(Scope),
+    /// Security candidates (bandit-style; review before acting).
+    Security(Scope),
     /// Apply safe auto-fixes (certain, auto-fixable unused symbols). Dry-run unless --apply.
     Fix(FixArgs),
     /// Scaffold a .mollifyrc and report detected layout.
@@ -130,6 +132,12 @@ fn main() {
         ),
         Command::Dupes(s) => run_findings(&s, mollify_core::dupes_report, Report::Dupes, "dupes"),
         Command::Types(s) => run_findings(&s, mollify_core::types_report, Report::Types, "types"),
+        Command::Security(s) => run_findings(
+            &s,
+            mollify_core::security_report,
+            Report::Security,
+            "security",
+        ),
         Command::Fix(a) => run_fix(&a),
         Command::Init(s) => run_init(&s),
         Command::Mcp => match mollify_mcp::run() {

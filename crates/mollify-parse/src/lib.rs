@@ -79,6 +79,16 @@ pub struct FunctionComplexity {
     pub return_annotated: bool,
 }
 
+/// A potential security issue detected syntactically (a *candidate*, per the
+/// candidate-producer/verifier split — never a confirmed vulnerability).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityHit {
+    /// Stable rule id, e.g. `dangerous-eval`, `subprocess-shell-true`.
+    pub rule: &'static str,
+    pub line: u32,
+    pub detail: String,
+}
+
 /// The parsed view of one Python module that the graph builds on.
 #[derive(Debug, Clone)]
 pub struct ParsedModule {
@@ -87,6 +97,8 @@ pub struct ParsedModule {
     pub imports: Vec<Import>,
     /// Complexity per function/method (including nested), attributed separately.
     pub functions: Vec<FunctionComplexity>,
+    /// Syntactic security candidates.
+    pub security_hits: Vec<SecurityHit>,
     /// Explicit `__all__` contents if present (public-API surface for libraries).
     pub dunder_all: Option<Vec<String>>,
     /// Every identifier *used* anywhere in the module (call targets, attribute
@@ -139,6 +151,7 @@ impl PyParser {
             definitions: Vec::new(),
             imports: Vec::new(),
             functions: Vec::new(),
+            security_hits: Vec::new(),
             dunder_all: None,
             used_names: Vec::new(),
             name_counts: std::collections::HashMap::new(),
@@ -153,6 +166,8 @@ impl PyParser {
         collect_uses(root, bytes, &mut m);
         // Per-function complexity.
         collect_complexity(root, bytes, &mut m);
+        // Security candidates.
+        collect_security(root, bytes, &mut m);
 
         Ok(m)
     }
@@ -533,6 +548,167 @@ fn collect_complexity(root: Node, bytes: &[u8], m: &mut ParsedModule) {
     m.functions.sort_by_key(|f| f.line);
 }
 
+const SECRET_NAMES: &[&str] = &[
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "access_key",
+    "secret_key",
+    "private_key",
+    "auth_token",
+];
+
+fn collect_security(root: Node, bytes: &[u8], m: &mut ParsedModule) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            "call" => security_call(node, bytes, m),
+            "assignment" => security_assignment(node, bytes, m),
+            _ => {}
+        }
+        let mut c = node.walk();
+        for ch in node.children(&mut c) {
+            stack.push(ch);
+        }
+    }
+}
+
+fn call_func<'a>(call: Node<'a>) -> Option<Node<'a>> {
+    call.child_by_field_name("function")
+}
+
+fn call_args(call: Node) -> Option<Node> {
+    call.child_by_field_name("arguments")
+}
+
+/// Whether the call has a keyword argument `name` whose value text equals `val`.
+fn kwarg_is(call: Node, bytes: &[u8], name: &str, val: &str) -> bool {
+    let Some(args) = call_args(call) else {
+        return false;
+    };
+    let mut c = args.walk();
+    for a in args.named_children(&mut c) {
+        if a.kind() == "keyword_argument" {
+            let n = a.child_by_field_name("name").map(|x| node_text(x, bytes));
+            let v = a.child_by_field_name("value").map(|x| node_text(x, bytes));
+            if n == Some(name) && v == Some(val) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn has_kwarg(call: Node, bytes: &[u8], name: &str) -> bool {
+    let Some(args) = call_args(call) else {
+        return false;
+    };
+    let mut c = args.walk();
+    for a in args.named_children(&mut c) {
+        if a.kind() == "keyword_argument"
+            && a.child_by_field_name("name").map(|x| node_text(x, bytes)) == Some(name)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn first_positional_is_string(call: Node) -> bool {
+    let Some(args) = call_args(call) else {
+        return false;
+    };
+    let mut c = args.walk();
+    for a in args.named_children(&mut c) {
+        if a.kind() == "keyword_argument" {
+            continue;
+        }
+        return a.kind() == "string";
+    }
+    false
+}
+
+fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
+    let Some(func) = call_func(call) else { return };
+    let f = node_text(func, bytes);
+    let last = f.rsplit('.').next().unwrap_or(f);
+    let line = call.start_position().row as u32 + 1;
+    let mut hit = |rule: &'static str, detail: String| {
+        m.security_hits.push(SecurityHit { rule, line, detail });
+    };
+
+    if (last == "eval" || last == "exec") && !first_positional_is_string(call) {
+        hit(
+            "dangerous-eval",
+            format!("`{f}` on a non-literal expression executes dynamic code"),
+        );
+    }
+    if f == "yaml.load" && !has_kwarg(call, bytes, "Loader") {
+        hit(
+            "unsafe-yaml-load",
+            "yaml.load without an explicit Loader= is unsafe; use yaml.safe_load".into(),
+        );
+    }
+    if matches!(
+        f,
+        "pickle.load" | "pickle.loads" | "cPickle.load" | "cPickle.loads"
+    ) {
+        hit(
+            "unsafe-deserialization",
+            format!("`{f}` can execute arbitrary code on untrusted input"),
+        );
+    }
+    if matches!(
+        last,
+        "call" | "run" | "Popen" | "check_output" | "check_call"
+    ) && kwarg_is(call, bytes, "shell", "True")
+    {
+        hit(
+            "subprocess-shell-true",
+            "subprocess call with shell=True risks shell injection".into(),
+        );
+    }
+    if kwarg_is(call, bytes, "verify", "False") {
+        hit(
+            "tls-verify-disabled",
+            "TLS certificate verification disabled (verify=False)".into(),
+        );
+    }
+}
+
+fn security_assignment(assign: Node, bytes: &[u8], m: &mut ParsedModule) {
+    let Some(lhs) = assign.child_by_field_name("left") else {
+        return;
+    };
+    if lhs.kind() != "identifier" {
+        return;
+    }
+    let name = node_text(lhs, bytes).to_ascii_lowercase();
+    if !SECRET_NAMES.iter().any(|s| name.contains(s)) {
+        return;
+    }
+    let Some(rhs) = assign.child_by_field_name("right") else {
+        return;
+    };
+    if rhs.kind() == "string" {
+        let val = string_literal_value(rhs, bytes);
+        // Skip empty or obvious placeholders / env lookups.
+        if val.len() >= 4 && !val.contains("${") && !val.eq_ignore_ascii_case("changeme") {
+            m.security_hits.push(SecurityHit {
+                rule: "hardcoded-secret",
+                line: assign.start_position().row as u32 + 1,
+                detail: format!(
+                    "`{}` assigned a hardcoded string literal",
+                    node_text(lhs, bytes)
+                ),
+            });
+        }
+    }
+}
+
 fn collect_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
@@ -598,6 +774,18 @@ mod tests {
     fn extracts_dunder_all() {
         let m = parse("__all__ = ['foo', 'bar']\n");
         assert_eq!(m.dunder_all, Some(vec!["foo".into(), "bar".into()]));
+    }
+
+    #[test]
+    fn detects_security_candidates() {
+        let m = parse("import subprocess\npassword = \"hunter2xyz\"\nsubprocess.run(cmd, shell=True)\neval(user_input)\n");
+        let rules: Vec<_> = m.security_hits.iter().map(|h| h.rule).collect();
+        assert!(rules.contains(&"hardcoded-secret"), "got {rules:?}");
+        assert!(rules.contains(&"subprocess-shell-true"), "got {rules:?}");
+        assert!(rules.contains(&"dangerous-eval"), "got {rules:?}");
+        // eval on a literal is fine
+        let ok = parse("eval(\"1+1\")\n");
+        assert!(!ok.security_hits.iter().any(|h| h.rule == "dangerous-eval"));
     }
 
     #[test]

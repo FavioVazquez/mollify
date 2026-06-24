@@ -77,6 +77,7 @@ fn category_key(c: Category) -> &'static str {
         Category::Architecture => "architecture",
         Category::DependencyHygiene => "dependency-hygiene",
         Category::TypeHealth => "type-health",
+        Category::Security => "security",
     }
 }
 
