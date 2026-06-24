@@ -35,6 +35,9 @@ cargo build --release
 | `mollify watch [--interval-ms]` | Re-run `audit` whenever a Python file changes (poll-based; Ctrl-C to stop). |
 | `mollify inspect <file>` | Evidence bundle for one file: its findings plus its import neighborhood. |
 | `mollify list [entry-points\|files\|frameworks]` | Project topology. |
+| `mollify metrics` | Maintainability Index, Halstead, raw LOC, per-file complexity. |
+| `mollify graph [--mermaid]` | Export the module import graph (Graphviz DOT or Mermaid). |
+| `mollify lsp` | Run the Language Server (stdio) for real-time editor diagnostics. |
 | `mollify init` | Write a starter `.mollifyrc.json`. |
 
 ### Regression baselines (CI gate without git)
@@ -51,8 +54,16 @@ mollify audit --baseline .mollify/baseline.json --fail-on-regression   # in CI
 ```
 | `mollify mcp` | Start the MCP server for coding agents (stdio). |
 
-Common flags: `--path <dir>`, `--format human|json|sarif`,
-`--gate all|new-only`, `--base <ref>`.
+Common flags: `--path <dir>`, `--format human|json|sarif|github|junit`,
+`--gate all|new-only`, `--base <ref>`, `--min-confidence certain|likely|uncertain`,
+and the regression-baseline flags (`--save-baseline`/`--baseline`/`--fail-on-regression`/`--brief`).
+
+## Editor integration (LSP)
+
+`mollify lsp` runs a Language Server over stdio that publishes mollify diagnostics
+on file open/save. Point your editor's generic LSP client at `mollify lsp` for
+Python files (VS Code via a generic LSP bridge, Neovim `vim.lsp.start`, Zed, etc.).
+It reuses the deterministic audit, so editor results match CI exactly.
 
 ## Examples
 

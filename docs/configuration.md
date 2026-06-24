@@ -29,7 +29,8 @@ Map of **rule id** or **category** → `error` | `warn` | `off`.
   agent hooks blocking.
 - `off` drops the finding entirely.
 
-Rule ids: `unused-file`, `unused-export`, `unused-import`, `commented-code`,
+Rule ids: `unused-file`, `unused-export`, `unused-import`, `unused-variable`,
+`unused-parameter`, `commented-code`,
 `unused-dependency`, `missing-dependency`, `circular-dependency`,
 `layer-violation`, `forbidden-import`, `independence-violation`,
 `high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`,
@@ -112,6 +113,15 @@ schema. It is an *input*, not a network call — regenerate it out-of-band with
 
 A list of path substrings. Any finding whose file path contains one is dropped.
 (Glob support is planned.)
+
+## `duplication`
+
+Tune the clone detector: `min_tokens` (normalized-token window, default 40) and
+`min_lines` (minimum clone line span, default 5).
+
+```json
+"duplication": { "min_tokens": 50, "min_lines": 6 }
+```
 
 ## `max_cyclomatic` / `max_cognitive`
 

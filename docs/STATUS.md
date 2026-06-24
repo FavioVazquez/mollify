@@ -146,14 +146,22 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     import statements); flags whole-statement-unused imports (`unused-import`), certain
     + auto-fixable in regular modules, uncertain in `__init__.py` (re-export idiom).
     `mollify fix` removes them. +tests.
-  - ⬜ Remaining P1/P2 from the cross-tool audit (lower-impact): unused-variable /
-    unused-parameter (needs function-scope tracking), configurable dupes thresholds
-    + clone-family members, OSV `/v1/query/batch`, a `metrics` command (Maintainability
-    Index / Halstead / LCOM), `transitive-dependency` (needs the installed env),
-    DOT/Mermaid graph export, GitHub/JUnit output formats.
-  - ⬜ LSP server; line-level (vs file-level) gate attribution; LibCST
-    format-preserving autofix (current `fix` is line-range deletion); partial-line
-    unused-import removal (only whole-statement today).
+  - ✅ **Function-scope analysis** — `unused-variable` (ruff F841) + `unused-parameter`
+    via per-function identifier-frequency analysis (dynamic-scope/global/decorator/stub
+    guards). +tests.
+  - ✅ **`mollify metrics`** — Maintainability Index (radon formula, A/B/C), Halstead
+    volume (parser token classification), raw LOC/SLOC/comment/blank, per-file
+    complexity rollups. New `Report::Metrics` + `mollify_metrics` MCP tool. +tests.
+  - ✅ **`mollify lsp`** — `mollify-lsp` crate: stdio Language Server (Content-Length
+    JSON-RPC) publishing real-time diagnostics on open/save. +tests, validated e2e.
+  - ✅ **`mollify graph [--mermaid]`** — import-graph export (Graphviz DOT / Mermaid).
+  - ✅ **`--format github|junit`** — GitHub Actions annotations + JUnit XML for CI.
+  - ✅ **Configurable dupes** thresholds (`.mollifyrc` `duplication`).
+  - ✅ **OSV `/v1/querybatch`** — batched supply-chain discovery + cached detail fetch.
+  - ⬜ Remaining (lower-impact / environment-bound): `transitive-dependency` (needs the
+    installed env / site-packages), LCOM class cohesion, LSP keystroke-incremental
+    reparse, line-level (vs file-level) gate attribution, LibCST format-preserving
+    autofix, partial-line unused-import removal.
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
   - `.devin/rules/mollify.md` (glob `**/*.py`)
