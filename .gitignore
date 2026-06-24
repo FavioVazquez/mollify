@@ -17,3 +17,6 @@ node_modules/
 
 # Sprang dashboard data (local-only)
 .sprang/
+
+# Local Testing
+/local_testing/
