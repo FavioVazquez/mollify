@@ -309,11 +309,11 @@ Coverage: **Claude Code** (plugin/marketplace + Skill + PostToolUse/Stop gate ho
 **Devin Desktop / Cascade is a featured, first-class target** (the org runs Cascade), built on the modern **`.devin/`** convention which bundles **skills + rules + hooks**, with **`.windsurf/`** for **workflows** (slash commands):
 - **`.devin/skills/mollify/SKILL.md`** — the priority, future-facing artifact (also shipped to portable `.agents/skills/`). Vendor guidance prefers skills over rules; lazy-loaded, folder-bundled.
 - **`.devin/rules/mollify.md`** — glob-triggered ("audit before PRs on `**/*.py`"), pointing at the skill; 12k/6k char limits, `trigger` modes.
-- **`.windsurf/hooks.json`** — deterministic pre/post enforcement (audit on `post_write_code`, block via `exit 2` on `pre_run_command`). `.devin/hooks.json` inferred, unconfirmed.
-- **`.windsurf/workflows/{mollify-audit,mollify-cleanup,mollify-bootstrap}.md`** — `/slash` commands (confirmed path; `.devin/workflows/` unverified).
-- **`~/.codeium/windsurf/mcp_config.json`** — registers the MCP server (~25 tools; 100-tool cap; `${env:VAR}` interpolation).
+- **Hooks (two systems):** Cascade IDE `.windsurf/hooks.json` (12 lowercase events e.g. `post_write_code`/`pre_run_command`, `command`/`show_output`, no matcher, `exit 2` blocks) **and** Devin CLI/Local `.devin/hooks.v1.json` (Claude-Code-compatible — the *same file* serves Claude Code). Ship both.
+- **`.windsurf/workflows/{mollify-audit,mollify-cleanup,mollify-bootstrap}.md`** — `/slash`, manual-only, 12k char (mirror to the now-preferred `.devin/workflows/`).
+- **MCP:** Cascade `~/.codeium/windsurf/mcp_config.json` (`${env:}`/`${file:}` interpolation, 100-tool cap) + committed `.devin/config.json` for Devin CLI/Local.
 
-**ACP forward-path (Cascade EOL ~2026-07-01 → Devin Local):** Mollify is an **MCP server**, and **ACP (agent↔editor) is orthogonal to MCP (agent↔tools)** — so the transition doesn't touch Mollify. Markdown skills/rules/workflows + an MCP server are the most future-proof bet and carry forward with no rework; Devin Local's sub-agents only make a dedicated "audit" sub-agent hammering the Mollify MCP server *more* valuable. (Devin/Windsurf vendor docs were egress-blocked during research — see INTEGRATIONS.md §6 for the explicit re-verify list, especially the `auto_execute_steps` workflow field and the `.devin/hooks.json` path.)
+**ACP forward-path (Cascade available through July 2026 → Devin Local):** Mollify is an **MCP server**, and **ACP (agent↔editor) is orthogonal to MCP (agent↔tools)** — so the transition doesn't touch Mollify. Skills/rules/workflows/hooks + an MCP server carry forward with no rework (Devin Desktop keeps reading existing Windsurf config and retains MCP); Devin Local's sub-agents make a dedicated Mollify "audit" sub-agent (a `subagent: true` skill) *more* valuable. Authoritatively sourced from `docs.devin.ai/llms-full.txt` — see INTEGRATIONS.md §4/§6.
 
 ---
 

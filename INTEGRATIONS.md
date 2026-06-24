@@ -605,25 +605,36 @@ mcp-servers:
 
 ## 4. Devin Desktop / Cascade (FEATURED)
 
-Cascade is the in-IDE coding agent in Windsurf, **rebranded Devin Desktop by Cognition on 2026-06-02** (OTA). Since the org runs Cascade, this is the primary target. It is customized through four repo-shippable mechanisms plus one user-level config.
+> **Now sourced from the authoritative docs.** This section was rewritten against `docs.devin.ai/llms-full.txt` (the full Devin documentation, supplied by the user after the domain was egress-blocked). Confidence is **HIGH** for everything below except the few items flagged inline. This supersedes the earlier WebSearch-reconstructed draft.
 
-The `.devin/` directory is the modern convention that bundles **skills + rules + hooks**; `.windsurf/` carries **workflows** (and is the legacy fallback for rules/skills). Per the org's direction, ship `.devin/` as primary and treat **skills as the crucial future-facing artifact**.
+**Devin Desktop** is the rebranded Windsurf IDE (OTA update June 2, 2026 — "same IDE, same editor, same features, unified under the Devin brand"). Two local agent surfaces matter, and they **share the same on-disk config**:
 
-| Cascade mechanism | Mollify use | Ships in repo? |
-|---|---|---|
-| `.devin/skills/mollify/SKILL.md` (preferred) + `.agents/skills/` (portable) | Model-invoked teaching artifact: when/how to run mollify, read JSON, gate fixes | Yes (committed) — **priority** |
-| `.devin/rules/*.md` (preferred) + `.windsurf/rules/` (fallback) | Run `mollify audit` before PRs; how to read findings; point at the skill | Yes (committed) |
-| `.devin/hooks.json` / `.windsurf/hooks.json` | Deterministic pre/post enforcement (audit on write, block on disallowed cmd) | Yes (committed) — see caveat |
-| `.windsurf/workflows/*.md` (slash commands) | `/mollify-audit`, `/mollify-cleanup`, `/mollify-bootstrap` | Yes (committed) |
-| `mcp_config.json` → `mcpServers.mollify` | Register the MCP server (~25 tools) | No — user/global file; ship a snippet + bootstrap workflow |
-| Memories | Auto-remember Mollify conventions per workspace | Not committed (local only) |
-| Planning mode | Glob rule injects "audit first" into the plan preview | Indirect |
+- **Cascade** — the in-IDE agent the org uses *today*. Remains available **through July 2026**.
+- **Devin Local** — the successor (Rust harness, ~30% more token-efficient, **subagents**, sandboxing). Runs the **same architecture as Devin CLI**, inherits your Windsurf settings, speaks **ACP** to the editor.
 
-> **Workflows path nuance:** my dedicated Devin deep-dive found workflows are still confirmed at `.windsurf/workflows/` (no confirmed move to `.devin/workflows/`); the auto-generated section above optimistically lists `.devin/workflows/` as preferred. **Ship `.windsurf/workflows/` as the confirmed path**, and only mirror to `.devin/workflows/` once verified. Skills/rules/hooks are the confirmed `.devin/` members.
+Because both read the same files, **everything Mollify ships now carries forward to Devin Local with no rework.** Devin Desktop reads `.devin/` as the **preferred, higher-precedence** workspace dir and falls back to `.windsurf/` for backward compatibility (authoritative — FAQ "workspace-level directories" table):
 
-### 4.0 Skills — `.devin/skills/mollify/SKILL.md` (the priority, future-facing artifact)
+| Artifact | Preferred (read+write) | Legacy fallback (read) | Mollify ships |
+|---|---|---|---|
+| **Skills** | `.devin/skills/<name>/SKILL.md` | `.windsurf/skills/`, `.agents/skills/` (portable), `.claude/skills/` | `.devin/skills/mollify/SKILL.md` (+ `.agents/skills/mollify/` for portability) |
+| **Rules** | `.devin/rules/*.md` | `.windsurf/rules/`, `.windsurfrules`, `AGENTS.md` | `.devin/rules/mollify.md` |
+| **Workflows** | `.devin/workflows/*.md` | `.windsurf/workflows/*.md` (currently the documented IDE path) | `.windsurf/workflows/mollify-*.md` (+ mirror to `.devin/workflows/`) |
+| **Hooks (Cascade IDE)** | `.windsurf/hooks.json` | system/user levels | `.windsurf/hooks.json` |
+| **Hooks (Devin CLI/Local)** | `.devin/hooks.v1.json` (Claude-Code-compatible) | `.devin/config.json` `"hooks"`, `.claude/settings.json` | `.devin/hooks.v1.json` |
+| **MCP (Cascade IDE)** | `~/.codeium/windsurf/mcp_config.json` | — (user/global file) | snippet + `/mollify-bootstrap` |
+| **MCP (Devin CLI/Local)** | `.devin/config.json` / `.devin/config.local.json` | `~/.config/devin/config.json` | committed `.devin/config.json` block |
+| **Memories** | `~/.codeium/windsurf/memories/` | — | not committed (local only) |
 
-Cascade/Devin Desktop has first-class **Skills** (the open `SKILL.md` standard): a folder per skill whose frontmatter is *always* in context (so the agent knows the skill exists) while the body loads *only when invoked* — cheaper and more durable than always-on rules. Vendor guidance explicitly recommends **skills over rules** where possible, and rules that merely *point at* skills. Skills are read from three locations: **`.devin/skills/`** (primary), **`.agents/skills/`** (portable cross-tool standard — also read by Claude Code, Codex, Gemini, Copilot, Cline), and `.windsurf/skills/` (fallback). Ship the same canonical `SKILL.md` to `.devin/skills/mollify/` and symlink/copy to `.agents/skills/mollify/` for portability. Folder name must equal the frontmatter `name`. Bundle helper scripts/resources in the folder and reference them by relative path.
+> **Why two of several rows split IDE vs CLI:** Cascade (the IDE agent) and Devin CLI/Local are different harnesses with slightly different config surfaces for **hooks** and **MCP**. The org is on Cascade → ship the IDE variants now; add the `.devin/` CLI variants so the Devin Local migration is zero-effort. Skills and rules are unified (`.devin/`) across both.
+
+### 4.1 Skills — `.devin/skills/mollify/SKILL.md` (the priority, future-facing artifact)
+
+Skills are the investment Devin's own docs tell you to make ("**invest here**"; "use a Skill instead" of rules/workflows when the agent should pick it up on its own). They use **progressive disclosure**: only `name` + `description` sit in context until the skill is invoked, so many skills stay cheap. A skill is a folder (`SKILL.md` + any bundled scripts/templates). **Invocation differs by surface — this matters:**
+
+- **Cascade (IDE):** auto-invoked when your request matches the `description`, or explicitly via **`@mollify`** (`@mention`, *not* a slash command). Required frontmatter is just `name` + `description`.
+- **Devin CLI / Devin Local:** invoked as **`/mollify`** or autonomously; supports **richer frontmatter** — `model`, `allowed-tools`, `permissions`, `triggers`, `argument-hint`, and crucially **`subagent: true`** / **`agent: <profile>`** to run the skill as an independent subagent. A Devin Local coordinator can spawn a dedicated Mollify "audit" subagent — exactly the parallelism Mollify wants.
+
+One `SKILL.md` serves both (the IDE ignores the extra CLI fields). Ship to `.devin/skills/mollify/` (preferred) and copy to `.agents/skills/mollify/` for cross-tool portability.
 
 ```markdown
 ---
@@ -633,23 +644,24 @@ description: >
   server — to find dead code, duplication, circular imports, complexity
   hotspots, dependency-hygiene issues, and architecture-boundary violations.
   Use whenever the user asks whether code is used, what to delete, what's
-  duplicated, or wants a repo health/quality report, or before opening a PR.
-license: MIT
+  duplicated, wants a repo health/quality report, or before opening a PR.
+# --- fields below are honored by Devin CLI / Devin Local; ignored by Cascade IDE ---
+allowed-tools: [read, grep, glob, exec]
+subagent: true          # Devin Local: run audits as an isolated subagent
 ---
 
 # Mollify code intelligence
 
-Mollify is a deterministic candidate-producer: it emits evidence (each finding
-has a stable fingerprint, a confidence level, and a reason), not decisions. You
-are the verifier. Never invent findings or hand-delete code on a guess.
+Mollify is a deterministic candidate-producer: it emits evidence (each finding has
+a stable fingerprint, a confidence level, and a reason), not decisions. You are the
+verifier. Never invent findings or hand-delete code on a guess.
 
 ## Prefer the MCP server
-If the `mollify` MCP server is connected, call its tools (`audit`,
-`find_dead_code`, `find_duplication`, `trace`, `inspect_target`) directly.
-Otherwise use the CLI below.
+If the `mollify` MCP server is connected, call its tools (`audit`, `find_dead_code`,
+`find_duplication`, `trace`, `inspect_target`) directly. Otherwise use the CLI.
 
 ## Running an audit (CLI)
-1. Run: `mollify audit --format json` (changed files: `mollify audit --gate new-only --format json`).
+1. `mollify audit --format json` (changed files only: `mollify audit --gate new-only --format json`).
 2. Parse the envelope: switch on top-level `kind`; iterate `findings[]`.
    Each finding: `{ fingerprint, category, confidence, reason, location{path,line}, actions[] }`.
 3. Lead with `confidence: certain`; cite `path:line` and the fingerprint.
@@ -665,105 +677,71 @@ Otherwise use the CLI below.
 - references/cli-reference.md — all commands & flags.
 ```
 
-> **Precedence correction (important):** as of the Devin Desktop rebrand, **`.devin/` is the PREFERRED, higher-precedence dir** and `.windsurf/` is the backward-compat fallback — *not* the other way around. Ship `.devin/rules/mollify.md` and `.devin/workflows/*` as primary; keep `.windsurf/` copies as fallback. Cascade reads both, so **do not put divergent content in both** (`.devin` wins silently). Markdown rules/workflows are forward-compatible: everything shipped now survives EOL.
+### 4.2 Rules — `.devin/rules/mollify.md` (preferred; `.windsurf/rules/` fallback)
 
-### 4.1 Rules — `.devin/rules/mollify.md` (+ `.windsurf/rules/mollify.md` fallback)
-
-Markdown + YAML frontmatter. `trigger` modes: `always_on` (every prompt — use for short universal facts), `manual` (`@`-mention), `model_decision` (Cascade reads `description` and decides), `glob` (applied to files matching `globs`). **Char limits:** workspace rule files 12,000 chars each; global rules 6,000 chars (over-limit content is silently dropped).
-
-Precedence: `.devin/rules` > `.windsurf/rules` > legacy `.windsurfrules` > `AGENTS.md` (nearest file wins) > global/system. An explicit user prompt overrides all.
-
-Glob-triggered rule (the requested "audit before PRs on Python files" enforcement):
+One `.md` per rule, **12,000 char** limit each, with a `trigger:` frontmatter activation mode (authoritative — Memories & Rules doc): `always_on` (every message), `model_decision` (only the `description` is in-context; full file pulled when relevant), `glob` (applied when a file matching `globs:` is read/edited), `manual` (`@mollify-rule`). Global rules live in `~/.codeium/windsurf/memories/global_rules.md` (6,000 char, always-on). Root `AGENTS.md` is processed by the same engine (root = always-on, subdir = auto-glob). Keep rules tiny and have them **point at the skill** (vendor-recommended pattern).
 
 ```markdown
 ---
 trigger: glob
-globs: ["**/*.py"]
-description: Run a Mollify audit before opening any PR that touches Python and read findings as ground truth.
+globs: **/*.py
 ---
 
 # Mollify is the codebase truth layer
-
-Mollify is a deterministic, Rust-native code-intelligence engine. Its findings are evidence-backed (each has a stable fingerprint, a confidence level, and a reason). NEVER invent findings or hand-delete code based on a guess.
-
-## Before opening a PR
-1. Run `mollify audit --format json` (or call the `mollify` MCP `audit` tool). Do this as the FIRST step in your plan whenever Python files changed.
-2. Surface counts by category: dead-code, duplication, circular-deps, complexity hotspots, package-hygiene.
-3. If `dead-code` or `circular-deps` findings appear in files this PR touches, fix them or call out why not in the PR description.
-
-## Reading findings
-- Each finding = { fingerprint, category, confidence (high/medium/low), reason, location }.
-- Treat `confidence: high` dead-code as safe to remove ONLY after confirming reachability via Mollify; never delete `confidence: low` without human sign-off.
-- Cite the fingerprint in commits so the finding is traceable.
+- Before finalizing changes to Python files (and before any PR), run the `mollify`
+  skill / `mollify audit --format json`. Treat findings as ground truth — never
+  hand-delete code without a Mollify high-confidence fingerprint.
+- Prefer the `mollify` MCP tools when connected.
+- Auto-act only on `confidence: certain`; surface `likely`/`uncertain` and ask.
 ```
 
-Pair with a tiny `trigger: always_on` rule (<300 chars): *"Mollify findings are ground truth; never hand-delete code without a Mollify fingerprint."*
+### 4.3 Workflows — `.windsurf/workflows/mollify-*.md` → `/slash` commands
 
-### 4.2 Workflows — `.devin/workflows/*.md` (+ `.windsurf/workflows/` fallback) → `/slash-commands`
+Markdown recipes invoked **manually** as `/<name>` (Cascade never auto-runs a workflow — that's what skills are for). **12,000 char** limit. Discovered in `.windsurf/workflows/` up to the git root; global in `~/.codeium/windsurf/global_workflows/`; **`.devin/workflows/` is the new preferred location per the FAQ** (mirror there too). A workflow can call other workflows. The body is a title + description + numbered steps — **no special frontmatter is required** (the earlier `auto_execute_steps` field is NOT in the authoritative docs; do not rely on it).
 
-Markdown recipes invoked as `/<filename>`. Frontmatter: `name`, `description`, and `auto_execute_steps`. Body = numbered natural-language steps. **Manual-only** (don't auto-fire). 12,000 char limit.
-
-> **Highest-risk field:** `auto_execute_steps` (step-type allowlist like `read_file`/`run_command`) is corroborated only by secondary sources; historically Windsurf used `auto_execution_mode` (an integer tier). **Verify the field name/shape against `docs.devin.ai/desktop/cascade/workflows` before shipping** — if wrong, the frontmatter is silently ignored and steps still prompt. Also, `run_command` auto-execution is governed by the app-level Auto-Execution/Turbo setting and allow/deny lists, so a frontmatter hint may not fully suppress prompts.
-
-**`/mollify-audit`** (read-only triage):
+`.windsurf/workflows/mollify-audit.md` (read-only triage):
 
 ```markdown
----
-name: mollify-audit
-description: Read-only Mollify triage of the current repo / changed files.
-auto_execute_steps: [read_file, run_command]
----
+# Mollify audit
+Read-only Mollify triage of the repo / changed files.
 
-# /mollify-audit
-
-1. Detect scope: if there are staged/changed files, audit those; otherwise audit the whole repo.
-2. Prefer the `mollify` MCP server if registered: call the `audit` tool with format=json. If MCP is unavailable, run `mollify audit --format json` in a terminal.
-3. Parse findings and produce a table grouped by category (dead-code, duplication, circular-deps, complexity, package-hygiene) with counts and confidence.
-4. For each high-confidence finding in changed files, show file:line, the reason, and the fingerprint.
-5. Do NOT modify any files. End with a short verdict: PR-ready / needs cleanup, and link to /mollify-cleanup if needed.
+1. If files are staged/changed, scope to those; else audit the whole repo.
+2. Prefer the `mollify` MCP `audit` tool; if MCP is unavailable, run
+   `mollify audit --format json` in the terminal.
+3. Group findings by category (dead-code, duplication, circular-deps, complexity,
+   package-hygiene) with counts + confidence.
+4. For each high-confidence finding in changed files, show file:line, reason, fingerprint.
+5. Do NOT modify files. End with a verdict: PR-ready / needs cleanup (→ /mollify-cleanup).
 ```
 
-**`/mollify-cleanup`** (guided remediation — edits gated behind explicit approval):
+`.windsurf/workflows/mollify-cleanup.md` (guided remediation; edits gated on approval) and `.windsurf/workflows/mollify-bootstrap.md` (one-time per dev: writes the `~/.codeium/windsurf/mcp_config.json` block) follow the same shape; cleanup must re-audit after each removal and never auto-run destructive commands.
 
-```markdown
----
-name: mollify-cleanup
-description: Guided remediation of high-confidence Mollify findings.
-auto_execute_steps: [read_file]
----
+### 4.4 Hooks — deterministic enforcement (two systems; ship both)
 
-# /mollify-cleanup
+Hooks are the only deterministic surface. **Cascade (IDE) and Devin CLI/Local use *different* hook formats** — ship both so the gate survives the Devin Local migration:
 
-1. Run /mollify-audit (or the `audit` MCP tool) to get current findings as JSON.
-2. Filter to confidence: high findings in files relevant to the current change.
-3. Present a remediation plan (one line per finding: fingerprint, action) and WAIT for user approval before editing.
-4. For approved dead-code findings: remove the code, then re-run `mollify audit` (or the MCP tool) on the affected files to confirm the fingerprint is gone and no new findings were introduced.
-5. For duplication/circular-deps: propose a refactor, apply only after approval, then re-audit.
-6. Summarize: resolved fingerprints, remaining findings, and run the test suite before finishing.
+**(a) Cascade IDE — `.windsurf/hooks.json`** (authoritative — Cascade Hooks doc). Wrapper `{"hooks": {...}}`, **12 events** with lowercase names (`pre_read_code`, `post_read_code`, `pre_write_code`, `post_write_code`, `pre_run_command`, `post_run_command`, `pre_mcp_tool_use`, `post_mcp_tool_use`, `pre_user_prompt`, `post_cascade_response`, `post_cascade_response_with_transcript`, `post_setup_worktree`). Each handler: `command` (bash -c), optional `powershell`, `show_output`, `working_directory`. **No `matcher`** — the event *is* the filter; you inspect `tool_info` (JSON on stdin) inside the script. **Pre-hooks block via exit code 2** (post-hooks can't block). Merged system → user → workspace.
+
+```json
+{
+  "hooks": {
+    "post_write_code": [
+      { "command": "scripts/mollify-postwrite.sh", "show_output": false }
+    ],
+    "pre_run_command": [
+      { "command": "scripts/mollify-guard.sh", "show_output": true }
+    ]
+  }
+}
 ```
 
-> Do **not** add `run_command` to `auto_execute_steps` on the destructive path. Always re-audit (step 4) so removal is verified deterministically.
+`mollify-postwrite.sh` reads `tool_info.file_path` from stdin, and if it's a `*.py`, records newly-introduced findings (`mollify audit --gate new-only --format json`). `mollify-guard.sh` can `exit 2` to block a disallowed command. Keep auto-fix OFF in hooks — hooks gather/gate; the skill or a workflow applies fixes.
 
-**`/mollify-bootstrap`** (one-time per developer — writes the home-dir MCP block, since that file is not committed):
+**(b) Devin CLI / Devin Local — `.devin/hooks.v1.json`** (authoritative — Devin CLI Hooks doc). **Claude-Code-compatible**: PascalCase events (`PreToolUse`/`PostToolUse`/`Stop`/`SessionStart`/…), a regex `matcher` on `tool_name`, JSON stdin, and `{"decision":"block","reason":"…"}` on stdout (exit 2 also blocks). **The same file works in Claude Code** (`.claude/settings.json` `"hooks"`), so Mollify's Claude Code Stop/PostToolUse gate (§3.1) is reused verbatim here — one gate, three harnesses.
 
-```markdown
----
-name: mollify-bootstrap
-description: Register the Mollify MCP server in the user's Windsurf/Devin Desktop config.
-auto_execute_steps: [read_file]
----
+### 4.5 MCP — `~/.codeium/windsurf/mcp_config.json` (Cascade) + `.devin/config.json` (CLI/Local)
 
-# /mollify-bootstrap
-
-1. Locate `~/.codeium/windsurf/mcp_config.json` (Windows: %USERPROFILE%\.codeium\windsurf\mcp_config.json). Create it with `{ "mcpServers": {} }` if absent.
-2. Merge the `mollify` server block (see project docs) into mcpServers WITHOUT clobbering existing servers. WAIT for user confirmation before writing.
-3. Tell the user to reload MCP servers from the Cascade MCP panel and confirm the `mollify` tools appear (Cascade caps total tools at 100; Mollify uses ~25).
-4. Verify by calling the `audit` MCP tool on a small path.
-```
-
-### 4.3 MCP — `~/.codeium/windsurf/mcp_config.json`
-
-Path **unchanged after the rebrand** (`~/.codeium/` retained). Windows: `%USERPROFILE%\.codeium\windsurf\mcp_config.json`. Top-level key `mcpServers`. Transports: stdio, Streamable HTTP, SSE. Per-server fields include `disabled` (bool) and `alwaysAllow` (array of tool names to auto-approve). Env interpolation via `${env:VAR}`. **Hard cap of 100 tools** total across all servers.
+**Cascade IDE** reads `~/.codeium/windsurf/mcp_config.json` (path unchanged after the rebrand). `mcpServers` map; transports **stdio / Streamable HTTP / SSE** (+ OAuth). Interpolation in `command`/`args`/`env`/`serverUrl`/`url`/`headers` via **`${env:VAR}`** and **`${file:/path}`**. **100-tool cap** across all servers; per-server tools are toggled in the MCP settings UI (`disabledTools` array), and admins can whitelist/registry-restrict servers. There is also a one-click marketplace + `windsurf://windsurf-mcp-registry?serverName=mollify` deeplink we can publish.
 
 ```json
 {
@@ -771,62 +749,43 @@ Path **unchanged after the rebrand** (`~/.codeium/` retained). Windows: `%USERPR
     "mollify": {
       "command": "mollify",
       "args": ["mcp", "--stdio"],
-      "env": {
-        "MOLLIFY_LICENSE": "${env:MOLLIFY_LICENSE}",
-        "MOLLIFY_LOG": "warn"
-      },
-      "disabled": false,
-      "alwaysAllow": ["audit", "find_dead_code", "find_duplication", "find_circular_deps"]
+      "env": { "MOLLIFY_LICENSE": "${env:MOLLIFY_LICENSE}", "MOLLIFY_LOG": "warn" }
     }
   }
 }
 ```
 
-Auto-approve only read-only query tools via `alwaysAllow`; leave any mutating tool to manual approval. Never hardcode secrets — use `${env:...}`. Remote HTTP variant:
+**Devin CLI / Devin Local** uses `.devin/config.json` (committed, shared) / `.devin/config.local.json` (gitignored secrets), or `devin mcp add mollify -- mollify mcp`. Same `mcpServers` schema; tools namespaced `mcp__mollify__<tool>` and governed by `permissions.allow/deny/ask`. Because it's committed, the project MCP registration ships in-repo — no per-dev bootstrap needed on the Devin Local path.
 
 ```json
-{ "serverUrl": "https://mollify.internal/mcp", "headers": { "Authorization": "Bearer ${env:MOLLIFY_TOKEN}" } }
-```
-
-### 4.3b Hooks — `.windsurf/hooks.json` (deterministic enforcement)
-
-Cascade supports **hooks** (the only deterministic surface — rules/skills can be ignored on later turns, a hook always fires). Confirmed file: **`.windsurf/hooks.json`** at repo root, merged across global + project levels; a `.devin/hooks.json` equivalent is *inferred by symmetry but not confirmed* — ship `.windsurf/hooks.json` and verify the `.devin/` path before relying on it. There are ~12 events (e.g. `pre_user_prompt`, `pre_read_code`, `pre_write_code`, `post_write_code`, `pre_run_command`, `pre_mcp_tool_use`). Each hook has an event, an optional matcher, and handler `command`(s); the handler receives action context as **JSON on stdin** and replies via exit code + stdout. **Pre-hooks can block via exit code 2**; post-hooks cannot block.
-
-```json
+// .devin/config.json
 {
-  "hooks": {
-    "post_write_code": [
-      { "matcher": { "globs": ["**/*.py"] },
-        "command": "mollify audit --gate new-only --format json --quiet 2>/dev/null > .mollify/last-audit.json || true" }
-    ],
-    "pre_run_command": [
-      { "matcher": {}, "command": "scripts/mollify-guard.sh" }
-    ]
-  }
+  "mcpServers": { "mollify": { "command": "mollify", "args": ["mcp"] } },
+  "permissions": { "allow": ["mcp__mollify__audit", "mcp__mollify__find_dead_code"] }
 }
 ```
 
-`post_write_code` records newly-introduced findings after each Python edit (non-blocking, surfaced to the agent); `pre_run_command`'s `mollify-guard.sh` can `exit 2` to block a disallowed command. Keep auto-fix OFF in hooks — hooks gather/gate evidence; the human or a workflow applies fixes. **Caveats:** the full event list and exact matcher schema were not fully confirmable past the egress block (see appendix) — verify against `docs.windsurf.com/windsurf/cascade/hooks` before operational reliance.
+### 4.6 Memories
 
-### 4.4 Memories & planning mode
+`~/.codeium/windsurf/memories/` — Cascade auto-generates these per workspace, local, not committed, **no credit cost**. Use once as reinforcement ("Mollify audit JSON is ground truth; never hand-delete without a high-confidence fingerprint"), but the durable, shareable home for that is the rule/skill, not a memory.
 
-- **Memories** live in `~/.codeium/windsurf/memories/`, workspace-scoped, local, **not committed**, no credit cost. Prompt Cascade once: *"Create a memory: Mollify audit JSON is the ground truth for dead code and circular deps in this repo. Never hand-delete code without a Mollify high-confidence fingerprint; always re-run mollify audit after removals."* Reinforces the rule across sessions without spending the 12k rule budget. This is reinforcement, not a distribution channel.
-- **Planning mode** shows a plan preview before acting; the glob rule's job is to make "run Mollify audit first" appear in that plan whenever Python files are in scope.
+### 4.7 Enterprise / org-wide rollout (no per-repo work)
 
-### 4.5 Repo-wide rollout
+Devin Desktop reads **system-level** rules, workflows, skills, and hooks that IT deploys once per machine (MDM/Ansible/Jamf/Intune) and users can't modify — ideal for pushing Mollify org-wide:
 
-- **Committed to every repo (PR-enforced):** `.devin/rules/mollify.md` (+ `.windsurf/rules/mollify.md` fallback), `.devin/workflows/{mollify-audit,mollify-cleanup,mollify-bootstrap}.md` (+ `.windsurf/workflows/` fallback).
-- **Per-developer (one-time):** the `mcpServers.mollify` block in `~/.codeium/windsurf/mcp_config.json`, applied via `/mollify-bootstrap` or pushed centrally via enterprise system-level MCP config.
-- **Scaffolding:** `mollify init --agent windsurf` writes all files + prints the MCP snippet — adoption in one command.
+- Rules: `/Library/Application Support/Devin/rules/` · `/etc/devin/rules/` · `C:\ProgramData\Devin\rules\` (Windsurf paths = legacy fallback).
+- Workflows: `…/Windsurf/workflows/` (and the Devin equivalents) — System precedence > Workspace > Global > Built-in.
+- Skills: `…/Windsurf/skills/` etc.
+- Hooks: system `hooks.json` **and** the **cloud dashboard** (Team Settings → Cascade Hooks) — distributed to all members, can't be disabled by users.
 
-### 4.6 Cascade EOL + Devin Local (ACP) caveat
+Plus `mollify init --agent devin` to scaffold the per-repo `.devin/` artifacts in one command.
 
-- **Cascade EOL is reported as 2026-07-01.** Successor agent is **Devin Local** — a Rust rewrite (~30% more token-efficient), with **sub-agents** (parallel specialized sessions reporting to a coordinator) and **ACP (Agent Client Protocol)** support so any ACP agent (Codex, Claude Agent, OpenCode) runs in the editor.
-- **What carries forward (decisive):** our markdown rules and workflows are format-stable and forward-compatible — Devin Desktop continues to read existing Windsurf rules/workflows with no forced migration and **retains MCP**. Everything Mollify ships now survives the EOL. Build now; don't wait.
-- **ACP vs MCP are orthogonal, not competing.** ACP is *agent ↔ editor* (how the IDE/sub-agents drive an agent). MCP is *agent ↔ tools* (how the agent calls Mollify). Mollify stays an **MCP server + CLI** and does **not** need to speak ACP. What ACP *would add*: sub-agents make Mollify *more* valuable — a coordinator can spawn a dedicated "audit" sub-agent that hammers the Mollify MCP server in parallel.
-- **Hedges baked in:** (1) ship `.devin/` as primary with `.windsurf/` as fallback; (2) keep a CLI fallback in every workflow so nothing breaks if MCP registration drifts; (3) document both the `windsurf/`-scoped and legacy MCP config paths. Net: no rework expected at EOL.
+### 4.8 Cascade EOL → Devin Local + ACP (decisive, authoritative)
 
----
+- **Cascade is available through July 2026**, then superseded by **Devin Local** (the FAQ wording is "remains available through July"; treat end-of-July, not a hard July-1 date — *correction to the earlier draft*).
+- **Everything carries forward.** Devin Desktop "continues to read all your existing Windsurf rules and adds the `.devin/` equivalents; nothing you have today needs to change," and **retains MCP**. Devin Local inherits Windsurf settings. So the Mollify rules/skills/workflows/hooks/MCP shipped now keep working.
+- **ACP ⟂ MCP.** ACP (Agent Client Protocol, JSON-RPC over stdio — Devin CLI/Local ↔ editors like Zed/JetBrains) is *agent↔editor*; MCP is *agent↔tools*. **Mollify is an MCP server and does not implement ACP.** Devin Local's **subagents** make Mollify *more* useful — a coordinator can spawn an isolated Mollify audit subagent (mirror it as a `subagent: true` skill, §4.1).
+- **Net hedge:** ship `.devin/` primary + `.windsurf/` fallback; keep a CLI fallback in every workflow/skill so nothing breaks if MCP registration drifts; provide both `.windsurf/hooks.json` (Cascade) and `.devin/hooks.v1.json` (Devin Local/CLI). Zero rework expected at the cutover.
 
 ## 5. Cross-platform primitive matrix
 
@@ -836,7 +795,7 @@ Cascade supports **hooks** (the only deterministic surface — rules/skills can 
 | **Codex** | `AGENTS.md` chain (32 KiB) | custom prompts (deprecated) | **yes** — `[hooks]` + `notify` | `config.toml` `[mcp_servers.*]` | `AGENTS.md` |
 | **Cursor** | `.cursor/rules/*.mdc` | `.cursor/commands/*.md` | no | `.cursor/mcp.json` | (rules) |
 | **Gemini CLI** | `GEMINI.md` | `.gemini/commands/*.toml` (`!{}`) | no | `.gemini/settings.json` | `GEMINI.md` (`/memory`) |
-| **Devin Desktop / Cascade** | `.devin/rules/*.md` (`trigger`) **+ `.devin/skills/` (SKILL.md)** | `.windsurf/workflows/*.md` (`/slash`) | **yes** — `.windsurf/hooks.json` (pre/post; pre blocks via exit 2) | `~/.codeium/windsurf/mcp_config.json` | `~/.codeium/windsurf/memories/` |
+| **Devin Desktop / Cascade** | `.devin/rules/*.md` (`trigger`) **+ `.devin/skills/SKILL.md`** (skills via `@mention`/auto, not slash) | `.windsurf/workflows/*.md` (`/slash`, manual-only) | **yes** — Cascade `.windsurf/hooks.json` (12 lowercase events, no matcher) · Devin CLI/Local `.devin/hooks.v1.json` (Claude-compatible) | Cascade `~/.codeium/windsurf/mcp_config.json` · CLI/Local `.devin/config.json` | `~/.codeium/windsurf/memories/` |
 | **GitHub Copilot** | `*.instructions.md` / `AGENTS.md` | `.github/prompts/*.prompt.md` | no | `.vscode/mcp.json` (`servers`) | instructions files |
 | **Cline** | `.clinerules` | — | no | `cline_mcp_settings.json` | (rules) |
 | **Aider** | `CONVENTIONS.md` | — | no | `.aider.conf.yml` `mcp-servers` | `CONVENTIONS.md` |
@@ -854,7 +813,7 @@ Cascade supports **hooks** (the only deterministic surface — rules/skills can 
 - A rule/memory file in each agent's format (`.mdc`, `GEMINI.md`, `AGENTS.md`, `.devin/rules/*.md`, …).
 - An MCP registration block in each agent's config (`.mcp.json`, TOML `[mcp_servers.*]`, `mcp_config.json`, `servers`, YAML `mcp-servers`).
 - A command/workflow file where the agent supports one (`.cursor/commands`, `.gemini/commands/*.toml`, `.devin/workflows/*`).
-- Hook artifacts only where deterministic enforcement exists (Claude Code, Codex).
+- Hook artifacts only where deterministic enforcement exists (Claude Code, Codex, and Devin/Cascade — note Devin CLI/Local reuses the Claude-Code-format hooks file verbatim).
 
 **Always version-pin** every generated artifact to the CLI's JSON-schema version, with a CI drift gate, since clients depend on the envelope `kind`, not on Mollify internals.
 
@@ -884,5 +843,5 @@ Mollify is a design-stage product (per its own `PLAN.md`/`RESEARCH.md`, which ta
 **Cursor / Gemini CLI / others — MEDIUM.** Vendor domains (cursor.com, geminicli.com, agentskills.io) returned 403 to the fetch tool; corroborated via search excerpts + reputable 2025–2026 guides + the Agent Skills open standard. SKILL.md limits (name ≤64, description ≤1024 portable / 1,536 in Claude Code), Cursor MDC fields (globs-as-comma-string footgun), Gemini TOML commands (`{{args}}`, `!{}`), MCP JSON/TOML schemas — confirmed.
 *Corrections:* Roo Code shut down (~May 2026) — dropped. Cline skills dir is `.cline/skills/`. Aider + Continue do **not** natively support Agent Skills — rules + MCP only. Copilot skills dir is `.github/skills`. Continue MCP standalone blocks are YAML. Cursor `.cursor/skills/` is native (2.4+, project-scoped only). `allowed-tools` is EXPERIMENTAL in the portable spec; support varies per agent.
 
-**Devin Desktop / Cascade — MEDIUM.** `docs.windsurf.com` and `devin.ai` were egress-blocked (403); reached via search snippets + secondary guides + the Windsurf-Samples catalog. Confirmed: rule trigger modes, 12,000 / 6,000-char limits, workflow `/slash` invocation, MCP path (unchanged after rebrand) + transports + `alwaysAllow` + `${env:VAR}` + 100-tool cap, memories.
-*Not confirmable here / highest-risk:* the exact `2026-07-01` EOL date; precise `.devin/rules` precedence internals; and especially **the `auto_execute_steps` frontmatter field name/shape** (historically `auto_execution_mode`, an integer) — verify against the live Devin Desktop docs before operational reliance. **Precedence corrected: `.devin/` is preferred/primary, `.windsurf/` is the fallback.**
+**Devin Desktop / Cascade — HIGH (now sourced from authoritative docs).** §4 was rewritten against `docs.devin.ai/llms-full.txt` (the full Devin documentation, user-supplied after the domain was egress-blocked). Confirmed verbatim from primary docs: `.devin/` preferred over `.windsurf/` (FAQ workspace-directory table); rule `trigger` modes + 12,000/6,000-char limits + global `~/.codeium/windsurf/memories/global_rules.md`; skills (`.devin/skills/`, `.agents/skills/`, progressive disclosure, `@mention`/auto in IDE vs `/slash`+`subagent:true` in Devin CLI); workflows `.windsurf/workflows/*.md` `/slash` manual-only 12k; **two hook systems** — Cascade `.windsurf/hooks.json` (12 lowercase events, `command`/`powershell`/`show_output`/`working_directory`, **no matcher**, exit-2 blocks) and Devin CLI `.devin/hooks.v1.json` (Claude-Code-compatible); MCP `~/.codeium/windsurf/mcp_config.json` (Cascade) vs `.devin/config.json`/`devin mcp add` (CLI) with `${env:}`/`${file:}` interpolation + 100-tool cap; enterprise system-level `rules/workflows/skills/hooks` paths; ACP ⟂ MCP.
+*Corrections folded in from the authoritative pass (these retire earlier WebSearch guesses):* the **`auto_execute_steps`** workflow frontmatter field is **not in the docs — removed** (workflows are plain title+steps); MCP **`alwaysAllow` is not a Cascade field** — tools are toggled in the UI / `disabledTools` (removed); skills are **`@mention`, not slash**, in the IDE; hooks have **no `matcher`** in Cascade (the event is the filter); Cascade EOL is **"available through July 2026"**, not a hard `2026-07-01`. *Still worth re-confirming against your installed build:* whether `.devin/workflows/` and `.devin/hooks.json` are honored yet by your Cascade channel (docs show `.windsurf/` as the live IDE path for both, with `.devin/` as the stated direction).
