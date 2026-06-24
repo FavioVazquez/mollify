@@ -26,13 +26,21 @@ struct Tok {
     line: u32,
 }
 
+/// Duplication analysis with the default thresholds.
 pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
+    analyze_with(graph, MIN_TOKENS, MIN_LINES)
+}
+
+/// Duplication analysis with configurable `min_tokens` window and minimum
+/// clone line `min_lines` span.
+pub fn analyze_with(graph: &ModuleGraph, min_tokens: usize, min_lines: u32) -> Vec<Finding> {
+    let min_tokens = min_tokens.max(8);
     // Tokenize each module from disk (deterministic order via sorted modules).
     let mut files: Vec<(usize, Vec<Tok>)> = Vec::new();
     for (i, m) in graph.modules.iter().enumerate() {
         if let Ok(src) = std::fs::read_to_string(&m.path) {
             let toks = tokenize(&src);
-            if toks.len() >= MIN_TOKENS {
+            if toks.len() >= min_tokens {
                 files.push((i, toks));
             }
         }
@@ -41,8 +49,8 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     // Window hash -> occurrences (file-list-index, token-start).
     let mut map: FxHashMap<u64, Vec<(usize, usize)>> = FxHashMap::default();
     for (fi, (_m, toks)) in files.iter().enumerate() {
-        for start in 0..=toks.len() - MIN_TOKENS {
-            let h = window_hash(&toks[start..start + MIN_TOKENS]);
+        for start in 0..=toks.len() - min_tokens {
+            let h = window_hash(&toks[start..start + min_tokens]);
             map.entry(h).or_default().push((fi, start));
         }
     }
@@ -59,7 +67,7 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
         if occs.len() < 2 {
             continue;
         }
-        // Group occurrences whose MIN_TOKENS window content actually matches the
+        // Group occurrences whose min_tokens window content actually matches the
         // first (guards against hash collisions).
         let mut sorted = occs.clone();
         sorted.sort_unstable();
@@ -67,7 +75,7 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
         if is_covered(&covered, f0, s0) {
             continue;
         }
-        let ref_win: Vec<&str> = files[f0].1[s0..s0 + MIN_TOKENS]
+        let ref_win: Vec<&str> = files[f0].1[s0..s0 + min_tokens]
             .iter()
             .map(|t| t.norm.as_str())
             .collect();
@@ -76,7 +84,7 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
             .copied()
             .filter(|&(fi, st)| {
                 !is_covered(&covered, fi, st)
-                    && files[fi].1[st..st + MIN_TOKENS]
+                    && files[fi].1[st..st + min_tokens]
                         .iter()
                         .map(|t| t.norm.as_str())
                         .eq(ref_win.iter().copied())
@@ -86,7 +94,7 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
             continue;
         }
         // Extend to maximal common length across all group members.
-        let mut len = MIN_TOKENS;
+        let mut len = min_tokens;
         loop {
             let next: Option<&str> = group
                 .first()
@@ -119,7 +127,7 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
             .map(|(_, s, e)| e.saturating_sub(*s) + 1)
             .max()
             .unwrap_or(0);
-        if instances.len() < 2 || span < MIN_LINES {
+        if instances.len() < 2 || span < min_lines {
             continue;
         }
 
