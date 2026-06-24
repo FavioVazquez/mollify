@@ -12,7 +12,7 @@
 //! `mollify_arch`, `mollify_complexity`, `mollify_dupes`, `mollify_types`,
 //! `mollify_security`, `mollify_coverage`, `mollify_supply_chain`,
 //! `mollify_explain`, `mollify_trace`, `mollify_inspect`, `mollify_list`,
-//! `mollify_metrics`.
+//! `mollify_metrics`, `mollify_fix`.
 //! Analysis tools accept `{ "path": "<dir>" }` (default ".") and return the
 //! kind-discriminated JSON report as text content. (`watch` is a long-running
 //! loop and stays CLI-only.)
@@ -124,6 +124,13 @@ fn tool_list() -> Value {
             "kind": { "type": "string", "enum": ["entry-points", "files", "frameworks"], "description": "What to list (default entry-points)." }
         }
     });
+    let fix_schema = json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Project root (default \".\")." },
+            "apply": { "type": "boolean", "description": "Write the changes (default false = dry-run preview)." }
+        }
+    });
     let supply_chain_schema = json!({
         "type": "object",
         "properties": {
@@ -147,6 +154,7 @@ fn tool_list() -> Value {
         { "name": "mollify_inspect", "description": "Per-file evidence bundle: that file's findings plus its import neighborhood.", "inputSchema": inspect_schema },
         { "name": "mollify_list", "description": "Project topology: entry-points, files, or detected frameworks.", "inputSchema": list_schema },
         { "name": "mollify_metrics", "description": "Code metrics: Maintainability Index, Halstead, raw LOC, per-file complexity.", "inputSchema": path_schema },
+        { "name": "mollify_fix", "description": "Preview (default) or apply safe auto-fixes — certain unused symbols/imports. Set apply=true to write.", "inputSchema": fix_schema },
     ])
 }
 
@@ -226,6 +234,28 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
         }
         "mollify_metrics" => {
             serde_json::to_string_pretty(&Report::Metrics(mollify_core::metrics::report(&root)))
+        }
+        "mollify_fix" => {
+            let do_apply = args
+                .and_then(|a| a.get("apply"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let edits = mollify_core::fix::plan(&root);
+            let items: Vec<Value> = edits
+                .iter()
+                .map(|e| {
+                    json!({ "path": e.path, "start_line": e.start_line, "end_line": e.end_line, "description": e.description })
+                })
+                .collect();
+            let written = if do_apply {
+                mollify_core::fix::apply(&edits).unwrap_or(0)
+            } else {
+                0
+            };
+            serde_json::to_string_pretty(&json!({
+                "kind": "fix", "applied": do_apply, "count": edits.len(),
+                "fixes": items, "written": written,
+            }))
         }
         "mollify_explain" => {
             let body = match arg_str("rule") {
@@ -314,6 +344,7 @@ mod tests {
             "mollify_inspect",
             "mollify_list",
             "mollify_metrics",
+            "mollify_fix",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
