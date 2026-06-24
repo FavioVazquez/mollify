@@ -114,7 +114,12 @@ mod tests {
             confidence: mollify_types::Confidence::Likely,
             attribution: None,
             reason: "r".into(),
-            location: Location { path: path.into(), line: 1, column: 0, end_line: None },
+            location: Location {
+                path: path.into(),
+                line: 1,
+                column: 0,
+                end_line: None,
+            },
             actions: vec![],
         }
     }

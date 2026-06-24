@@ -59,7 +59,8 @@ mod tests {
     use mollify_graph::discover_python_files;
 
     fn temp(tag: &str) -> Utf8PathBuf {
-        let base = std::env::temp_dir().join(format!("mollify-core-arch-{}-{tag}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("mollify-core-arch-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         Utf8PathBuf::from_path_buf(base).unwrap()
     }

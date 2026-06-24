@@ -90,6 +90,13 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     - **Gemini CLI:** `GEMINI.md`, `.gemini/settings.json`, `.gemini/commands/mollify/audit.toml`.
     - All JSON/TOML validated; all reference only real commands; MCP all → `mollify mcp`.
 
+## Docs & infra (shipped)
+- `README.md`, `CONTRIBUTING.md`, `LICENSE` (MIT).
+- `docs/usage.md`, `docs/architecture.md`, `docs/configuration.md`, `docs/ci-integration.md`,
+  `docs/adr/0001-parser-tree-sitter.md`, and this `docs/STATUS.md`.
+- `.github/workflows/ci.yml` — fmt + clippy(-D warnings) + test, plus a dogfood SARIF upload.
+- Code is `cargo fmt`-clean and passes `clippy -D warnings`.
+
 ## Verification protocol (every commit)
 1. `cargo build` clean. 2. `cargo test` green. 3. `cargo clippy` (best-effort). 4. Update this file. 5. Commit with a descriptive message (author: Favio Vázquez).
 

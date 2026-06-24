@@ -4,8 +4,8 @@
 
 use crate::dead_code_report;
 use camino::{Utf8Path, Utf8PathBuf};
-use rustc_hash::FxHashMap;
 use mollify_types::Confidence;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct FixEdit {
@@ -80,7 +80,8 @@ mod tests {
     use super::*;
 
     fn temp(tag: &str) -> Utf8PathBuf {
-        let base = std::env::temp_dir().join(format!("mollify-core-fix-{}-{tag}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("mollify-core-fix-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         Utf8PathBuf::from_path_buf(base).unwrap()
@@ -108,7 +109,11 @@ mod tests {
         let d = temp("apply");
         std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
         let lib = d.join("lib.py");
-        std::fs::write(&lib, "def _priv():\n    return 1\n\ndef keep():\n    return 2\n").unwrap();
+        std::fs::write(
+            &lib,
+            "def _priv():\n    return 1\n\ndef keep():\n    return 2\n",
+        )
+        .unwrap();
         let edits = plan(&d);
         let n = apply(&edits).unwrap();
         assert_eq!(n, 1);

@@ -92,7 +92,12 @@ mod tests {
             confidence: Confidence::Certain,
             attribution: None,
             reason: "function `x` is unused".into(),
-            location: Location { path: "a.py".into(), line: 5, column: 0, end_line: Some(7) },
+            location: Location {
+                path: "a.py".into(),
+                line: 5,
+                column: 0,
+                end_line: Some(7),
+            },
             actions: vec![],
         }
     }

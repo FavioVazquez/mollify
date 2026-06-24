@@ -92,9 +92,9 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
                 .first()
                 .and_then(|&(fi, st)| files[fi].1.get(st + len).map(|t| t.norm.as_str()));
             let Some(tok) = next else { break };
-            let all_match = group.iter().all(|&(fi, st)| {
-                files[fi].1.get(st + len).map(|t| t.norm.as_str()) == Some(tok)
-            });
+            let all_match = group
+                .iter()
+                .all(|&(fi, st)| files[fi].1.get(st + len).map(|t| t.norm.as_str()) == Some(tok));
             if all_match {
                 len += 1;
             } else {
@@ -312,7 +312,8 @@ mod tests {
     use mollify_graph::discover_python_files;
 
     fn temp(tag: &str) -> Utf8PathBuf {
-        let base = std::env::temp_dir().join(format!("mollify-core-dup-{}-{tag}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("mollify-core-dup-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         Utf8PathBuf::from_path_buf(base).unwrap()
     }

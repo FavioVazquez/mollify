@@ -46,7 +46,10 @@ pub fn analyze_with(graph: &ModuleGraph, max_cyclo: u32, max_cog: u32) -> Vec<Fi
                 },
                 actions: vec![Action {
                     kind: "refactor".into(),
-                    description: format!("Refactor `{}` to reduce complexity (extract helpers, flatten nesting)", f.name),
+                    description: format!(
+                        "Refactor `{}` to reduce complexity (extract helpers, flatten nesting)",
+                        f.name
+                    ),
                     auto_fixable: false,
                     suppression_comment: Some("# mollify: ignore[high-complexity]".into()),
                 }],
@@ -63,7 +66,8 @@ mod tests {
     use mollify_graph::discover_python_files;
 
     fn temp(tag: &str) -> Utf8PathBuf {
-        let base = std::env::temp_dir().join(format!("mollify-core-cx-{}-{tag}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("mollify-core-cx-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         Utf8PathBuf::from_path_buf(base).unwrap()
     }
@@ -86,7 +90,11 @@ mod tests {
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&g);
-        assert!(f.iter().any(|x| x.rule == "high-complexity" && x.reason.contains("big")), "got {f:?}");
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "high-complexity" && x.reason.contains("big")),
+            "got {f:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 
