@@ -52,7 +52,7 @@ pub fn apply(edits: &[FixEdit]) -> std::io::Result<usize> {
     let mut applied = 0;
     for (path, mut file_edits) in by_file {
         // Bottom-up; skip overlaps defensively.
-        file_edits.sort_by(|a, b| b.start_line.cmp(&a.start_line));
+        file_edits.sort_by_key(|e| std::cmp::Reverse(e.start_line));
         let content = std::fs::read_to_string(path)?;
         let mut lines: Vec<&str> = content.lines().collect();
         let mut last_removed_start = u32::MAX;
