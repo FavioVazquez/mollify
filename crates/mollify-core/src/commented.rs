@@ -1,0 +1,105 @@
+//! Commented-out-code detection (eradicate / flake8-eradicate E800). Flags
+//! comment lines whose stripped text parses as Python code (`import`, `def`,
+//! `return`, assignments, control flow) rather than prose. Tool directives
+//! (`noqa`, `type:`, `mypy:`, `TODO`, `mollify:`, shebangs) are never flagged.
+//! Orthogonal to reachability — it's about dead *text*, not dead symbols.
+
+use crate::fingerprint::fingerprint;
+use mollify_graph::ModuleGraph;
+use mollify_types::{Action, Category, Confidence, Finding, Location, Severity};
+
+/// Directive prefixes that are legitimate comments, never commented-out code.
+const DIRECTIVES: &[&str] = &[
+    "noqa", "type:", "mypy", "pylint", "pyright", "ruff", "flake8", "isort", "todo", "fixme",
+    "xxx", "hack", "note", "mollify", "nosec", "pragma", "!",
+];
+
+/// Heuristic: does a comment's stripped body look like Python code?
+fn looks_like_code(body: &str) -> bool {
+    let b = body.trim();
+    if b.len() < 3 {
+        return false;
+    }
+    let lower = b.to_ascii_lowercase();
+    if DIRECTIVES.iter().any(|d| lower.starts_with(d)) {
+        return false;
+    }
+    // Statement keywords at the start.
+    let starters = [
+        "import ", "from ", "def ", "class ", "return", "if ", "elif ", "else:", "for ", "while ",
+        "try:", "except", "finally:", "with ", "raise ", "assert ", "print(", "del ", "yield ",
+        "async ", "await ", "lambda ",
+    ];
+    if starters.iter().any(|s| b.starts_with(s)) {
+        return true;
+    }
+    // `name = value` / `name(...)` / `obj.method(...)` shaped lines (with a
+    // trailing colon or paren/operator), excluding prose-like sentences.
+    let codeish = (b.contains(" = ") || b.contains("=="))
+        || (b.ends_with(':') && !b.contains(' '))
+        || (b.ends_with(')') && b.contains('('))
+        || b.ends_with('\\');
+    codeish && !b.ends_with('.') && b.split_whitespace().count() <= 12
+}
+
+/// Emit a `commented-code` finding per comment line that looks like code.
+pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for m in &graph.modules {
+        let Some(src) = mollify_graph::read_source(&m.path) else {
+            continue;
+        };
+        for (i, line) in src.lines().enumerate() {
+            let trimmed = line.trim_start();
+            let Some(body) = trimmed.strip_prefix('#') else {
+                continue;
+            };
+            // Only treat a *whole-line* comment as candidate code (not trailing).
+            if !looks_like_code(body) {
+                continue;
+            }
+            let rule = "commented-code";
+            let line_no = i as u32 + 1;
+            findings.push(Finding {
+                fingerprint: fingerprint(rule, &[m.path.as_str(), &line_no.to_string()]),
+                rule: rule.into(),
+                category: Category::DeadCode,
+                severity: Severity::Warn,
+                confidence: Confidence::Likely,
+                attribution: None,
+                reason: format!("commented-out code: `{}`", body.trim()),
+                location: Location {
+                    path: m.path.clone(),
+                    line: line_no,
+                    column: 0,
+                    end_line: None,
+                },
+                actions: vec![Action {
+                    kind: "remove-commented-code".into(),
+                    description: "Delete the commented-out code (version control remembers it)"
+                        .into(),
+                    auto_fixable: false,
+                    suppression_comment: Some("# mollify: ignore[commented-code]".into()),
+                }],
+            });
+        }
+    }
+    findings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flags_code_not_prose_or_directives() {
+        assert!(looks_like_code(" import os"));
+        assert!(looks_like_code(" return x + 1"));
+        assert!(looks_like_code(" x = compute()"));
+        assert!(looks_like_code(" def helper():"));
+        assert!(!looks_like_code(" this explains why we do the thing."));
+        assert!(!looks_like_code(" noqa: F401"));
+        assert!(!looks_like_code(" type: ignore"));
+        assert!(!looks_like_code(" TODO: fix this later"));
+    }
+}

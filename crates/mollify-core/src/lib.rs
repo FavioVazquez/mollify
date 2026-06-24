@@ -14,6 +14,7 @@ use mollify_types::{
 
 pub mod arch;
 pub mod baseline;
+pub mod commented;
 pub mod complexity;
 pub mod config;
 pub mod coverage;
@@ -86,7 +87,9 @@ pub fn apply_suppressions(graph: &ModuleGraph, findings: &mut Vec<Finding>) {
 /// `mollify dead-code` — reachability-based unused files/symbols.
 pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(&config::load(root), &graph, deadcode::analyze(&graph))
+    let mut findings = deadcode::analyze(&graph);
+    findings.extend(commented::analyze(&graph));
+    finalize(&config::load(root), &graph, findings)
 }
 
 /// `mollify deps` — dependency hygiene.
@@ -248,6 +251,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     let cfg = config::load(root);
     let mut findings: Vec<Finding> = Vec::new();
     findings.extend(deadcode::analyze(&graph));
+    findings.extend(commented::analyze(&graph));
     findings.extend(deps::analyze(root, &graph));
     findings.extend(arch::analyze(&graph));
     findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));

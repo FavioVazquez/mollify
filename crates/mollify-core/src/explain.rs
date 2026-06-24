@@ -51,6 +51,11 @@ pub fn text(rule: &str) -> Option<&'static str> {
             "A statically reachable function with zero executed lines in the \
             supplied coverage report. Confidence: likely. Action: verify it is dead, then remove."
         }
+        "commented-code" => {
+            "A comment whose text parses as Python code (dead code left in a \
+            comment). Confidence: likely. Action: delete it — version control \
+            remembers it."
+        }
         "hotspot" => {
             "A file that is both high-churn (git history) and high-complexity — the \
             riskiest code to change. Action: prioritize it for refactoring and test coverage."
@@ -128,6 +133,7 @@ pub const RULES: &[&str] = &[
     "high-complexity",
     "duplication",
     "cold-code",
+    "commented-code",
     "hotspot",
     "untyped-function",
     "policy-violation",
