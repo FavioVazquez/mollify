@@ -64,11 +64,11 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 `policies`.
 
 ## MCP tools (`mollify mcp`)
-The stdio MCP server exposes 15 tools (`watch` and `lsp` are CLI-only):
+The stdio MCP server exposes 16 tools (`watch` and `lsp` are CLI-only):
 `mollify_audit`, `mollify_dead_code`, `mollify_deps`, `mollify_arch`,
 `mollify_complexity`, `mollify_dupes`, `mollify_types`, `mollify_security`,
 `mollify_coverage`, `mollify_supply_chain`, `mollify_explain`, `mollify_trace`,
-`mollify_inspect`, `mollify_list`, `mollify_metrics`.
+`mollify_inspect`, `mollify_list`, `mollify_metrics`, `mollify_fix`.
 Params: `mollify_coverage` requires `coverage_file`; `mollify_trace` requires
 `module`; `mollify_inspect` requires `file`; `mollify_supply_chain` takes optional
 `advisory_db`; `mollify_list` takes optional `kind`; all others take optional
