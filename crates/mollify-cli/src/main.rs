@@ -67,6 +67,8 @@ enum Command {
     Init(Scope),
     /// Run the Model Context Protocol server over stdio (for coding agents).
     Mcp,
+    /// Run the Language Server (LSP) over stdio (real-time editor diagnostics).
+    Lsp,
 }
 
 #[derive(clap::Args)]
@@ -311,6 +313,13 @@ fn main() {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("mollify mcp: {e}");
+                1
+            }
+        },
+        Command::Lsp => match mollify_lsp::run() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("mollify lsp: {e}");
                 1
             }
         },

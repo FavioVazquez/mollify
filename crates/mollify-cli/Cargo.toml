@@ -15,6 +15,7 @@ path = "src/main.rs"
 mollify-types = { path = "../mollify-types" }
 mollify-core = { path = "../mollify-core" }
 mollify-mcp = { path = "../mollify-mcp" }
+mollify-lsp = { path = "../mollify-lsp" }
 clap.workspace = true
 serde_json.workspace = true
 camino.workspace = true

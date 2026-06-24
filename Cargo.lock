@@ -461,6 +461,7 @@ dependencies = [
  "camino",
  "clap",
  "mollify-core",
+ "mollify-lsp",
  "mollify-mcp",
  "mollify-types",
  "serde_json",
@@ -491,6 +492,16 @@ dependencies = [
  "mollify-parse",
  "rayon",
  "rustc-hash",
+ "serde_json",
+]
+
+[[package]]
+name = "mollify-lsp"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "mollify-core",
+ "mollify-types",
  "serde_json",
 ]
 
