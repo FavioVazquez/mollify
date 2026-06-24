@@ -40,7 +40,8 @@ pub struct ModuleGraph {
     pub global_dynamic: bool,
 }
 
-/// Walk `root` for `*.py` files, honoring `.gitignore`. Deterministic order.
+/// Walk `root` for `*.py` and `*.ipynb` files, honoring `.gitignore`.
+/// Deterministic order.
 pub fn discover_python_files(root: &Utf8Path) -> Vec<Utf8PathBuf> {
     let mut out = Vec::new();
     for entry in ignore::WalkBuilder::new(root)
@@ -49,7 +50,7 @@ pub fn discover_python_files(root: &Utf8Path) -> Vec<Utf8PathBuf> {
         .flatten()
     {
         let p = entry.path();
-        if p.extension().is_some_and(|e| e == "py") {
+        if p.extension().is_some_and(|e| e == "py" || e == "ipynb") {
             if let Ok(u) = Utf8PathBuf::from_path_buf(p.to_path_buf()) {
                 out.push(u);
             }
@@ -57,6 +58,44 @@ pub fn discover_python_files(root: &Utf8Path) -> Vec<Utf8PathBuf> {
     }
     out.sort();
     out
+}
+
+/// Read a module's source. For `.ipynb`, extract and concatenate code cells into
+/// one Python source (line numbers are relative to that concatenation — a
+/// documented v1 simplification). Jupyter magics/shell-escapes are skipped.
+pub fn read_source(path: &Utf8Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    if path.extension() != Some("ipynb") {
+        return Some(raw);
+    }
+    let nb: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let cells = nb.get("cells")?.as_array()?;
+    let mut src = String::new();
+    for cell in cells {
+        if cell.get("cell_type").and_then(|t| t.as_str()) != Some("code") {
+            continue;
+        }
+        match cell.get("source") {
+            Some(serde_json::Value::Array(lines)) => {
+                for l in lines {
+                    if let Some(s) = l.as_str() {
+                        let t = s.trim_start();
+                        if t.starts_with('%') || t.starts_with('!') {
+                            continue;
+                        }
+                        src.push_str(s);
+                    }
+                }
+                src.push('\n');
+            }
+            Some(serde_json::Value::String(s)) => {
+                src.push_str(s);
+                src.push('\n');
+            }
+            _ => {}
+        }
+    }
+    Some(src)
 }
 
 /// Compute a module's dotted name relative to a source root. `src/` is treated
@@ -83,6 +122,7 @@ fn is_entry(path: &Utf8Path) -> bool {
         || name == "__init__.py" // package surface is a public root
         || name.starts_with("test_")
         || name.ends_with("_test.py")
+        || path.extension() == Some("ipynb")
 }
 
 impl ModuleGraph {
@@ -92,7 +132,7 @@ impl ModuleGraph {
         let parsed: Vec<(Utf8PathBuf, ParsedModule)> = files
             .par_iter()
             .filter_map(|p| {
-                let src = std::fs::read_to_string(p).ok()?;
+                let src = read_source(p)?;
                 let mut parser = PyParser::new().ok()?;
                 let pm = parser.parse(p, &src).ok()?;
                 Some((p.clone(), pm))
@@ -393,6 +433,26 @@ mod tests {
         let unused: Vec<_> = g.unused_files().iter().map(|m| m.dotted.clone()).collect();
         assert!(unused.contains(&"orphan".to_string()), "got {unused:?}");
         assert!(!unused.contains(&"used".to_string()));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn reads_notebook_code_cells() {
+        let d = temp("nb");
+        let nb = r##"{"cells":[{"cell_type":"markdown","source":["title"]},{"cell_type":"code","source":["def nb_fn(x):\n","    return x\n"]}]}"##;
+        write(&d, "analysis.ipynb", nb);
+        let files = discover_python_files(&d);
+        assert!(files.iter().any(|f| f.as_str().ends_with("analysis.ipynb")));
+        let g = ModuleGraph::build(&d, &files);
+        let nbmod = g
+            .modules
+            .iter()
+            .find(|m| m.path.as_str().ends_with("analysis.ipynb"))
+            .unwrap();
+        assert!(
+            nbmod.parsed.definitions.iter().any(|x| x.name == "nb_fn"),
+            "notebook code not parsed"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

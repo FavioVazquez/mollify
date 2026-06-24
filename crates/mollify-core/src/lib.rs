@@ -21,6 +21,7 @@ pub mod dupes;
 pub mod fingerprint;
 pub mod fix;
 pub mod git;
+pub mod hotspots;
 pub mod known;
 pub mod plugins;
 pub mod sarif;
@@ -78,7 +79,8 @@ pub fn arch_report(root: &Utf8Path) -> FindingsReport {
 pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
     let cfg = config::load(root);
-    let findings = complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive);
+    let mut findings = complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive);
+    findings.extend(hotspots::analyze(root, &graph));
     finalize(&cfg, graph.modules.len(), findings)
 }
 
@@ -129,6 +131,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     findings.extend(dupes::analyze(&graph));
     findings.extend(typehealth::analyze(&graph));
     findings.extend(security::analyze(&graph));
+    findings.extend(hotspots::analyze(root, &graph));
     config::apply(&cfg, &mut findings);
     sort_findings(&mut findings);
     let files = graph.modules.len();

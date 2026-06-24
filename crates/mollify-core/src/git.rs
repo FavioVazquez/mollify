@@ -55,6 +55,28 @@ pub fn changed_files(root: &Utf8Path, base: Option<&str>) -> Option<FxHashSet<St
     Some(set)
 }
 
+/// Per-file churn = number of commits that touched each file (relative paths).
+/// `None` if not a git repo. Used for churn×complexity hotspot ranking.
+pub fn file_churn(root: &Utf8Path) -> Option<rustc_hash::FxHashMap<String, u32>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root.as_str())
+        .args(["log", "--no-merges", "--pretty=format:", "--name-only"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut counts: rustc_hash::FxHashMap<String, u32> = rustc_hash::FxHashMap::default();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let l = line.trim();
+        if !l.is_empty() {
+            *counts.entry(l.to_string()).or_insert(0) += 1;
+        }
+    }
+    Some(counts)
+}
+
 /// Whether a finding path (possibly absolute or `./`-prefixed) is in the changed
 /// set (which holds paths relative to `root`).
 pub fn path_is_changed(
