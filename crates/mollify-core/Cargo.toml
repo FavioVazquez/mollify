@@ -15,6 +15,7 @@ camino.workspace = true
 xxhash-rust.workspace = true
 rustc-hash.workspace = true
 toml = "0.9"
+serde_json.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -18,6 +18,8 @@ pub mod deadcode;
 pub mod deps;
 pub mod dupes;
 pub mod fingerprint;
+pub mod git;
+pub mod sarif;
 pub mod known;
 pub mod plugins;
 

@@ -37,9 +37,11 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     project (correct results: private→certain+autofix, public→likely, orphan file,
     missing numpy, unused rich/leftover-pkg; requests+stdlib+cross-module not flagged).
   - **Total: 23 tests green; `cargo build`, `cargo test`, `cargo clippy` clean.**
-  - ⏳ Phase-1 polish still open: `--gate new-only` (git diff + base worktree + attribution),
-    SARIF output, framework entry-point plugins (Django/FastAPI/pytest decorators),
-    config file (`.mollifyrc`) actually read, `fix` command.
+  - ✅ Phase-1 polish landed: **SARIF 2.1.0** output (`--format sarif`, `mollify-core/sarif.rs`);
+    **`--gate new-only`** + `--base <ref>` (git change detection in `mollify-core/git.rs`,
+    file-level introduced/inherited attribution — line-level base-worktree is the documented
+    upgrade); framework entry-point plugins (done in Phase 2). Agent hooks now use `--gate new-only`.
+  - ⏳ Still open: `.mollifyrc` actually read by analysis, `fix` command, line-level gate.
 - **Phase 2 — dupes + complexity + arch:** ✅ (all three engines done, tested, in `audit`)
   - ✅ **Framework plugins** (`mollify-core/plugins.rs`) — decorator registry (routes, tasks,
     fixtures, signal receivers, CLI commands, validators…) marks registered symbols reached;
