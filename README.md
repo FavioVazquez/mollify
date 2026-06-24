@@ -23,7 +23,7 @@ evidence with a stable fingerprint, a confidence tier, and a human-readable reas
 Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 > **Project status:** early but real. Phases 0–4 of the [plan](PLAN.md) are
-> substantially implemented, tested (74+ tests), and dogfooded; CI is green.
+> substantially implemented, tested (79+ tests), and dogfooded; CI is green.
 > See [`docs/STATUS.md`](docs/STATUS.md) for exactly what's done vs pending and
 > [`docs/adr/`](docs/adr) for design decisions. Honest about its edges — see
 > *Known limitations* below.
@@ -47,7 +47,7 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 | Area | Command | Rules |
 |---|---|---|
-| **Dead code** | `mollify dead-code` | `unused-file`, `unused-export`, `unused-import`, `commented-code` |
+| **Dead code** | `mollify dead-code` | `unused-file`, `unused-export`, `unused-import`, `unused-variable`, `unused-parameter`, `commented-code` |
 | **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency` (pyproject + requirements/uv/pdm) |
 | **Architecture** | `mollify arch` | `circular-dependency`, `layer-violation`, `forbidden-import`, `independence-violation`, custom policies |
 | **Complexity & hotspots** | `mollify complexity` | `high-complexity`, `hotspot` (churn × complexity) |
@@ -55,8 +55,12 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 | **Type health** | `mollify types` | `untyped-function` |
 | **Security** | `mollify security` | eval/exec, shell, `sql-injection`, weak hash/cipher, insecure-random, unsafe deserialization, TLS, secrets, missing-timeout — each with a CWE id |
 | **Cold paths** | `mollify coverage --coverage-file` | `cold-code` (reachable but never executed) |
-| **Supply chain** | `mollify supply-chain` | `vulnerable-dependency` (pinned versions vs a local CVE/advisory DB) |
+| **Supply chain** | `mollify supply-chain` | `vulnerable-dependency` (live OSV; offline DB fallback) |
+| **Metrics** | `mollify metrics` | Maintainability Index, Halstead, raw LOC, per-file complexity |
 | **Everything + score** | `mollify audit` | all of the above + a 0–100 quality score |
+
+Plus `mollify graph [--mermaid]` (import-graph export), `mollify lsp` (editor
+diagnostics), and `--format github|junit` for CI.
 
 Also: **Jupyter notebooks (`.ipynb`)** are discovered and analyzed cell-by-cell;
 **framework awareness** (Flask/FastAPI/Django/Celery/pytest/click/Pydantic/…);
@@ -179,7 +183,8 @@ A Cargo workspace; data flows parse → graph → engines → report:
 
 `mollify-types` (JSON contract) · `mollify-parse` (Python parsing, tree-sitter) ·
 `mollify-graph` (module/symbol graph + reachability + cycles) · `mollify-core`
-(the engines) · `mollify-cli` (`mollify`) · `mollify-mcp` (MCP server).
+(the engines) · `mollify-cli` (`mollify`) · `mollify-mcp` (MCP server) ·
+`mollify-lsp` (Language Server).
 
 See [docs/architecture.md](docs/architecture.md).
 
@@ -212,7 +217,10 @@ contract — see [RESEARCH.md](RESEARCH.md) for the honest, sourced landscape
   poetry/uv lockfiles); unpinned ranges can't be matched precisely. The
   `supply-chain` command fetches OSV live by default (offline DB fallback);
   `mollify audit` stays fully offline/deterministic, reading only the cached DB.
-- Not yet built: an LSP server. Tracked in [docs/STATUS.md](docs/STATUS.md).
+- Remaining roadmap items are lower-impact and tracked in
+  [docs/STATUS.md](docs/STATUS.md) (e.g. LSP keystroke-incremental reparse,
+  line-level gate attribution, LibCST format-preserving fixes, transitive-dep
+  detection which needs the installed environment).
 
 ## Contributing
 
