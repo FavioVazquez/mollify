@@ -35,6 +35,11 @@ pub fn text(rule: &str) -> Option<&'static str> {
             "A distribution declared in pyproject/requirements but never \
             imported. Confidence: likely. Action: remove it from your dependency list."
         }
+        "transitive-dependency" => {
+            "A package imported and installed, but only because another dependency \
+            pulls it in (not declared directly). Confidence: likely. Action: add \
+            it to your direct dependencies so it survives the transitive dep changing."
+        }
         "missing-dependency" => {
             "A third-party module imported but absent from your declared \
             dependencies (not stdlib, not first-party). Action: add it to your project metadata."
@@ -150,6 +155,7 @@ pub const RULES: &[&str] = &[
     "unused-parameter",
     "unused-dependency",
     "missing-dependency",
+    "transitive-dependency",
     "circular-dependency",
     "layer-violation",
     "forbidden-import",
