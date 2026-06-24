@@ -128,6 +128,12 @@ pub enum Report {
     DeadCode(FindingsReport),
     /// Dependency-hygiene-only report.
     Deps(FindingsReport),
+    /// Architecture (circular dependencies, boundaries).
+    Arch(FindingsReport),
+    /// Complexity hotspots.
+    Complexity(FindingsReport),
+    /// Duplication / clone families.
+    Dupes(FindingsReport),
 }
 
 /// A report that is just a sorted list of findings plus a summary.

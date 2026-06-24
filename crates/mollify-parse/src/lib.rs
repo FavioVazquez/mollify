@@ -41,6 +41,9 @@ pub struct Definition {
     pub end_line: u32,
     /// Convention: names starting with `_` are private by default.
     pub private_by_convention: bool,
+    /// Decorator paths applied to this def, normalized to the callable path
+    /// without call args, e.g. `app.route`, `pytest.fixture`, `staticmethod`.
+    pub decorators: Vec<String>,
 }
 
 /// An `import` / `from ... import ...` statement.
@@ -58,12 +61,25 @@ pub struct Import {
     pub line: u32,
 }
 
+/// Per-function complexity metrics (cyclomatic + cognitive).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionComplexity {
+    pub name: String,
+    pub line: u32,
+    /// McCabe cyclomatic complexity (1 + decision points).
+    pub cyclomatic: u32,
+    /// SonarSource-style cognitive complexity (nesting-weighted).
+    pub cognitive: u32,
+}
+
 /// The parsed view of one Python module that the graph builds on.
 #[derive(Debug, Clone)]
 pub struct ParsedModule {
     pub path: camino::Utf8PathBuf,
     pub definitions: Vec<Definition>,
     pub imports: Vec<Import>,
+    /// Complexity per function/method (including nested), attributed separately.
+    pub functions: Vec<FunctionComplexity>,
     /// Explicit `__all__` contents if present (public-API surface for libraries).
     pub dunder_all: Option<Vec<String>>,
     /// Every identifier *used* anywhere in the module (call targets, attribute
@@ -113,6 +129,7 @@ impl PyParser {
             path: path.to_owned(),
             definitions: Vec::new(),
             imports: Vec::new(),
+            functions: Vec::new(),
             dunder_all: None,
             used_names: Vec::new(),
             name_counts: std::collections::HashMap::new(),
@@ -125,6 +142,8 @@ impl PyParser {
         collect_top_level(root, bytes, &mut m);
         // Walk the whole tree once for used identifiers and dynamic sinks.
         collect_uses(root, bytes, &mut m);
+        // Per-function complexity.
+        collect_complexity(root, bytes, &mut m);
 
         Ok(m)
     }
@@ -147,13 +166,20 @@ fn collect_top_level(root: Node, bytes: &[u8], m: &mut ParsedModule) {
 /// conditional imports (`try: import x except ImportError:`) are seen.
 fn scan_stmt(node: Node, bytes: &[u8], m: &mut ParsedModule) {
     match node.kind() {
-        "function_definition" | "decorated_definition" => {
+        "function_definition" => {
             if let Some(def) = function_def(node, bytes) {
                 m.definitions.push(def);
             }
         }
         "class_definition" => {
             if let Some(def) = class_def(node, bytes) {
+                m.definitions.push(def);
+            }
+        }
+        "decorated_definition" => {
+            let decorators = collect_decorators(node, bytes);
+            if let Some(mut def) = function_def(node, bytes) {
+                def.decorators = decorators;
                 m.definitions.push(def);
             }
         }
@@ -209,7 +235,29 @@ fn function_def(node: Node, bytes: &[u8]) -> Option<Definition> {
         kind: DefKind::Function,
         line: real.start_position().row as u32 + 1,
         end_line: real.end_position().row as u32 + 1,
+        decorators: Vec::new(),
     })
+}
+
+/// Collect normalized decorator paths from a `decorated_definition` node.
+fn collect_decorators(node: Node, bytes: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut c = node.walk();
+    for ch in node.children(&mut c) {
+        if ch.kind() == "decorator" {
+            // Text looks like `@app.route('/x')` or `@staticmethod`.
+            let raw = node_text(ch, bytes).trim_start_matches('@').trim();
+            let path = raw
+                .split(['(', ' ', '\n', '\t'])
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !path.is_empty() {
+                out.push(path.to_string());
+            }
+        }
+    }
+    out
 }
 
 fn class_def(node: Node, bytes: &[u8]) -> Option<Definition> {
@@ -221,6 +269,7 @@ fn class_def(node: Node, bytes: &[u8]) -> Option<Definition> {
         kind: DefKind::Class,
         line: node.start_position().row as u32 + 1,
         end_line: node.end_position().row as u32 + 1,
+        decorators: Vec::new(),
     })
 }
 
@@ -332,6 +381,7 @@ fn maybe_module_var(assign: Node, bytes: &[u8], m: &mut ParsedModule) {
             kind: DefKind::Variable,
             line: assign.start_position().row as u32 + 1,
             end_line: assign.end_position().row as u32 + 1,
+            decorators: Vec::new(),
         });
     }
 }
@@ -345,6 +395,93 @@ fn string_literal_value(node: Node, bytes: &[u8]) -> String {
         }
     }
     node_text(node, bytes).trim_matches(['"', '\'']).to_string()
+}
+
+/// Decision-point node kinds for cyclomatic complexity.
+fn is_cyclo_node(kind: &str) -> bool {
+    matches!(
+        kind,
+        "if_statement"
+            | "elif_clause"
+            | "for_statement"
+            | "while_statement"
+            | "except_clause"
+            | "conditional_expression"
+            | "assert_statement"
+            | "case_clause"
+            | "for_in_clause"
+            | "if_clause"
+            | "boolean_operator"
+    )
+}
+
+fn is_nested_scope(kind: &str) -> bool {
+    kind == "function_definition" || kind == "class_definition"
+}
+
+/// Count cyclomatic decision points in a subtree, NOT descending into nested
+/// function/class scopes (they are attributed separately).
+fn count_cyclo(node: Node) -> u32 {
+    let mut count = 0;
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        if is_nested_scope(child.kind()) {
+            continue;
+        }
+        if is_cyclo_node(child.kind()) {
+            count += 1;
+        }
+        count += count_cyclo(child);
+    }
+    count
+}
+
+/// Cognitive complexity with a nesting penalty. Approximation of the SonarSource
+/// model: structural breaks add `1 + nesting`; `elif`/`else` and boolean
+/// sequences add a flat 1; nesting increments inside loops/conditionals.
+fn count_cognitive(node: Node, nesting: u32) -> u32 {
+    let mut sum = 0;
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        match child.kind() {
+            k if is_nested_scope(k) => {}
+            "if_statement" | "for_statement" | "while_statement" | "except_clause"
+            | "conditional_expression" => {
+                sum += 1 + nesting;
+                sum += count_cognitive(child, nesting + 1);
+            }
+            "elif_clause" | "else_clause" | "boolean_operator" => {
+                sum += 1;
+                sum += count_cognitive(child, nesting);
+            }
+            _ => sum += count_cognitive(child, nesting),
+        }
+    }
+    sum
+}
+
+fn collect_complexity(root: Node, bytes: &[u8], m: &mut ParsedModule) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "function_definition" {
+            if let (Some(name), Some(body)) = (
+                node.child_by_field_name("name"),
+                node.child_by_field_name("body"),
+            ) {
+                m.functions.push(FunctionComplexity {
+                    name: node_text(name, bytes).to_string(),
+                    line: node.start_position().row as u32 + 1,
+                    cyclomatic: 1 + count_cyclo(body),
+                    cognitive: count_cognitive(body, 0),
+                });
+            }
+        }
+        let mut c = node.walk();
+        for child in node.children(&mut c) {
+            stack.push(child);
+        }
+    }
+    m.functions.sort_by_key(|f| f.line);
 }
 
 fn collect_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
@@ -412,6 +549,25 @@ mod tests {
     fn extracts_dunder_all() {
         let m = parse("__all__ = ['foo', 'bar']\n");
         assert_eq!(m.dunder_all, Some(vec!["foo".into(), "bar".into()]));
+    }
+
+    #[test]
+    fn computes_complexity() {
+        let m = parse("def f(x):\n    if x:\n        for i in range(x):\n            if i and x:\n                return i\n    return 0\n");
+        let f = m.functions.iter().find(|f| f.name == "f").unwrap();
+        assert!(f.cyclomatic >= 4, "cyclo {:?}", f.cyclomatic);
+        assert!(f.cognitive >= 3, "cog {:?}", f.cognitive);
+    }
+
+    #[test]
+    fn captures_decorators() {
+        let m = parse("import app
+@app.route('/x')
+def view():
+    return 1
+");
+        let d = m.definitions.iter().find(|d| d.name == "view").unwrap();
+        assert!(d.decorators.iter().any(|x| x == "app.route"), "got {:?}", d.decorators);
     }
 
     #[test]

@@ -40,7 +40,21 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
   - ⏳ Phase-1 polish still open: `--gate new-only` (git diff + base worktree + attribution),
     SARIF output, framework entry-point plugins (Django/FastAPI/pytest decorators),
     config file (`.mollifyrc`) actually read, `fix` command.
-- **Phase 2 — dupes + complexity + arch:** ⬜ (scaffold next)
+- **Phase 2 — dupes + complexity + arch:** ✅ (all three engines done, tested, in `audit`)
+  - ✅ **Framework plugins** (`mollify-core/plugins.rs`) — decorator registry (routes, tasks,
+    fixtures, signal receivers, CLI commands, validators…) marks registered symbols reached;
+    parser now captures decorators per def. The dominant false-positive killer.
+  - ✅ **Architecture** (`arch.rs`) — circular-dependency detection via Tarjan SCC over the
+    import graph (`graph.find_cycles()`), `circular-dependency` findings (Certain). Named
+    boundary presets still pending.
+  - ✅ **Complexity** (`complexity.rs`) — cyclomatic + cognitive per function (computed in the
+    parser over the tree), `high-complexity` findings above thresholds. Churn×complexity
+    hotspot ranking still pending (needs git log --numstat).
+  - ✅ **Duplication** (`dupes.rs`) — Rabin-Karp token-clone detector (Python tokenizer,
+    literal-blinded), maximal-window extension + clone families. SA-IS+LCP is the documented
+    upgrade. (jscpd-class detector.)
+  - ✅ CLI: `arch`, `complexity` (alias `health`), `dupes`; all five engines fold into `audit`.
+  - **39 tests green.**
 - **Phase 3 — AI/MCP + plugins:** 🟡 (MCP server done; plugins pending)
   - ✅ `mollify-mcp` — a minimal, dependency-light **MCP stdio server** (newline-delimited
     JSON-RPC 2.0): `initialize`/`ping`/`tools/list`/`tools/call`, tools `mollify_audit`/

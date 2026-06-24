@@ -28,6 +28,13 @@ enum Command {
     DeadCode(Scope),
     /// Dependency hygiene (unused / missing distributions).
     Deps(Scope),
+    /// Architecture checks (circular dependencies).
+    Arch(Scope),
+    /// Complexity hotspots (cyclomatic + cognitive).
+    #[command(name = "complexity", alias = "health")]
+    Complexity(Scope),
+    /// Duplication / clone families.
+    Dupes(Scope),
     /// Scaffold a .mollifyrc and report detected layout.
     Init(Scope),
     /// Run the Model Context Protocol server over stdio (for coding agents).
@@ -54,8 +61,15 @@ fn main() {
     let cli = Cli::parse();
     let code = match cli.command {
         Command::Audit(s) => run_audit(&s),
-        Command::DeadCode(s) => run_findings(&s, mollify_core::dead_code_report, "dead-code"),
-        Command::Deps(s) => run_findings(&s, mollify_core::deps_report, "deps"),
+        Command::DeadCode(s) => {
+            run_findings(&s, mollify_core::dead_code_report, Report::DeadCode, "dead-code")
+        }
+        Command::Deps(s) => run_findings(&s, mollify_core::deps_report, Report::Deps, "deps"),
+        Command::Arch(s) => run_findings(&s, mollify_core::arch_report, Report::Arch, "arch"),
+        Command::Complexity(s) => {
+            run_findings(&s, mollify_core::complexity_report, Report::Complexity, "complexity")
+        }
+        Command::Dupes(s) => run_findings(&s, mollify_core::dupes_report, Report::Dupes, "dupes"),
         Command::Init(s) => run_init(&s),
         Command::Mcp => match mollify_mcp::run() {
             Ok(()) => 0,
@@ -88,17 +102,14 @@ fn run_audit(s: &Scope) -> i32 {
 fn run_findings(
     s: &Scope,
     f: fn(&camino::Utf8Path) -> mollify_types::FindingsReport,
+    wrap: fn(mollify_types::FindingsReport) -> Report,
     label: &str,
 ) -> i32 {
     let report = f(&s.path);
+    let errors = report.summary.errors;
     match s.format {
         Format::Json => {
-            let env = if label == "deps" {
-                Report::Deps(report.clone())
-            } else {
-                Report::DeadCode(report.clone())
-            };
-            println!("{}", serde_json::to_string_pretty(&env).unwrap());
+            println!("{}", serde_json::to_string_pretty(&wrap(report)).unwrap());
         }
         Format::Human => {
             println!("Mollify {label} — {}", s.path);
@@ -106,7 +117,7 @@ fn run_findings(
             print_findings(&report.findings);
         }
     }
-    exit_code(report.summary.errors)
+    exit_code(errors)
 }
 
 fn run_init(s: &Scope) -> i32 {

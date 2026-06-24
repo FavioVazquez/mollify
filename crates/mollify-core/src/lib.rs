@@ -12,10 +12,14 @@ use mollify_types::{
     SCHEMA_VERSION,
 };
 
+pub mod arch;
+pub mod complexity;
 pub mod deadcode;
 pub mod deps;
+pub mod dupes;
 pub mod fingerprint;
 pub mod known;
+pub mod plugins;
 
 /// Build the graph for a project root once, to be shared across engines.
 pub fn build_graph(root: &Utf8Path) -> ModuleGraph {
@@ -49,13 +53,44 @@ pub fn deps_report(root: &Utf8Path) -> FindingsReport {
     }
 }
 
-/// `mollify audit` — the unified pass (dead-code + deps today; more engines as
-/// they land). Produces a quality score over the combined findings.
+/// Build a single-category findings report from a closure.
+fn findings_report(root: &Utf8Path, f: impl Fn(&ModuleGraph) -> Vec<Finding>) -> FindingsReport {
+    let graph = build_graph(root);
+    let mut findings = f(&graph);
+    sort_findings(&mut findings);
+    let files = graph.modules.len();
+    FindingsReport {
+        schema_version: SCHEMA_VERSION.into(),
+        summary: Summary::from_findings(&findings, files),
+        findings,
+    }
+}
+
+/// `mollify arch` — circular dependencies (boundary presets later).
+pub fn arch_report(root: &Utf8Path) -> FindingsReport {
+    findings_report(root, arch::analyze)
+}
+
+/// `mollify complexity` / `mollify health` — complexity hotspots.
+pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
+    findings_report(root, complexity::analyze)
+}
+
+/// `mollify dupes` — duplication / clone families.
+pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
+    findings_report(root, dupes::analyze)
+}
+
+/// `mollify audit` — the unified pass across all engines. Produces a quality
+/// score over the combined findings.
 pub fn audit_report(root: &Utf8Path) -> AuditReport {
     let graph = build_graph(root);
     let mut findings: Vec<Finding> = Vec::new();
     findings.extend(deadcode::analyze(&graph));
     findings.extend(deps::analyze(root, &graph));
+    findings.extend(arch::analyze(&graph));
+    findings.extend(complexity::analyze(&graph));
+    findings.extend(dupes::analyze(&graph));
     sort_findings(&mut findings);
     let files = graph.modules.len();
     let summary = Summary::from_findings(&findings, files);
