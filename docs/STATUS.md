@@ -84,8 +84,11 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     Python white space). In `complexity` + `audit`. +test.
   - ✅ **Notebooks (.ipynb)** — discovery + code-cell extraction (`graph::read_source`);
     notebooks are analyzed by every engine (treated as entry scripts). +test.
-  - ⬜ runtime-coverage merge (coverage.py/sys.monitoring), supply-chain CVE join,
-    LSP, named arch presets.
+  - ✅ **Runtime-coverage merge** (`coverage.rs`, `mollify coverage --coverage-file`) —
+    reads a coverage.py JSON report; flags reachable-but-never-executed functions as
+    `cold-code` (the cold-path signal; fallow's *paid* feature, here free). +test.
+  - ⬜ supply-chain CVE join (needs OSV network — egress-blocked here), LSP,
+    named architecture presets.
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
   - `.devin/rules/mollify.md` (glob `**/*.py`)

@@ -13,6 +13,7 @@
 | `mollify dupes` | Duplication / clone families (token-based). |
 | `mollify types` | Type-annotation health (fully-untyped public functions). |
 | `mollify security` | Security candidates (eval/exec, shell=True, hardcoded secrets, …). |
+| `mollify coverage --coverage-file <f>` | Cold-path analysis from a coverage.py JSON report. |
 | `mollify fix [--apply]` | Remove `certain` + `auto_fixable` unused symbols. Dry-run unless `--apply`. |
 | `mollify init` | Write a starter `.mollifyrc.json`. |
 | `mollify mcp` | Run the MCP stdio server (for coding agents). |
@@ -31,7 +32,7 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 
 ## Rules emitted
 `unused-file`, `unused-export`, `unused-dependency`, `missing-dependency`,
-`circular-dependency`, `high-complexity`, `duplication`, `untyped-function`, `dangerous-eval`, `subprocess-shell-true`, `unsafe-yaml-load`, `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`.
+`circular-dependency`, `high-complexity`, `duplication`, `untyped-function`, `dangerous-eval`, `subprocess-shell-true`, `unsafe-yaml-load`, `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`, `cold-code`, `hotspot`.
 
 ## `.mollifyrc.json`
 ```json

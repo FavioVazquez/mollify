@@ -142,6 +142,8 @@ pub enum Report {
     Types(FindingsReport),
     /// Security candidates.
     Security(FindingsReport),
+    /// Runtime-coverage cold-path analysis.
+    Coverage(FindingsReport),
 }
 
 /// A report that is just a sorted list of findings plus a summary.

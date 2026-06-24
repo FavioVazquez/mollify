@@ -15,6 +15,7 @@ use mollify_types::{
 pub mod arch;
 pub mod complexity;
 pub mod config;
+pub mod coverage;
 pub mod deadcode;
 pub mod deps;
 pub mod dupes;
@@ -112,6 +113,13 @@ pub fn security_report(root: &Utf8Path) -> FindingsReport {
         graph.modules.len(),
         security::analyze(&graph),
     )
+}
+
+/// `mollify coverage` — cold-path analysis from a coverage.py JSON report.
+pub fn coverage_report(root: &Utf8Path, coverage_path: &Utf8Path) -> FindingsReport {
+    let graph = build_graph(root);
+    let findings = coverage::analyze(root, &graph, coverage_path);
+    finalize(&config::load(root), graph.modules.len(), findings)
 }
 
 /// `mollify audit` — the unified pass across all engines. Produces a quality

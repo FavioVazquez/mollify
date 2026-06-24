@@ -39,12 +39,27 @@ enum Command {
     Types(Scope),
     /// Security candidates (bandit-style; review before acting).
     Security(Scope),
+    /// Cold-path analysis: functions never executed in a coverage.py JSON report.
+    Coverage(CoverageArgs),
     /// Apply safe auto-fixes (certain, auto-fixable unused symbols). Dry-run unless --apply.
     Fix(FixArgs),
     /// Scaffold a .mollifyrc and report detected layout.
     Init(Scope),
     /// Run the Model Context Protocol server over stdio (for coding agents).
     Mcp,
+}
+
+#[derive(clap::Args)]
+struct CoverageArgs {
+    /// Project root.
+    #[arg(long, default_value = ".")]
+    path: Utf8PathBuf,
+    /// Path to a coverage.py JSON report (produced by `coverage json`).
+    #[arg(long)]
+    coverage_file: Utf8PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    format: Format,
 }
 
 #[derive(clap::Args)]
@@ -138,6 +153,7 @@ fn main() {
             Report::Security,
             "security",
         ),
+        Command::Coverage(a) => run_coverage(&a),
         Command::Fix(a) => run_fix(&a),
         Command::Init(s) => run_init(&s),
         Command::Mcp => match mollify_mcp::run() {
@@ -203,6 +219,31 @@ fn run_findings(
         ),
         Format::Human => {
             println!("Mollify {label} — {}", s.path);
+            print_summary(&report.summary);
+            print_findings(&report.findings);
+        }
+    }
+    exit_code(errors)
+}
+
+fn run_coverage(a: &CoverageArgs) -> i32 {
+    let report = mollify_core::coverage_report(&a.path, &a.coverage_file);
+    let errors = report.summary.errors;
+    match a.format {
+        Format::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&Report::Coverage(report)).unwrap()
+        ),
+        Format::Sarif => println!(
+            "{}",
+            serde_json::to_string_pretty(&mollify_core::sarif::to_sarif(
+                &report.findings,
+                env!("CARGO_PKG_VERSION")
+            ))
+            .unwrap()
+        ),
+        Format::Human => {
+            println!("Mollify coverage — {}", a.path);
             print_summary(&report.summary);
             print_findings(&report.findings);
         }
