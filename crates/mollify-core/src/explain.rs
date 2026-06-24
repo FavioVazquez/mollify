@@ -16,6 +16,16 @@ pub fn text(rule: &str) -> Option<&'static str> {
             sink (auto-fixable); uncertain in `__init__.py` (likely a re-export). \
             Action: remove the import."
         }
+        "unused-variable" => {
+            "A local variable assigned but never read in its function (ruff F841). \
+            Confidence: likely. Not auto-fixed (the right-hand side may have side \
+            effects). Action: remove it, or prefix with `_`."
+        }
+        "unused-parameter" => {
+            "A function parameter never used in the body. Confidence: uncertain \
+            (it may satisfy an interface/override/callback signature). Action: \
+            remove it or prefix with `_`."
+        }
         "unused-export" => {
             "A top-level function/class never referenced outside its own \
             module and not listed in `__all__`. Confidence: likely (dynamic access via \
@@ -136,6 +146,8 @@ pub const RULES: &[&str] = &[
     "unused-file",
     "unused-export",
     "unused-import",
+    "unused-variable",
+    "unused-parameter",
     "unused-dependency",
     "missing-dependency",
     "circular-dependency",
