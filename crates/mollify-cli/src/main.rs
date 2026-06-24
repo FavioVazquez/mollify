@@ -41,6 +41,9 @@ enum Command {
     Security(Scope),
     /// Cold-path analysis: functions never executed in a coverage.py JSON report.
     Coverage(CoverageArgs),
+    /// Supply-chain: match pinned/locked versions against a local advisory DB.
+    #[command(name = "supply-chain")]
+    SupplyChain(SupplyChainArgs),
     /// Apply safe auto-fixes (certain, auto-fixable unused symbols). Dry-run unless --apply.
     Fix(FixArgs),
     /// Explain a rule id (semantics, confidence, how to act). No argument lists all rules.
@@ -81,6 +84,19 @@ struct TraceArgs {
     /// Project root to analyze.
     #[arg(long, default_value = ".")]
     path: Utf8PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    format: Format,
+}
+
+#[derive(clap::Args)]
+struct SupplyChainArgs {
+    /// Project root.
+    #[arg(long, default_value = ".")]
+    path: Utf8PathBuf,
+    /// Advisory DB JSON (mollify-advisories/1). Defaults to `.mollify/advisories.json`.
+    #[arg(long)]
+    advisory_db: Option<Utf8PathBuf>,
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Human)]
     format: Format,
@@ -188,6 +204,7 @@ fn main() {
             "security",
         ),
         Command::Coverage(a) => run_coverage(&a),
+        Command::SupplyChain(a) => run_supply_chain(&a),
         Command::Fix(a) => run_fix(&a),
         Command::Explain(a) => run_explain(&a),
         Command::Trace(a) => run_trace(&a),
@@ -281,6 +298,42 @@ fn run_coverage(a: &CoverageArgs) -> i32 {
         ),
         Format::Human => {
             println!("Mollify coverage — {}", a.path);
+            print_summary(&report.summary);
+            print_findings(&report.findings);
+        }
+    }
+    exit_code(errors)
+}
+
+fn run_supply_chain(a: &SupplyChainArgs) -> i32 {
+    let db = a
+        .advisory_db
+        .clone()
+        .unwrap_or_else(|| a.path.join(mollify_core::DEFAULT_ADVISORY_DB));
+    if !db.exists() {
+        eprintln!(
+            "No advisory DB at {db}. Generate one with `python3 scripts/fetch-advisories.py {db}` \
+             (pulls from OSV/safety-db), or pass --advisory-db <path>."
+        );
+        return 1;
+    }
+    let report = mollify_core::supply_chain_report(&a.path, &db);
+    let errors = report.summary.errors;
+    match a.format {
+        Format::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&Report::Security(report)).unwrap()
+        ),
+        Format::Sarif => println!(
+            "{}",
+            serde_json::to_string_pretty(&mollify_core::sarif::to_sarif(
+                &report.findings,
+                env!("CARGO_PKG_VERSION")
+            ))
+            .unwrap()
+        ),
+        Format::Human => {
+            println!("Mollify supply-chain — {} (db: {db})", a.path);
             print_summary(&report.summary);
             print_findings(&report.findings);
         }

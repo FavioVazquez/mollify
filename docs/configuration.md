@@ -80,6 +80,14 @@ and its suppression comment.
 `requests.get`; `os.system` matches exactly. Policy findings surface under
 `mollify arch` and `mollify audit`.
 
+## Advisory database (supply-chain)
+
+`mollify supply-chain` (and `mollify audit`, when the file exists) reads a local
+advisory database at `.mollify/advisories.json` in the `mollify-advisories/1`
+schema. It is an *input*, not a network call — regenerate it out-of-band with
+`scripts/fetch-advisories.py` (OSV.dev / safety-db). Override the path with
+`mollify supply-chain --advisory-db <path>`. See `examples/advisories.sample.json`.
+
 ## `ignore`
 
 A list of path substrings. Any finding whose file path contains one is dropped.

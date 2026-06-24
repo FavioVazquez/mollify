@@ -282,6 +282,7 @@ dependencies = [
  "mollify-parse",
  "mollify-types",
  "rustc-hash",
+ "serde",
  "serde_json",
  "toml",
  "xxhash-rust",

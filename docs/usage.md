@@ -28,6 +28,7 @@ cargo build --release
 | `mollify types` | Fully-untyped public functions (annotation health). |
 | `mollify security` | Bandit-style security candidates. |
 | `mollify coverage --coverage-file <f>` | Reachable-but-never-executed functions (cold paths) from a coverage.py JSON report. |
+| `mollify supply-chain [--advisory-db <f>]` | Pinned/locked dependency versions matched against a local CVE/advisory DB. |
 | `mollify fix [--apply]` | Remove safe (certain) unused symbols. Dry-run unless `--apply`. |
 | `mollify explain [<rule>]` | Explain a rule (semantics/confidence/action); lists all rules with no argument. |
 | `mollify trace <module>` | A module's import neighborhood: what it imports and what imports it. |
@@ -60,7 +61,22 @@ mollify fix --apply
 # Understand a rule, or trace a module's dependencies
 mollify explain circular-dependency
 mollify trace app.services.billing
+
+# Supply-chain: refresh the advisory DB (out-of-band), then scan pinned versions
+python3 scripts/fetch-advisories.py .mollify/advisories.json
+mollify supply-chain
 ```
+
+## Supply-chain advisories
+
+`mollify supply-chain` matches **pinned/locked** dependency versions
+(`requirements*.txt` `==` pins, `poetry.lock`, `uv.lock`) against a local
+advisory database in the `mollify-advisories/1` schema. To keep audits
+deterministic and offline, Mollify never fetches advisories itself — regenerate
+the DB with `scripts/fetch-advisories.py` (which pulls from OSV.dev and, as a
+fallback, pyup safety-db) and commit or cache it at `.mollify/advisories.json`.
+When that file is present, `mollify audit` includes supply-chain findings
+automatically. A small real-CVE sample lives at `examples/advisories.sample.json`.
 
 ## Confidence tiers
 

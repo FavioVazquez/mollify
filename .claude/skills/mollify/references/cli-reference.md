@@ -14,6 +14,7 @@
 | `mollify types` | Type-annotation health (fully-untyped public functions). |
 | `mollify security` | Security candidates (eval/exec, shell=True, hardcoded secrets, …). |
 | `mollify coverage --coverage-file <f>` | Cold-path analysis from a coverage.py JSON report. |
+| `mollify supply-chain [--advisory-db <f>]` | Pinned/locked versions vs a local CVE/advisory DB (`vulnerable-dependency`). |
 | `mollify fix [--apply]` | Remove `certain` + `auto_fixable` unused symbols. Dry-run unless `--apply`. |
 | `mollify explain [<rule>]` | Explain a rule id (semantics, confidence, action). No argument lists all rules. |
 | `mollify trace <module>` | Import neighborhood of a module: what it imports and what imports it. |
@@ -38,7 +39,7 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 `circular-dependency`, `layer-violation`, custom policy ids, `high-complexity`,
 `duplication`, `untyped-function`, `dangerous-eval`, `subprocess-shell-true`,
 `unsafe-yaml-load`, `unsafe-deserialization`, `tls-verify-disabled`,
-`hardcoded-secret`, `cold-code`, `hotspot`.
+`hardcoded-secret`, `cold-code`, `hotspot`, `vulnerable-dependency`.
 
 ## `.mollifyrc.json`
 ```json

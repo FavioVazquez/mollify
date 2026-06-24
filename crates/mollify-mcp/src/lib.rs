@@ -106,6 +106,13 @@ fn tool_list() -> Value {
         },
         "required": ["module"]
     });
+    let supply_chain_schema = json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Project root to analyze (default \".\")." },
+            "advisory_db": { "type": "string", "description": "Advisory DB JSON path (default `.mollify/advisories.json`)." }
+        }
+    });
     json!([
         { "name": "mollify_audit", "description": "Full unified report across all engines with a 0-100 quality score, as deterministic JSON.", "inputSchema": path_schema },
         { "name": "mollify_dead_code", "description": "Reachability-based unused files and top-level symbols, with confidence tiers.", "inputSchema": path_schema },
@@ -116,6 +123,7 @@ fn tool_list() -> Value {
         { "name": "mollify_types", "description": "Type-annotation health: fully-untyped public functions.", "inputSchema": path_schema },
         { "name": "mollify_security", "description": "Security candidates (eval/exec, shell=True, unsafe deserialization, hardcoded secrets, ...).", "inputSchema": path_schema },
         { "name": "mollify_coverage", "description": "Cold-path analysis: reachable functions never executed in a coverage.py JSON report.", "inputSchema": coverage_schema },
+        { "name": "mollify_supply_chain", "description": "Match pinned/locked dependency versions against a local advisory DB (vulnerable-dependency).", "inputSchema": supply_chain_schema },
         { "name": "mollify_explain", "description": "Explain a rule id (semantics, confidence, action). Omit `rule` to list all rules.", "inputSchema": explain_schema },
         { "name": "mollify_trace", "description": "A module's import neighborhood: what it imports and what imports it.", "inputSchema": trace_schema },
     ])
@@ -165,6 +173,14 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
             serde_json::to_string_pretty(&Report::Coverage(mollify_core::coverage_report(
                 &root,
                 &Utf8PathBuf::from(cov),
+            )))
+        }
+        "mollify_supply_chain" => {
+            let db = arg_str("advisory_db")
+                .map(Utf8PathBuf::from)
+                .unwrap_or_else(|| root.join(mollify_core::DEFAULT_ADVISORY_DB));
+            serde_json::to_string_pretty(&Report::Security(mollify_core::supply_chain_report(
+                &root, &db,
             )))
         }
         "mollify_explain" => {
@@ -248,6 +264,7 @@ mod tests {
             "mollify_types",
             "mollify_security",
             "mollify_coverage",
+            "mollify_supply_chain",
             "mollify_explain",
             "mollify_trace",
         ] {

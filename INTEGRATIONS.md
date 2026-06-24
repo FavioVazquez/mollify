@@ -51,6 +51,7 @@ The server advertises one tool per engine (discoverable via `tools/list`):
 - `mollify_types` — type-annotation health
 - `mollify_security` — security candidates
 - `mollify_coverage` — cold-path analysis (requires `coverage_file`)
+- `mollify_supply_chain` — pinned/locked versions vs a local advisory DB
 - `mollify_explain` — rule semantics (optional `rule`; omit to list all)
 - `mollify_trace` — a module's import neighborhood (requires `module`)
 
