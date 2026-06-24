@@ -1,0 +1,20 @@
+[package]
+name = "mollify-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Analysis orchestration for Mollify: dead-code and dependency-hygiene engines (more to come)."
+
+[dependencies]
+mollify-types = { path = "../mollify-types" }
+mollify-parse = { path = "../mollify-parse" }
+mollify-graph = { path = "../mollify-graph" }
+camino.workspace = true
+xxhash-rust.workspace = true
+rustc-hash.workspace = true
+toml = "0.9"
+
+[dev-dependencies]
+serde_json.workspace = true

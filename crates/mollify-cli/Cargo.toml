@@ -1,0 +1,20 @@
+[package]
+name = "mollify-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Mollify — deterministic codebase intelligence for Python (CLI)."
+
+[[bin]]
+name = "mollify"
+path = "src/main.rs"
+
+[dependencies]
+mollify-types = { path = "../mollify-types" }
+mollify-core = { path = "../mollify-core" }
+clap.workspace = true
+serde_json.workspace = true
+camino.workspace = true
+anyhow.workspace = true
