@@ -21,7 +21,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Full unified report (dead-code + dependency hygiene today).
+    /// Full unified report across all engines, with a 0–100 quality score.
     Audit(Scope),
     /// Reachability-based unused files and symbols.
     #[command(name = "dead-code", alias = "check")]
