@@ -53,10 +53,10 @@ The envelope has a discriminating top-level `kind` (`audit` / `dead-code` /
 Each finding:
 - `rule` — one of `unused-file`, `unused-export`, `unused-import`,
   `unused-variable`, `unused-parameter`,
-  `commented-code`, `unused-dependency`, `missing-dependency`,
+  `commented-code`, `unused-dependency`, `missing-dependency`, `transitive-dependency`,
   `circular-dependency`, `layer-violation`, `forbidden-import`,
   `independence-violation`, `high-complexity`, `duplication`, `untyped-function`,
-  `cold-code`, `hotspot`, `dangerous-eval`, `subprocess-shell-true`,
+  `cold-code`, `hotspot`, `low-cohesion`, `dangerous-eval`, `subprocess-shell-true`,
   `sql-injection`, `unsafe-yaml-load`, `unsafe-deserialization`,
   `tls-verify-disabled`, `hardcoded-secret`, `weak-hash`, `weak-cipher`,
   `insecure-random`, `request-without-timeout`, `vulnerable-dependency`, plus
@@ -83,7 +83,7 @@ for all commands.
 ## Honesty rules
 - Mollify reachability is static; dynamic imports (`getattr`/`importlib`) downgrade
   confidence to `uncertain` — treat those as review-only.
-- A `missing-dependency` may be a false positive for namespace packages or local
+- A `missing-dependency`, `transitive-dependency` may be a false positive for namespace packages or local
   shadowing; verify before adding to `pyproject.toml`.
 - `--gate new-only`, `--format sarif`, and `mollify fix` are all fully implemented
   working features.

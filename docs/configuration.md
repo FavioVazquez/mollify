@@ -31,7 +31,8 @@ Map of **rule id** or **category** → `error` | `warn` | `off`.
 
 Rule ids: `unused-file`, `unused-export`, `unused-import`, `unused-variable`,
 `unused-parameter`, `commented-code`,
-`unused-dependency`, `missing-dependency`, `circular-dependency`,
+`unused-dependency`, `missing-dependency`, `transitive-dependency`,
+`circular-dependency`, `low-cohesion`,
 `layer-violation`, `forbidden-import`, `independence-violation`,
 `high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`,
 `vulnerable-dependency`, the security rules (`dangerous-eval`,

@@ -33,9 +33,9 @@ delete, or whether dependencies are unused/missing.
   a `severity` (`error` | `warn` | `off`), and a `location {path, line, end_line}`.
   Rules: `unused-file`, `unused-export`, `unused-import`, `unused-variable`,
   `unused-parameter`, `commented-code`,
-  `unused-dependency`, `missing-dependency`, `circular-dependency`,
+  `unused-dependency`, `missing-dependency`, `transitive-dependency`, `circular-dependency`,
   `layer-violation`, `forbidden-import`, `independence-violation`,
-  `high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`,
+  `high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`, `low-cohesion`,
   `dangerous-eval`, `subprocess-shell-true`, `sql-injection`, `unsafe-yaml-load`,
   `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`,
   `weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`,

@@ -61,10 +61,10 @@ Each finding:
 - `fingerprint` — stable id (e.g. `unused-export:931a82e6`).
 - `rule` — one of: `unused-file`, `unused-export`, `unused-import`,
   `unused-variable`, `unused-parameter`,
-  `commented-code`, `unused-dependency`, `missing-dependency`,
+  `commented-code`, `unused-dependency`, `missing-dependency`, `transitive-dependency`,
   `circular-dependency`, `layer-violation`, `forbidden-import`,
   `independence-violation`, `high-complexity`, `duplication`, `untyped-function`,
-  `cold-code`, `hotspot`, `dangerous-eval`, `subprocess-shell-true`,
+  `cold-code`, `hotspot`, `low-cohesion`, `dangerous-eval`, `subprocess-shell-true`,
   `sql-injection`, `unsafe-yaml-load`, `unsafe-deserialization`,
   `tls-verify-disabled`, `hardcoded-secret`, `weak-hash`, `weak-cipher`,
   `insecure-random`, `request-without-timeout`, `vulnerable-dependency`, plus any
@@ -93,7 +93,7 @@ See `references/cli-reference.md` for all commands/flags and
 ## Honesty rules
 - Reachability is static; dynamic imports (`getattr`/`importlib`) downgrade
   confidence to `uncertain` — treat those as review-only.
-- A `missing-dependency` may be a false positive for namespace packages or local
+- A `missing-dependency`, `transitive-dependency` may be a false positive for namespace packages or local
   shadowing; verify before adding to `pyproject.toml`.
 - `mollify fix` removes only `certain` + `auto_fixable` unused symbols and unused
   imports (dry-run unless `--apply`).

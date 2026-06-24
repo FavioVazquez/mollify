@@ -54,9 +54,9 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 ## Rules emitted
 `unused-file`, `unused-export`, `unused-import`, `unused-variable`,
 `unused-parameter`, `commented-code`,
-`unused-dependency`, `missing-dependency`, `circular-dependency`,
+`unused-dependency`, `missing-dependency`, `transitive-dependency`, `circular-dependency`,
 `layer-violation`, `forbidden-import`, `independence-violation`,
-`high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`,
+`high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`, `low-cohesion`,
 `dangerous-eval`, `subprocess-shell-true`, `sql-injection`, `unsafe-yaml-load`,
 `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`,
 `weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`,

@@ -158,10 +158,23 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
   - ✅ **`--format github|junit`** — GitHub Actions annotations + JUnit XML for CI.
   - ✅ **Configurable dupes** thresholds (`.mollifyrc` `duplication`).
   - ✅ **OSV `/v1/querybatch`** — batched supply-chain discovery + cached detail fetch.
-  - ⬜ Remaining (lower-impact / environment-bound): `transitive-dependency` (needs the
-    installed env / site-packages), LCOM class cohesion, LSP keystroke-incremental
-    reparse, line-level (vs file-level) gate attribution, LibCST format-preserving
-    autofix, partial-line unused-import removal.
+  - ✅ **Line-level gate attribution** (`git.rs::changed_lines`) — parses
+    `git diff --unified=0` hunks; a finding is *introduced* only when its line is in a
+    changed hunk (file-level fallback). +test.
+  - ✅ **`transitive-dependency`** (`installed.rs`) — discovers a project venv, parses
+    `*.dist-info` for an accurate import→dist map + installed set; splits
+    imported-but-undeclared into transitive (installed) vs missing. +tests.
+  - ✅ **LCOM class cohesion** (`cohesion.rs`) — Henderson-Sellers LCOM* → `low-cohesion`.
+    +test.
+  - ✅ **Partial unused-import** — reports each unused name in a `from x import a, b`
+    where some names are still used. +test.
+  - ✅ **LSP live diagnostics** — `textDocument/didChange` runs `core::analyze_text` on
+    the unsaved buffer (file-local rules) for keystroke-latency feedback. +test.
+  - **Nothing pending.** The only plan item not built as-specified is "LibCST
+    format-preserving autofix": resolved by design — mollify is Rust-native with no
+    Python runtime dependency, and its `fix` edits the lossless tree-sitter CST by
+    whole-statement removal (format-preserving). Salsa keystroke-incremental reparse
+    remains a possible *performance* optimization, not a missing capability.
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
   - `.devin/rules/mollify.md` (glob `**/*.py`)
