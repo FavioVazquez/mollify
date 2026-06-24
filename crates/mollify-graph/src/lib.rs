@@ -43,7 +43,11 @@ pub struct ModuleGraph {
 /// Walk `root` for `*.py` files, honoring `.gitignore`. Deterministic order.
 pub fn discover_python_files(root: &Utf8Path) -> Vec<Utf8PathBuf> {
     let mut out = Vec::new();
-    for entry in ignore::WalkBuilder::new(root).hidden(false).build().flatten() {
+    for entry in ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .build()
+        .flatten()
+    {
         let p = entry.path();
         if p.extension().is_some_and(|e| e == "py") {
             if let Ok(u) = Utf8PathBuf::from_path_buf(p.to_path_buf()) {
@@ -351,8 +355,8 @@ mod tests {
     }
 
     fn temp(tag: &str) -> Utf8PathBuf {
-        let base = std::env::temp_dir()
-            .join(format!("mollify-graph-test-{}-{tag}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("mollify-graph-test-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         Utf8PathBuf::from_path_buf(base).unwrap()
     }
@@ -360,8 +364,14 @@ mod tests {
     #[test]
     fn dotted_name_handles_init_and_src() {
         let root = Utf8Path::new("/proj");
-        assert_eq!(dotted_name(root, Utf8Path::new("/proj/pkg/mod.py")), "pkg.mod");
-        assert_eq!(dotted_name(root, Utf8Path::new("/proj/pkg/__init__.py")), "pkg");
+        assert_eq!(
+            dotted_name(root, Utf8Path::new("/proj/pkg/mod.py")),
+            "pkg.mod"
+        );
+        assert_eq!(
+            dotted_name(root, Utf8Path::new("/proj/pkg/__init__.py")),
+            "pkg"
+        );
         assert_eq!(dotted_name(root, Utf8Path::new("/proj/src/a/b.py")), "a.b");
     }
 
@@ -389,17 +399,32 @@ mod tests {
     #[test]
     fn detects_import_cycle() {
         let d = temp("cycle");
-        write(&d, "__init__.py", "import a
+        write(
+            &d,
+            "__init__.py",
+            "import a
 import b
-");
-        write(&d, "a.py", "import b
-");
-        write(&d, "b.py", "import a
-");
+",
+        );
+        write(
+            &d,
+            "a.py",
+            "import b
+",
+        );
+        write(
+            &d,
+            "b.py",
+            "import a
+",
+        );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let cycles = g.find_cycles();
-        assert!(cycles.iter().any(|c| c.len() == 2), "expected a 2-cycle, got {cycles:?}");
+        assert!(
+            cycles.iter().any(|c| c.len() == 2),
+            "expected a 2-cycle, got {cycles:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -407,7 +432,11 @@ import b
     fn symbol_use_cross_module() {
         let d = temp("symuse");
         write(&d, "__main__.py", "from lib import used_fn\nused_fn()\n");
-        write(&d, "lib.py", "def used_fn():\n    return 1\n\ndef dead_fn():\n    return 2\n");
+        write(
+            &d,
+            "lib.py",
+            "def used_fn():\n    return 1\n\ndef dead_fn():\n    return 2\n",
+        );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let lib = g.modules.iter().find(|m| m.dotted == "lib").unwrap().id;

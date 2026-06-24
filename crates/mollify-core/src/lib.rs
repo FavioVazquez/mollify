@@ -13,17 +13,17 @@ use mollify_types::{
 };
 
 pub mod arch;
-pub mod config;
 pub mod complexity;
+pub mod config;
 pub mod deadcode;
 pub mod deps;
 pub mod dupes;
-pub mod fix;
 pub mod fingerprint;
+pub mod fix;
 pub mod git;
-pub mod sarif;
 pub mod known;
 pub mod plugins;
+pub mod sarif;
 
 /// Build the graph for a project root once, to be shared across engines.
 pub fn build_graph(root: &Utf8Path) -> ModuleGraph {
@@ -45,19 +45,31 @@ fn finalize(cfg: &config::Config, files: usize, mut findings: Vec<Finding>) -> F
 /// `mollify dead-code` — reachability-based unused files/symbols.
 pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(&config::load(root), graph.modules.len(), deadcode::analyze(&graph))
+    finalize(
+        &config::load(root),
+        graph.modules.len(),
+        deadcode::analyze(&graph),
+    )
 }
 
 /// `mollify deps` — dependency hygiene.
 pub fn deps_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(&config::load(root), graph.modules.len(), deps::analyze(root, &graph))
+    finalize(
+        &config::load(root),
+        graph.modules.len(),
+        deps::analyze(root, &graph),
+    )
 }
 
 /// `mollify arch` — circular dependencies (boundary presets later).
 pub fn arch_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(&config::load(root), graph.modules.len(), arch::analyze(&graph))
+    finalize(
+        &config::load(root),
+        graph.modules.len(),
+        arch::analyze(&graph),
+    )
 }
 
 /// `mollify complexity` / `mollify health` — complexity hotspots.
@@ -71,7 +83,11 @@ pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
 /// `mollify dupes` — duplication / clone families.
 pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(&config::load(root), graph.modules.len(), dupes::analyze(&graph))
+    finalize(
+        &config::load(root),
+        graph.modules.len(),
+        dupes::analyze(&graph),
+    )
 }
 
 /// `mollify audit` — the unified pass across all engines. Produces a quality
@@ -83,7 +99,11 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     findings.extend(deadcode::analyze(&graph));
     findings.extend(deps::analyze(root, &graph));
     findings.extend(arch::analyze(&graph));
-    findings.extend(complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive));
+    findings.extend(complexity::analyze_with(
+        &graph,
+        cfg.max_cyclomatic,
+        cfg.max_cognitive,
+    ));
     findings.extend(dupes::analyze(&graph));
     config::apply(&cfg, &mut findings);
     sort_findings(&mut findings);
@@ -131,7 +151,8 @@ mod tests {
     use camino::Utf8PathBuf;
 
     fn temp(tag: &str) -> Utf8PathBuf {
-        let base = std::env::temp_dir().join(format!("mollify-core-lib-{}-{tag}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("mollify-core-lib-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         Utf8PathBuf::from_path_buf(base).unwrap()

@@ -95,7 +95,8 @@ fn apply_gate(scope: &Scope, findings: &mut Vec<mollify_types::Finding>) {
         return;
     };
     for f in findings.iter_mut() {
-        let introduced = mollify_core::git::path_is_changed(&scope.path, &f.location.path, &changed);
+        let introduced =
+            mollify_core::git::path_is_changed(&scope.path, &f.location.path, &changed);
         f.attribution = Some(if introduced {
             Attribution::Introduced
         } else {
@@ -111,14 +112,20 @@ fn main() {
     let cli = Cli::parse();
     let code = match cli.command {
         Command::Audit(s) => run_audit(&s),
-        Command::DeadCode(s) => {
-            run_findings(&s, mollify_core::dead_code_report, Report::DeadCode, "dead-code")
-        }
+        Command::DeadCode(s) => run_findings(
+            &s,
+            mollify_core::dead_code_report,
+            Report::DeadCode,
+            "dead-code",
+        ),
         Command::Deps(s) => run_findings(&s, mollify_core::deps_report, Report::Deps, "deps"),
         Command::Arch(s) => run_findings(&s, mollify_core::arch_report, Report::Arch, "arch"),
-        Command::Complexity(s) => {
-            run_findings(&s, mollify_core::complexity_report, Report::Complexity, "complexity")
-        }
+        Command::Complexity(s) => run_findings(
+            &s,
+            mollify_core::complexity_report,
+            Report::Complexity,
+            "complexity",
+        ),
         Command::Dupes(s) => run_findings(&s, mollify_core::dupes_report, Report::Dupes, "dupes"),
         Command::Fix(a) => run_fix(&a),
         Command::Init(s) => run_init(&s),
@@ -136,13 +143,21 @@ fn main() {
 fn run_audit(s: &Scope) -> i32 {
     let mut report = mollify_core::audit_report(&s.path);
     apply_gate(s, &mut report.findings);
-    report.summary = mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
+    report.summary =
+        mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
     let errors = report.summary.errors;
     match s.format {
-        Format::Json => println!("{}", serde_json::to_string_pretty(&Report::Audit(report)).unwrap()),
+        Format::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&Report::Audit(report)).unwrap()
+        ),
         Format::Sarif => println!(
             "{}",
-            serde_json::to_string_pretty(&mollify_core::sarif::to_sarif(&report.findings, env!("CARGO_PKG_VERSION"))).unwrap()
+            serde_json::to_string_pretty(&mollify_core::sarif::to_sarif(
+                &report.findings,
+                env!("CARGO_PKG_VERSION")
+            ))
+            .unwrap()
         ),
         Format::Human => {
             println!("Mollify audit — {}", s.path);
@@ -162,13 +177,18 @@ fn run_findings(
 ) -> i32 {
     let mut report = f(&s.path);
     apply_gate(s, &mut report.findings);
-    report.summary = mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
+    report.summary =
+        mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
     let errors = report.summary.errors;
     match s.format {
         Format::Json => println!("{}", serde_json::to_string_pretty(&wrap(report)).unwrap()),
         Format::Sarif => println!(
             "{}",
-            serde_json::to_string_pretty(&mollify_core::sarif::to_sarif(&report.findings, env!("CARGO_PKG_VERSION"))).unwrap()
+            serde_json::to_string_pretty(&mollify_core::sarif::to_sarif(
+                &report.findings,
+                env!("CARGO_PKG_VERSION")
+            ))
+            .unwrap()
         ),
         Format::Human => {
             println!("Mollify {label} — {}", s.path);
@@ -195,7 +215,10 @@ fn run_fix(a: &FixArgs) -> i32 {
         }
     );
     for e in &edits {
-        println!("  {}:{}-{}  {}", e.path, e.start_line, e.end_line, e.description);
+        println!(
+            "  {}:{}-{}  {}",
+            e.path, e.start_line, e.end_line, e.description
+        );
     }
     if !a.apply {
         return 0;

@@ -112,7 +112,9 @@ impl PyParser {
     pub fn new() -> Result<Self, ParseError> {
         let mut parser = Parser::new();
         let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
-        parser.set_language(&lang).map_err(|_| ParseError::Grammar)?;
+        parser
+            .set_language(&lang)
+            .map_err(|_| ParseError::Grammar)?;
         Ok(Self { parser })
     }
 
@@ -445,7 +447,10 @@ fn count_cognitive(node: Node, nesting: u32) -> u32 {
     for child in node.children(&mut c) {
         match child.kind() {
             k if is_nested_scope(k) => {}
-            "if_statement" | "for_statement" | "while_statement" | "except_clause"
+            "if_statement"
+            | "for_statement"
+            | "while_statement"
+            | "except_clause"
             | "conditional_expression" => {
                 sum += 1 + nesting;
                 sum += count_cognitive(child, nesting + 1);
@@ -561,13 +566,19 @@ mod tests {
 
     #[test]
     fn captures_decorators() {
-        let m = parse("import app
+        let m = parse(
+            "import app
 @app.route('/x')
 def view():
     return 1
-");
+",
+        );
         let d = m.definitions.iter().find(|d| d.name == "view").unwrap();
-        assert!(d.decorators.iter().any(|x| x == "app.route"), "got {:?}", d.decorators);
+        assert!(
+            d.decorators.iter().any(|x| x == "app.route"),
+            "got {:?}",
+            d.decorators
+        );
     }
 
     #[test]

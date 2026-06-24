@@ -148,7 +148,11 @@ mod tests {
     fn flags_unused_public_function_as_likely() {
         let d = temp("pub");
         write(&d, "__main__.py", "from lib import used\nused()\n");
-        write(&d, "lib.py", "def used():\n    return 1\n\ndef dead():\n    return 2\n");
+        write(
+            &d,
+            "lib.py",
+            "def used():\n    return 1\n\ndef dead():\n    return 2\n",
+        );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&g);
@@ -177,25 +181,40 @@ mod tests {
     #[test]
     fn framework_decorator_suppresses_unused() {
         let d = temp("fw");
-        write(&d, "__main__.py", "import app
-");
-        write(&d, "app.py", "import app
+        write(
+            &d,
+            "__main__.py",
+            "import app
+",
+        );
+        write(
+            &d,
+            "app.py",
+            "import app
 
 @app.route('/x')
 def view():
     return 1
-");
+",
+        );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&g);
-        assert!(!f.iter().any(|x| x.reason.contains("`view`")), "route should be reached, got {f:?}");
+        assert!(
+            !f.iter().any(|x| x.reason.contains("`view`")),
+            "route should be reached, got {f:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
     fn dunder_all_suppresses() {
         let d = temp("all");
-        write(&d, "__init__.py", "__all__ = ['api']\ndef api():\n    return 1\n");
+        write(
+            &d,
+            "__init__.py",
+            "__all__ = ['api']\ndef api():\n    return 1\n",
+        );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&g);

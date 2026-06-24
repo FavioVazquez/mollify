@@ -57,7 +57,11 @@ pub fn changed_files(root: &Utf8Path, base: Option<&str>) -> Option<FxHashSet<St
 
 /// Whether a finding path (possibly absolute or `./`-prefixed) is in the changed
 /// set (which holds paths relative to `root`).
-pub fn path_is_changed(root: &Utf8Path, finding_path: &Utf8Path, changed: &FxHashSet<String>) -> bool {
+pub fn path_is_changed(
+    root: &Utf8Path,
+    finding_path: &Utf8Path,
+    changed: &FxHashSet<String>,
+) -> bool {
     let rel = finding_path
         .strip_prefix(root)
         .unwrap_or(finding_path)

@@ -247,11 +247,13 @@ mod tests {
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&d, &g);
         assert!(
-            f.iter().any(|x| x.rule == "unused-dependency" && x.reason.contains("unused-lib")),
+            f.iter()
+                .any(|x| x.rule == "unused-dependency" && x.reason.contains("unused-lib")),
             "expected unused-lib, got {f:?}"
         );
         assert!(
-            f.iter().any(|x| x.rule == "missing-dependency" && x.reason.contains("numpy")),
+            f.iter()
+                .any(|x| x.rule == "missing-dependency" && x.reason.contains("numpy")),
             "expected missing numpy, got {f:?}"
         );
         // requests is declared and used → no finding; os is stdlib → ignored.
@@ -262,7 +264,10 @@ mod tests {
 
     #[test]
     fn spec_name_strips_versions_and_extras() {
-        assert_eq!(spec_name("uvicorn[standard]>=0.20").as_deref(), Some("uvicorn"));
+        assert_eq!(
+            spec_name("uvicorn[standard]>=0.20").as_deref(),
+            Some("uvicorn")
+        );
         assert_eq!(spec_name("Flask_Login").as_deref(), Some("flask-login"));
     }
 }
