@@ -9,25 +9,30 @@ over `grep` or manual scanning when judging whether code is used, what is safe t
 delete, or whether dependencies are unused/missing.
 
 - Prefer Mollify over grep for reachability/usage and dependency questions.
-- Run `/mollify:audit`, or call the CLI directly. The CLI has 18 commands:
+- Run `/mollify:audit`, or call the CLI directly. The CLI has 21 commands:
   - Analysis: `mollify audit`, `mollify dead-code` (alias `check`), `mollify deps`,
     `mollify arch`, `mollify complexity` (alias `health`), `mollify dupes`,
     `mollify types`, `mollify security`, `mollify coverage --coverage-file <f>`,
     `mollify supply-chain [--offline|--refresh|--advisory-db <f>]` (live OSV by
     default; offline DB fallback).
   - Actions/utilities: `mollify fix [--apply]`, `mollify explain [<rule>]`,
-    `mollify trace <module>`, `mollify inspect <file>`,
-    `mollify list [entry-points|files|frameworks]`, `mollify watch [--interval-ms]`
-    (CLI-only), `mollify init`, `mollify mcp`.
-  - Analysis commands accept `--path <dir>`, `--format human|json|sarif`,
-    `--gate all|new-only`, `--base <ref>`, `--save-baseline <f>`, `--baseline <f>`,
-    `--fail-on-regression`, `--brief`, `--min-confidence certain|likely|uncertain`.
-    Use `--format json` to consume structured output. `--gate new-only` and
-    `--format sarif` are fully implemented.
+    `mollify trace <module>`, `mollify inspect <file>`, `mollify metrics`,
+    `mollify graph [--mermaid]`, `mollify list [entry-points|files|frameworks]`,
+    `mollify watch [--interval-ms]` (CLI-only), `mollify init`, `mollify mcp`,
+    `mollify lsp` (CLI-only stdio Language Server; real-time diagnostics on
+    open/save).
+  - Analysis commands accept `--path <dir>`,
+    `--format human|json|sarif|github|junit` (`github` = GitHub Actions
+    annotations, `junit` = JUnit XML), `--gate all|new-only`, `--base <ref>`,
+    `--save-baseline <f>`, `--baseline <f>`, `--fail-on-regression`, `--brief`,
+    `--min-confidence certain|likely|uncertain`. `mollify graph` accepts
+    `--mermaid`. Use `--format json` to consume structured output. `--gate
+    new-only` and `--format sarif` are fully implemented.
 - Trust the deterministic findings. Each finding carries a `confidence` tier
   (`certain` | `likely` | `uncertain`), a human `reason`, a stable `fingerprint`,
   a `severity` (`error` | `warn` | `off`), and a `location {path, line, end_line}`.
-  Rules: `unused-file`, `unused-export`, `unused-import`, `commented-code`,
+  Rules: `unused-file`, `unused-export`, `unused-import`, `unused-variable`,
+  `unused-parameter`, `commented-code`,
   `unused-dependency`, `missing-dependency`, `circular-dependency`,
   `layer-violation`, `forbidden-import`, `independence-violation`,
   `high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`,
@@ -49,11 +54,12 @@ delete, or whether dependencies are unused/missing.
 
 ## MCP tools (`mollify mcp`)
 
-The stdio MCP server exposes 14 tools (`watch` is CLI-only): `mollify_audit`,
-`mollify_dead_code`, `mollify_deps`, `mollify_arch`, `mollify_complexity`,
-`mollify_dupes`, `mollify_types`, `mollify_security`, `mollify_coverage`,
-`mollify_supply_chain`, `mollify_explain`, `mollify_trace`, `mollify_inspect`,
-`mollify_list`. Params: `mollify_coverage` requires `coverage_file`;
+The stdio MCP server exposes 15 tools (`watch` and `lsp` are CLI-only):
+`mollify_audit`, `mollify_dead_code`, `mollify_deps`, `mollify_arch`,
+`mollify_complexity`, `mollify_dupes`, `mollify_types`, `mollify_security`,
+`mollify_coverage`, `mollify_supply_chain`, `mollify_explain`, `mollify_trace`,
+`mollify_inspect`, `mollify_list`, `mollify_metrics`. Params: `mollify_coverage`
+requires `coverage_file`;
 `mollify_trace` requires `module`; `mollify_inspect` requires `file`;
 `mollify_supply_chain` takes optional `advisory_db`; `mollify_list` takes optional
 `kind`; all others take optional `path` (default `.`).

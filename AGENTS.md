@@ -70,4 +70,10 @@ Reading the kind-discriminated JSON envelope:
   of deleting code. (`mollify fix --apply` auto-removes certain unused symbols.)
 
 Exit codes: 0 = no error-severity findings; 1 = error-severity findings or error.
+
+MCP server (`mollify mcp`) exposes 15 tools (`watch` and `lsp` are CLI-only):
+mollify_audit, mollify_dead_code, mollify_deps, mollify_arch, mollify_complexity,
+mollify_dupes, mollify_types, mollify_security, mollify_coverage,
+mollify_supply_chain, mollify_explain, mollify_trace, mollify_inspect,
+mollify_list, mollify_metrics.
 <!-- END MOLLIFY v1 -->
