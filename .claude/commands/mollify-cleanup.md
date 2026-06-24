@@ -24,5 +24,5 @@ edit files without explicit user approval.
 4. After any approved edits, re-run `mollify audit --format json` and confirm the
    corresponding fingerprints are gone.
 
-There is no `mollify fix` command — apply approved changes yourself with the
+`mollify fix --apply` auto-removes `certain` unused symbols; for anything else apply changes yourself with the
 editor, then re-audit.

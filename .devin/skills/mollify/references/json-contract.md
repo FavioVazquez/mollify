@@ -12,7 +12,7 @@ Every `--format json` invocation prints one envelope. Clients **switch on `kind`
     "errors": 0,
     "warnings": 7,
     "files_analyzed": 3,
-    "introduced": 0            // omitted when 0 (gate not yet implemented)
+    "introduced": 0            // present with --gate new-only (file-level attribution)
   },
   "findings": [
     {

@@ -22,7 +22,7 @@ Reading the kind-discriminated JSON envelope:
 - Act only on `confidence: "certain"` without confirming with the user. Surface
   `likely`/`uncertain` with their reason and ask before changing code.
 - To silence a known-good finding, add its action's `suppression_comment` instead
-  of deleting code. (`fix` is not yet implemented.)
+  of deleting code. (`mollify fix --apply` auto-removes certain unused symbols.)
 
 Exit codes: 0 = no error-severity findings; 1 = error-severity findings or error.
 <!-- END MOLLIFY v1 -->

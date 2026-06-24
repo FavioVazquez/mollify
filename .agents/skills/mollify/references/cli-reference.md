@@ -1,32 +1,48 @@
 # Mollify CLI reference
 
-> Status: Phase 1 MVP. Commands below are implemented and tested.
+> Status: Phases 0–2 complete + Phase-1 polish. All commands below are implemented and tested.
 
 ## Commands
 | Command | Description |
 |---|---|
-| `mollify audit` | Unified report (dead-code + dependency hygiene today) + `quality_score`. |
+| `mollify audit` | Unified report across all engines + `quality_score` (0–100). |
 | `mollify dead-code` (alias `check`) | Reachability-based unused files and symbols. |
 | `mollify deps` | Dependency hygiene: unused / missing distributions. |
+| `mollify arch` | Architecture: circular-dependency detection. |
+| `mollify complexity` (alias `health`) | Cyclomatic + cognitive complexity hotspots. |
+| `mollify dupes` | Duplication / clone families (token-based). |
+| `mollify fix [--apply]` | Remove `certain` + `auto_fixable` unused symbols. Dry-run unless `--apply`. |
 | `mollify init` | Write a starter `.mollifyrc.json`. |
-| `mollify mcp` | Launch the stdio MCP server (same JSON contract as the CLI). |
+| `mollify mcp` | Run the MCP stdio server (for coding agents). |
 
-## Global flags (per command)
-- `--path <dir>` — project root to analyze (default `.`).
-- `--format human|json` — output format (default `human`). `json` is the
-  kind-discriminated contract.
+## Global flags (per analysis command)
+- `--path <dir>` — project root (default `.`).
+- `--format human|json|sarif` — output format (default `human`). `json` is the kind-discriminated contract; `sarif` is SARIF 2.1.0 for code scanning.
+- `--gate all|new-only` — `new-only` keeps only findings in changed files (introduced).
+- `--base <ref>` — git base ref for `--gate new-only` (e.g. `origin/main`).
 
 ## Exit codes
-- `0` — no `error`-severity findings (all current dead-code/deps findings are
-  `warn` by default).
-- `1` — one or more `error`-severity findings (CI gate), or a command error.
+- `0` — no `error`-severity findings.
+- `1` — one or more `error`-severity findings (CI gate) or a command error.
+
+Severities are `warn` by default; raise rules/categories to `error` in `.mollifyrc.json` to gate CI.
 
 ## Rules emitted
-- `unused-file` — module never imported and not an entry point.
-- `unused-export` — top-level function/class/variable with no reachable references.
-- `unused-dependency` — declared in `pyproject.toml` but never imported.
-- `missing-dependency` — imported (external, non-stdlib) but not declared.
+`unused-file`, `unused-export`, `unused-dependency`, `missing-dependency`,
+`circular-dependency`, `high-complexity`, `duplication`.
+
+## `.mollifyrc.json`
+```json
+{
+  "severity": { "dead-code": "error", "duplication": "warn", "unused-dependency": "off" },
+  "ignore": ["tests/", "migrations/"],
+  "max_cyclomatic": 10,
+  "max_cognitive": 15
+}
+```
+`severity` keys are rule ids or category names (`dead-code`, `duplication`,
+`circular-dependency`, `complexity`, `architecture`, `dependency-hygiene`).
 
 ## Not yet implemented (do not rely on)
-`--gate new-only`, SARIF output, `fix`, framework entry-point plugins, and
-`.mollifyrc` being read by analysis.
+Line-level gate attribution (current gate is file-level), named architecture
+presets, churn×complexity ranking, LSP, runtime/type intelligence. See docs/STATUS.md.
