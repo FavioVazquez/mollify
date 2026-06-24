@@ -104,6 +104,7 @@ pub fn arch_report(root: &Utf8Path) -> FindingsReport {
     let cfg = config::load(root);
     let mut findings = arch::analyze(&graph);
     findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
+    findings.extend(arch::analyze_contracts(&graph, &cfg.contracts));
     findings.extend(policy::analyze(&graph, &cfg.policies));
     finalize(&cfg, &graph, findings)
 }
@@ -255,6 +256,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     findings.extend(deps::analyze(root, &graph));
     findings.extend(arch::analyze(&graph));
     findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
+    findings.extend(arch::analyze_contracts(&graph, &cfg.contracts));
     findings.extend(policy::analyze(&graph, &cfg.policies));
     findings.extend(complexity::analyze_with(
         &graph,
