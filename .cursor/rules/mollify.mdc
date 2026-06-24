@@ -13,9 +13,9 @@ Prefer it over grep-based or manual guesses.
 
 Use one of:
 - The mollify MCP tools (registered in `.cursor/mcp.json`, see below), or
-- the `mollify` CLI (18 commands).
+- the `mollify` CLI (21 commands).
 
-## Commands (18)
+## Commands (21)
 Analysis engines (each takes the global flags below): `mollify audit` (unified +
 `quality_score`), `mollify dead-code` (alias `check`), `mollify deps`,
 `mollify arch`, `mollify complexity` (alias `health`), `mollify dupes`,
@@ -25,18 +25,25 @@ default; offline DB fallback).
 
 Actions / utilities: `mollify fix [--apply]` (remove `certain` + `auto_fixable`
 unused symbols and imports; dry-run unless `--apply`), `mollify explain [<rule>]`,
-`mollify trace <module>`, `mollify inspect <file>`,
+`mollify trace <module>`, `mollify inspect <file>`, `mollify metrics`
+(project-wide quantitative metrics), `mollify graph [--mermaid]` (module
+dependency graph; `--mermaid` emits a Mermaid diagram),
 `mollify list [entry-points|files|frameworks]`, `mollify watch [--interval-ms]`
-(CLI-only), `mollify init`, `mollify mcp`.
+(CLI-only), `mollify init`, `mollify mcp`, `mollify lsp` (CLI-only; stdio
+Language Server publishing real-time diagnostics on open/save — register it as
+the Python language server in Cursor).
 
 Global flags (analysis commands): `--path <dir>` (default `.`),
-`--format human|json|sarif`, `--gate all|new-only`, `--base <ref>`,
+`--format human|json|sarif|github|junit` (`github` = GitHub Actions annotations,
+`junit` = JUnit XML), `--gate all|new-only`, `--base <ref>`,
 `--save-baseline <f>`, `--baseline <f>`, `--fail-on-regression`, `--brief`,
-`--min-confidence certain|likely|uncertain`. `--gate new-only` and `--format
-sarif` are fully implemented. Add `--path <dir>` to target a subproject.
+`--min-confidence certain|likely|uncertain`. `mollify graph` accepts `--mermaid`.
+`--gate new-only` and `--format sarif` are fully implemented. Add `--path <dir>`
+to target a subproject.
 
 ## Rules emitted
-`unused-file`, `unused-export`, `unused-import`, `commented-code`,
+`unused-file`, `unused-export`, `unused-import`, `unused-variable`,
+`unused-parameter`, `commented-code`,
 `unused-dependency`, `missing-dependency`, `circular-dependency`,
 `layer-violation`, `forbidden-import`, `independence-violation`,
 `high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`,
@@ -47,12 +54,12 @@ sarif` are fully implemented. Add `--path <dir>` to target a subproject.
 `policies`. Categories: `dead-code`, `dependency-hygiene`, `circular-dependency`,
 `complexity`, `architecture`, `duplication`, `type-health`, `security`.
 
-## MCP tools (14)
-`mollify mcp` exposes (`watch` is CLI-only): `mollify_audit`,
+## MCP tools (15)
+`mollify mcp` exposes (`watch` and `lsp` are CLI-only): `mollify_audit`,
 `mollify_dead_code`, `mollify_deps`, `mollify_arch`, `mollify_complexity`,
 `mollify_dupes`, `mollify_types`, `mollify_security`, `mollify_coverage`,
 `mollify_supply_chain`, `mollify_explain`, `mollify_trace`, `mollify_inspect`,
-`mollify_list`. Params: `mollify_coverage` requires `coverage_file`;
+`mollify_list`, `mollify_metrics`. Params: `mollify_coverage` requires `coverage_file`;
 `mollify_trace` requires `module`; `mollify_inspect` requires `file`;
 `mollify_supply_chain` takes optional `advisory_db`; `mollify_list` takes optional
 `kind`; all others take optional `path` (default `.`).
