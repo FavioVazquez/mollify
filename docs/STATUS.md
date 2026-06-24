@@ -115,8 +115,26 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
       deterministic DB path; `--refresh` caches the live feed. `mollify audit`
       stays fully offline (DB-only). Network I/O is isolated in the CLI so
       `mollify-core` remains pure.
-  - ✅ **MCP server exposes every engine** (`mollify-mcp`): audit/dead-code/deps/arch/
-    complexity/dupes/types/security/coverage/supply-chain + explain + trace. +tests.
+  - ✅ **MCP server exposes every engine** (`mollify-mcp`, 14 tools): audit/dead-code/
+    deps/arch/complexity/dupes/types/security/coverage/supply-chain + explain/trace/
+    inspect/list. (watch is CLI-only — a loop.) +tests.
+- **Cross-tool superiority pass** (multi-agent audit vs vulture/ruff/pyflakes/pycln/
+  deptry/import-linter/tach/radon/pip-audit/safety/bandit/pylint/skylos/wily):
+  - ✅ **P0 false-positive fixes** — `if TYPE_CHECKING:`/`if False:` imports never
+    flagged; inline `# mollify: ignore[<rule>]` comments are parsed from source and
+    suppress findings (was non-functional); names used only in string/forward-ref
+    annotations counted as used. (parser + `apply_suppressions`). +tests.
+  - ✅ **Security breadth → ~11 rules + CWE** (`security.rs`): weak-hash, weak-cipher,
+    insecure-random, sql-injection, request-without-timeout; broadened subprocess
+    (os.system/popen), deserialization (marshal/dill/shelve/jsonpickle), TLS
+    (_create_unverified_context); every finding carries its CWE id. +tests.
+  - ✅ **Deps parity** (`deps.rs`): reads requirements*.txt, [tool.uv], [tool.pdm],
+    and Poetry groups (was pyproject-only). +test.
+  - ✅ **Declarative module contracts** (`arch.rs::analyze_contracts`, `.mollifyrc`
+    `contracts`): forbidden + independence → `forbidden-import`/`independence-violation`
+    (import-linter / tach parity). +test.
+  - ✅ **commented-code** rule (`commented.rs`, eradicate/E800 parity). +test.
+  - ✅ **`--min-confidence`** CLI filter (vulture/deptry parity).
   - ✅ **Regression baselines** (`baseline.rs`) — `--save-baseline`/`--baseline`/
     `--fail-on-regression`: snapshot finding fingerprints, then gate on what's *new*
     (git-free, survives file moves). Complements `--gate new-only`. +tests.
@@ -128,6 +146,11 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     import statements); flags whole-statement-unused imports (`unused-import`), certain
     + auto-fixable in regular modules, uncertain in `__init__.py` (re-export idiom).
     `mollify fix` removes them. +tests.
+  - ⬜ Remaining P1/P2 from the cross-tool audit (lower-impact): unused-variable /
+    unused-parameter (needs function-scope tracking), configurable dupes thresholds
+    + clone-family members, OSV `/v1/query/batch`, a `metrics` command (Maintainability
+    Index / Halstead / LCOM), `transitive-dependency` (needs the installed env),
+    DOT/Mermaid graph export, GitHub/JUnit output formats.
   - ⬜ LSP server; line-level (vs file-level) gate attribution; LibCST
     format-preserving autofix (current `fix` is line-range deletion); partial-line
     unused-import removal (only whole-statement today).
