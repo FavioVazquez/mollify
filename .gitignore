@@ -2,3 +2,7 @@
 **/*.rs.bk
 .mollify/
 *.profraw
+
+# Python bytecode
+__pycache__/
+*.pyc

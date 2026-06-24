@@ -1,0 +1,38 @@
+{
+  "schema": "mollify-advisories/1",
+  "source": "sample (real advisories abridged from osv.dev) — regenerate with scripts/fetch-advisories.py",
+  "advisories": [
+    {
+      "id": "GHSA-g3rq-g295-4j3m",
+      "package": "jinja2",
+      "specs": ["<2.11.3"],
+      "summary": "Regular Expression Denial of Service (ReDoS) in Jinja2",
+      "aliases": ["CVE-2020-28493"],
+      "severity": "moderate"
+    },
+    {
+      "id": "GHSA-q2x7-8rv6-6q7h",
+      "package": "jinja2",
+      "specs": ["<3.1.5"],
+      "summary": "Jinja has a sandbox breakout through indirect reference to format method",
+      "aliases": ["CVE-2024-56326"],
+      "severity": "moderate"
+    },
+    {
+      "id": "GHSA-j8r2-6x86-q33q",
+      "package": "requests",
+      "specs": [">=2.3.0,<2.31.0"],
+      "summary": "Unintended leak of Proxy-Authorization header",
+      "aliases": ["CVE-2023-32681"],
+      "severity": "moderate"
+    },
+    {
+      "id": "GHSA-v845-jxx5-vc9f",
+      "package": "urllib3",
+      "specs": [">=1.26.0,<1.26.5"],
+      "summary": "Catastrophic backtracking / ReDoS in urllib3",
+      "aliases": ["CVE-2021-33503"],
+      "severity": "high"
+    }
+  ]
+}

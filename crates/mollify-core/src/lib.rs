@@ -29,8 +29,10 @@ pub mod plugins;
 pub mod policy;
 pub mod sarif;
 pub mod security;
+pub mod supplychain;
 pub mod trace;
 pub mod typehealth;
+pub mod version;
 
 /// Build the graph for a project root once, to be shared across engines.
 pub fn build_graph(root: &Utf8Path) -> ModuleGraph {
@@ -125,6 +127,19 @@ pub fn coverage_report(root: &Utf8Path, coverage_path: &Utf8Path) -> FindingsRep
     finalize(&config::load(root), graph.modules.len(), findings)
 }
 
+/// `mollify supply-chain` — match pinned/locked dependency versions against a
+/// local advisory database (`vulnerable-dependency`). The DB is an input file,
+/// so analysis stays deterministic and offline.
+pub fn supply_chain_report(root: &Utf8Path, db_path: &Utf8Path) -> FindingsReport {
+    let graph = build_graph(root);
+    let advisories = supplychain::load_db(db_path).unwrap_or_default();
+    let findings = supplychain::analyze(root, &advisories);
+    finalize(&config::load(root), graph.modules.len(), findings)
+}
+
+/// The default advisory DB path checked by `audit` when present.
+pub const DEFAULT_ADVISORY_DB: &str = ".mollify/advisories.json";
+
 /// `mollify audit` — the unified pass across all engines. Produces a quality
 /// score over the combined findings.
 pub fn audit_report(root: &Utf8Path) -> AuditReport {
@@ -145,6 +160,12 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     findings.extend(typehealth::analyze(&graph));
     findings.extend(security::analyze(&graph));
     findings.extend(hotspots::analyze(root, &graph));
+    // Supply-chain runs only when a local advisory DB is present (keeps audit
+    // offline + deterministic; no implicit network).
+    let db_path = root.join(DEFAULT_ADVISORY_DB);
+    if let Some(advisories) = supplychain::load_db(&db_path) {
+        findings.extend(supplychain::analyze(root, &advisories));
+    }
     config::apply(&cfg, &mut findings);
     sort_findings(&mut findings);
     let files = graph.modules.len();

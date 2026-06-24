@@ -75,6 +75,12 @@ pub fn text(rule: &str) -> Option<&'static str> {
             "TLS verification disabled (`verify=False`). Action: keep \
             verification on; pin a CA bundle if needed."
         }
+        "vulnerable-dependency" => {
+            "A pinned/locked dependency version falls in a known-vulnerable range \
+            from the local advisory DB (`.mollify/advisories.json`). Confidence: \
+            certain given the DB. Action: upgrade out of the affected range; refresh \
+            the DB with scripts/fetch-advisories.py."
+        }
         "hardcoded-secret" => {
             "A literal that looks like a credential assigned to a \
             secret-named variable. Action: load it from the environment or a secret manager."
@@ -104,6 +110,7 @@ pub const RULES: &[&str] = &[
     "unsafe-deserialization",
     "tls-verify-disabled",
     "hardcoded-secret",
+    "vulnerable-dependency",
 ];
 
 #[cfg(test)]

@@ -100,10 +100,20 @@ Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffol
     (imports + imported-by) from the static graph; `--format json`. +test.
   - ✅ **`mollify watch`** — poll-based re-run of `audit` on any `.py` add/edit/remove
     (dependency-free file-signature diff; `--interval-ms`).
+  - ✅ **Supply-chain / CVE join** (`supplychain.rs` + `version.rs`,
+    `mollify supply-chain`) — matches pinned/locked versions (requirements `==`,
+    poetry/uv lockfiles) against a local advisory DB (`mollify-advisories/1`),
+    emitting `vulnerable-dependency`. Determinism preserved: the DB is an input
+    file; `scripts/fetch-advisories.py` refreshes it from OSV.dev / safety-db
+    out-of-band (the OSV *query* API is egress-blocked, but the OSV GCS export is
+    reachable). PEP 440-subset version matcher. Folded into `audit` when
+    `.mollify/advisories.json` is present. Validated against real OSV data
+    (25k+ advisories). +tests.
   - ✅ **MCP server exposes every engine** (`mollify-mcp`): audit/dead-code/deps/arch/
-    complexity/dupes/types/security/coverage + explain + trace tools. +tests.
-  - ⬜ supply-chain CVE join (needs OSV network — egress-blocked here), LSP server,
-    line-level (vs file-level) gate attribution.
+    complexity/dupes/types/security/coverage/supply-chain + explain + trace. +tests.
+  - ⬜ LSP server; line-level (vs file-level) gate attribution; LibCST
+    format-preserving autofix (current `fix` is line-range deletion of certain
+    unused symbols).
 - **Agent integrations** (`.devin/` skills+rules+hooks, `.windsurf/` workflows): ✅ shipped, honoring the real CLI
   - `.devin/skills/mollify/SKILL.md` (+ `references/cli-reference.md`, `references/json-contract.md`)
   - `.devin/rules/mollify.md` (glob `**/*.py`)

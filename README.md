@@ -23,7 +23,7 @@ evidence with a stable fingerprint, a confidence tier, and a human-readable reas
 Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 > **Project status:** early but real. Phases 0–4 of the [plan](PLAN.md) are
-> substantially implemented, tested (57+ tests), and dogfooded; CI is green.
+> substantially implemented, tested (64+ tests), and dogfooded; CI is green.
 > See [`docs/STATUS.md`](docs/STATUS.md) for exactly what's done vs pending and
 > [`docs/adr/`](docs/adr) for design decisions. Honest about its edges — see
 > *Known limitations* below.
@@ -55,6 +55,7 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 | **Type health** | `mollify types` | `untyped-function` |
 | **Security** | `mollify security` | `dangerous-eval`, `subprocess-shell-true`, `unsafe-yaml-load`, `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret` |
 | **Cold paths** | `mollify coverage --coverage-file` | `cold-code` (reachable but never executed) |
+| **Supply chain** | `mollify supply-chain` | `vulnerable-dependency` (pinned versions vs a local CVE/advisory DB) |
 | **Everything + score** | `mollify audit` | all of the above + a 0–100 quality score |
 
 Also: **Jupyter notebooks (`.ipynb`)** are discovered and analyzed cell-by-cell;
@@ -97,6 +98,14 @@ mollify audit --format json                       # kind-discriminated contract
 mollify audit --format sarif > mollify.sarif      # GitHub/GitLab code scanning
 mollify audit --gate new-only --base origin/main  # only fail on regressions
 mollify fix                                        # preview safe removals (--apply to write)
+```
+
+Supply-chain (offline, deterministic — refresh the advisory DB out-of-band):
+
+```bash
+python3 scripts/fetch-advisories.py .mollify/advisories.json   # pulls from OSV / safety-db
+mollify supply-chain                                            # match pinned versions vs the DB
+# (audit auto-includes supply-chain when .mollify/advisories.json exists)
 ```
 
 ## Confidence tiers
@@ -194,8 +203,11 @@ contract — see [RESEARCH.md](RESEARCH.md) for the honest, sourced landscape
 - Symbol usage is name-table-assisted, not full scope/binding resolution.
 - Duplication is Rabin-Karp token matching (SA-IS+LCP is the planned upgrade).
 - `--gate` attribution is file-level (line-level base-worktree is planned).
-- Not yet built: supply-chain CVE join (needs network) and an LSP server.
-  Tracked in [docs/STATUS.md](docs/STATUS.md).
+- Supply-chain matching needs **pinned/locked** versions (requirements `==`,
+  poetry/uv lockfiles); unpinned ranges can't be matched precisely. The advisory
+  DB is refreshed out-of-band (`scripts/fetch-advisories.py`) to keep audits
+  deterministic and offline — Mollify itself never hits the network.
+- Not yet built: an LSP server. Tracked in [docs/STATUS.md](docs/STATUS.md).
 
 ## Contributing
 
