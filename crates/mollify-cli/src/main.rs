@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use mollify_types::{Confidence, Finding, Report, Severity, Summary};
 
 mod osv;
+mod update_check;
 
 #[derive(Parser)]
 #[command(
@@ -65,12 +66,29 @@ enum Command {
     Metrics(MetricsArgs),
     /// Export the module import graph as Graphviz DOT (or Mermaid with --mermaid).
     Graph(GraphArgs),
-    /// Scaffold a .mollifyrc and report detected layout.
-    Init(Scope),
+    /// Scaffold a .mollifyrc, or install agent integrations with --agent.
+    Init(InitArgs),
     /// Run the Model Context Protocol server over stdio (for coding agents).
     Mcp,
     /// Run the Language Server (LSP) over stdio (real-time editor diagnostics).
     Lsp,
+}
+
+#[derive(clap::Args)]
+struct InitArgs {
+    /// Project root to scaffold into.
+    #[arg(long, default_value = ".")]
+    path: Utf8PathBuf,
+    /// Install integration files for one or more agents (claude, cursor,
+    /// gemini, codex, cascade). Repeatable. Without this, a .mollifyrc is written.
+    #[arg(long, value_name = "AGENT")]
+    agent: Vec<String>,
+    /// Install integrations for every supported agent.
+    #[arg(long)]
+    all: bool,
+    /// Overwrite existing files (default: skip files that already exist).
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(clap::Args)]
@@ -382,7 +400,7 @@ fn main() {
             print!("{}", mollify_core::graph_export(&a.path, a.mermaid));
             0
         }
-        Command::Init(s) => run_init(&s),
+        Command::Init(a) => run_init(&a),
         Command::Mcp => match mollify_mcp::run() {
             Ok(()) => 0,
             Err(e) => {
@@ -489,6 +507,7 @@ fn run_audit(s: &Scope) -> i32 {
             println!("Quality score: {}/100", report.quality_score);
             print_summary(&report.summary);
             print_findings(&report.findings);
+            update_check::maybe_nudge();
         }
     }
     gated_exit(s, errors, &outcome)
@@ -530,6 +549,7 @@ fn run_findings(
             println!("Mollify {label} — {}", s.path);
             print_summary(&report.summary);
             print_findings(&report.findings);
+            update_check::maybe_nudge();
         }
     }
     gated_exit(s, errors, &outcome)
@@ -871,8 +891,12 @@ fn run_metrics(a: &MetricsArgs) -> i32 {
     0
 }
 
-fn run_init(s: &Scope) -> i32 {
-    let cfg = s.path.join(".mollifyrc.json");
+fn run_init(a: &InitArgs) -> i32 {
+    // Agent-integration mode: install skills/rules/hooks/commands/workflows.
+    if a.all || !a.agent.is_empty() {
+        return run_init_agents(a);
+    }
+    let cfg = a.path.join(".mollifyrc.json");
     if cfg.exists() {
         println!("{cfg} already exists; leaving it untouched.");
         return 0;
@@ -888,6 +912,64 @@ fn run_init(s: &Scope) -> i32 {
             1
         }
     }
+}
+
+/// Resolve the requested agents and scaffold their integration artifacts.
+fn run_init_agents(a: &InitArgs) -> i32 {
+    use mollify_core::agents::{self, Agent, FileOutcome};
+    let agents: Vec<Agent> = if a.all {
+        Agent::ALL.to_vec()
+    } else {
+        let mut resolved = Vec::new();
+        for name in &a.agent {
+            match Agent::parse(name) {
+                Some(ag) => resolved.push(ag),
+                None => {
+                    eprintln!(
+                        "Unknown agent `{name}`. Valid: claude, cursor, gemini, codex, cascade (or --all)."
+                    );
+                    return 1;
+                }
+            }
+        }
+        resolved
+    };
+    let mut created = 0usize;
+    let mut overwritten = 0usize;
+    let mut skipped = 0usize;
+    for ag in agents {
+        match agents::install(&a.path, ag, a.force) {
+            Ok(files) => {
+                println!("{} — {} file(s):", ag.name(), files.len());
+                for f in &files {
+                    let tag = match f.outcome {
+                        FileOutcome::Created => {
+                            created += 1;
+                            "create"
+                        }
+                        FileOutcome::Overwritten => {
+                            overwritten += 1;
+                            "overwrite"
+                        }
+                        FileOutcome::Skipped => {
+                            skipped += 1;
+                            "skip"
+                        }
+                    };
+                    println!("  [{tag}] {}", f.path);
+                }
+            }
+            Err(e) => {
+                eprintln!("error: installing {} integration: {e}", ag.name());
+                return 1;
+            }
+        }
+    }
+    println!("\nDone: {created} created, {overwritten} overwritten, {skipped} skipped.");
+    if skipped > 0 && !a.force {
+        println!("Re-run with --force to overwrite the skipped files.");
+    }
+    0
 }
 
 fn print_summary(s: &Summary) {

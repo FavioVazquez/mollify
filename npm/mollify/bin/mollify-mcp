@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+"use strict";
+// Backs `mollify mcp` (the MCP stdio server) so MCP clients can launch it as `mollify-mcp`.
+require("../scripts/run-binary").runBinary(["mcp"]);

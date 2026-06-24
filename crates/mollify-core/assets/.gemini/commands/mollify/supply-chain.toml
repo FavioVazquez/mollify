@@ -1,0 +1,18 @@
+description = "Check dependencies against known vulnerabilities (OSV; offline DB fallback)"
+prompt = """
+You are reviewing this repository with Mollify, a deterministic Python
+code-intelligence engine. Mollify emits evidence, not decisions.
+
+Here is the current supply-chain output (live OSV by default; pass `--offline`,
+`--refresh`, or `--advisory-db <f>` via args as needed):
+!{mollify supply-chain --format json {{args}}}
+
+Using ONLY this output (do not grep, do not guess, do not invent findings):
+
+1. Group findings by `confidence`, with counts. The `rule` is
+   `vulnerable-dependency`.
+2. List each finding with the affected package/version, its `reason` (advisory
+   id), and the `fingerprint`.
+3. Propose an upgrade plan, verifying each advisory applies to your usage. Do NOT
+   bump versions without explicit user confirmation.
+"""

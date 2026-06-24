@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+"use strict";
+// Backs `mollify lsp` (the Language Server) so editors can launch it as `mollify-lsp`.
+require("../scripts/run-binary").runBinary(["lsp"]);

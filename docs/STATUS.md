@@ -6,6 +6,63 @@ every deviation from `PLAN.md` (with rationale).
 
 Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffolded (compiles, stubbed)
 
+## Session log
+- **2026-06-24 (hook path fix)** — The installed agent hooks failed with
+  `bash /home/user/mollify/scripts/mollify-report.sh: No such file or directory`.
+  Two root causes: (1) the hook command hardcoded a bogus absolute path in
+  `.devin/hooks.v1.json`, `.windsurf/hooks.json`, `.claude/settings.json`; and
+  (2) `scripts/mollify-report.sh` was never shipped by `mollify init`, so even a
+  correct path wouldn't resolve for installed users. Fix: hooks now call
+  `bash scripts/mollify-report.sh` (relative); the Claude + Cascade install
+  entries (`agents::Agent::entries`) now ship the helper; the script `cd`s to the
+  git root for CWD-robustness; `scripts/sync-agent-assets.sh` mirrors it (nested
+  path) into the crate assets. Dogfooded (`mollify init --agent cascade` ships
+  the script + relative hook), drift test green, no `/home/user/` left anywhere.
+  **Action for already-installed users:** re-run `mollify init --agent <name>
+  --force` to overwrite the stale hook config.
+- **2026-06-24 (distribution)** — Added the full distribution story (validated):
+  - **uv/PyPI:** root `pyproject.toml` (maturin `bindings = "bin"`, manifest at
+    `crates/mollify-cli`) → builds a binary wheel; verified `pip install` of the
+    wheel exposes `mollify` (so `uvx mollify` / `uv tool install mollify` work).
+    `.github/workflows/release.yml` (maturin-action matrix: linux gnu+musl
+    x64/arm64, macOS x64/arm64, windows x64, sdist) → PyPI Trusted Publishing.
+    PyPI name `mollify` confirmed available.
+  - **Agent installer:** `mollify-core/src/agents.rs` embeds the `.claude`,
+    `.cursor`, `.gemini`, `.codex`, `.agents`, `.devin`, `.windsurf` trees +
+    root markers (`.mcp.json`/`CLAUDE.md`/`GEMINI.md`/`AGENTS.md`) via
+    `include_dir`; `mollify init --agent claude|cursor|gemini|codex|cascade|--all`
+    scaffolds them (skips existing unless `--force`). Dogfooded.
+  - **npm parity:** `npm/mollify/` meta package (bin `mollify`/`mollify-mcp`/
+    `mollify-lsp` → one Rust binary via subcommand dispatch), `detect-libc`
+    platform resolution, `@mollify-cli/<platform>` optional deps, `mollify/types`
+    (`types/output-contract.d.ts`), `make-platform-package.mjs` generator, and
+    `.github/workflows/npm-release.yml`. Launcher smoke-tested end-to-end.
+  - **Update nudge:** `mollify-cli/src/update_check.rs` — TTY+human-only,
+    once/day cached PyPI check on a bounded background thread; silenced by
+    `MOLLIFY_UPDATE_CHECK=off`/`DO_NOT_TRACK`/CI. Never affects exit code.
+  - **crates.io parity (self-containment fix):** the agent installer previously
+    embedded artifacts via `include_dir!("../../.claude")` etc. — paths outside
+    the crate, which `cargo publish`/`cargo install` can't package. Verified
+    `include_dir!` embeds dotfiles, then mirrored all artifacts into
+    `crates/mollify-core/assets/` (single in-crate `include_dir!("…/assets")`).
+    `scripts/sync-agent-assets.sh` regenerates the mirror from the repo-root
+    canonical sources; `agents::tests::assets_match_repo_root_sources` guards
+    drift (skips gracefully on a published crate). Added `version` to all
+    internal path deps + `.github/workflows/crates-release.yml` (publishes in
+    dependency order). **Validated:** `cargo package --list` ships all 57 assets
+    with zero `../` escapes, and `mollify-core` **builds in full isolation**
+    (only the 4 crates present, repo root unreachable) — proving every channel
+    (uv/pip/npm/cargo/source) yields the same self-contained binary.
+  - **94 tests green**, clippy `-D warnings` + fmt clean.
+- **2026-06-24** — Fresh-machine bring-up: no Rust present; installed via rustup
+  (stable 1.96). `/tmp` is mounted `noexec`, so rustup-init and builds need
+  `TMPDIR=$HOME/rust-tmp`. `cargo build`/`test`/`clippy -D warnings`/`fmt --check`
+  all clean; **86 tests green**. Dogfooded the CLI (audit/dead-code/fix/explain)
+  and the MCP server (16 tools, kind-discriminated audit). **Bug fixed:** comma
+  imports (`import os, sys`) produced two `unused-import` findings sharing one
+  fingerprint (`fingerprint` used only `[path, line]`); now includes the import
+  bindings. Regression test `comma_import_unused_names_get_distinct_fingerprints`.
+
 ## Environment constraints discovered (these shape the build)
 - cargo 1.94.1, rustc 1.94.1, `cc`/`gcc` present. crates.io fetch works.
 - **Git dependencies from GitHub are BLOCKED** (cargo → HTTP 403 via egress proxy).

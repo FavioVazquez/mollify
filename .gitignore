@@ -6,3 +6,14 @@
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Packaging build output
+/dist
+/wheelhouse
+*.egg-info/
+# Generated per-platform npm packages (built in CI from the Rust binary)
+/npm/@mollify-cli
+node_modules/
+
+# Sprang dashboard data (local-only)
+.sprang/

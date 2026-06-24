@@ -24,6 +24,8 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --all
+      - name: Version consistency (workspace / crate deps / npm)
+        run: ./scripts/check-versions.sh
 
   self-audit:
     name: mollify audits a sample project (dogfood)

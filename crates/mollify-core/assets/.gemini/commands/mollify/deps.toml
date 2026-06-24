@@ -1,0 +1,20 @@
+description = "Check dependency hygiene (unused / missing distributions)"
+prompt = """
+You are reviewing this repository with Mollify, a deterministic Python
+code-intelligence engine. Mollify emits evidence, not decisions.
+
+Here is the current dependency output:
+!{mollify deps --format json {{args}}}
+
+Using ONLY this output (do not grep, do not guess, do not invent findings):
+
+1. Group findings by `rule` (`unused-dependency`, `missing-dependency`) and by
+   `confidence`, with counts.
+2. List each finding with `location.path:location.line`, its `reason`, and the
+   `fingerprint`.
+3. Note that `missing-dependency` can be a false positive for namespace packages
+   or local shadowing — verify before editing `pyproject.toml`.
+4. Act automatically only on `confidence: certain`; surface likely/uncertain with
+   their reason. Do NOT edit `pyproject.toml` or lockfiles without explicit user
+   confirmation.
+"""

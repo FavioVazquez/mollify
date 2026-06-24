@@ -1,0 +1,18 @@
+description = "Report project-wide quantitative metrics (LOC, counts, complexity distribution)"
+prompt = """
+You are reviewing this repository with Mollify, a deterministic Python
+code-intelligence engine. Metrics are computed, not estimated.
+
+Here is the current metrics output:
+!{mollify metrics --format json {{args}}}
+
+Using ONLY this output (do not grep, do not guess):
+
+1. Summarize the headline numbers: total lines of code, file count, symbol count,
+   the complexity distribution, and per-category finding tallies.
+2. Call out outliers (unusually large files, heavy complexity buckets) and tie
+   each back to the engine the user could run next (`complexity`, `dupes`,
+   `dead-code`).
+3. Do NOT modify files — this is read-only reporting. All numbers are
+   deterministic for a given input.
+"""

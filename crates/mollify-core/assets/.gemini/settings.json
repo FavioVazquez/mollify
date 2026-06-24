@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mollify": {
+      "command": "mollify",
+      "args": ["mcp"]
+    }
+  }
+}

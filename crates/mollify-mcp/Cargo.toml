@@ -8,8 +8,8 @@ repository.workspace = true
 description = "Model Context Protocol (stdio) server for Mollify — the one server every agent front-end calls."
 
 [dependencies]
-mollify-types = { path = "../mollify-types" }
-mollify-core = { path = "../mollify-core" }
+mollify-types = { path = "../mollify-types", version = "0.1.0" }
+mollify-core = { path = "../mollify-core", version = "0.1.0" }
 serde_json.workspace = true
 camino.workspace = true
 
