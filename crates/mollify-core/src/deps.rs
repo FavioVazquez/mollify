@@ -1,9 +1,11 @@
 //! Dependency-hygiene engine: declared-but-unused and imported-but-undeclared
 //! distributions. Parses `pyproject.toml` (PEP 621 + Poetry + PEP 735 groups).
 //!
-//! Caveat (documented): like deptry, import→distribution mapping is the hard
-//! part; we use installed-metadata-free heuristics (stdlib set + alias table),
-//! so findings are `Likely`/`Uncertain`, never `Certain`.
+//! import→distribution mapping uses the installed env's `*.dist-info` metadata
+//! when a virtualenv is present (accurate), falling back to a stdlib set + alias
+//! table otherwise. With the installed set known, an imported-but-undeclared
+//! package is split into `transitive-dependency` (installed) vs
+//! `missing-dependency` (not installed). Findings stay `Likely`/`Uncertain`.
 
 use crate::fingerprint::fingerprint;
 use crate::known::{normalize_dist, Known};
@@ -22,7 +24,9 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     // Manifest the findings point at (pyproject if present, else a requirements file).
     let mut manifest = pyproject_path.clone();
 
+    let mut has_manifest = false;
     if let Ok(text) = std::fs::read_to_string(&pyproject_path) {
+        has_manifest = true;
         if let Ok(table) = text.parse::<toml::Table>() {
             declared.extend(declared_dependencies(&toml::Value::Table(table)));
         }
@@ -43,6 +47,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
                         declared.insert(name);
                     }
                 }
+                has_manifest = true;
                 if declared.len() > before && !pyproject_path.exists() {
                     if let Ok(p) = camino::Utf8PathBuf::from_path_buf(entry.path()) {
                         manifest = p;
@@ -52,13 +57,17 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
         }
     }
     let pyproject_path = manifest;
-    if declared.is_empty() {
+    // No manifest at all → nothing to check (avoid flagging every import as
+    // "missing" in a project that simply doesn't declare dependencies here).
+    if !has_manifest {
         return findings;
     }
 
     let known = Known::new();
     let internal_tops = internal_top_levels(graph);
-    let used_dists = used_distributions(graph, &known, &internal_tops);
+    // Accurate import→dist mapping + installed set from a venv, if present.
+    let installed = crate::installed::discover(root);
+    let used_dists = used_distributions(graph, &known, &internal_tops, installed.as_ref());
 
     let confidence = if graph.global_dynamic {
         Confidence::Uncertain
@@ -97,32 +106,48 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
         }
     }
 
-    // Missing: imported external but not declared.
+    // Imported but not declared. If we can see the installed env, split into
+    // `transitive-dependency` (installed as someone else's sub-dep) vs
+    // `missing-dependency` (not installed at all).
     for dist in &used_dists {
-        if !declared.contains(dist) {
-            let rule = "missing-dependency";
-            findings.push(Finding {
-                fingerprint: fingerprint(rule, &[dist]),
-                rule: rule.into(),
-                category: Category::DependencyHygiene,
-                severity: Severity::Warn,
-                confidence,
-                attribution: None,
-                reason: format!("`{dist}` is imported but not declared in pyproject.toml"),
-                location: Location {
-                    path: pyproject_path.clone(),
-                    line: 1,
-                    column: 0,
-                    end_line: None,
-                },
-                actions: vec![Action {
-                    kind: "add-dependency".into(),
-                    description: format!("Add `{dist}` to project dependencies"),
-                    auto_fixable: false,
-                    suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
-                }],
-            });
+        if declared.contains(dist) {
+            continue;
         }
+        let is_transitive = installed.as_ref().is_some_and(|i| i.dists.contains(dist));
+        let (rule, reason, action) = if is_transitive {
+            (
+                "transitive-dependency",
+                format!("`{dist}` is imported and installed, but only as a transitive dependency — declare it directly"),
+                format!("Add `{dist}` to your direct dependencies (currently transitive)"),
+            )
+        } else {
+            (
+                "missing-dependency",
+                format!("`{dist}` is imported but not declared in the project manifest"),
+                format!("Add `{dist}` to project dependencies"),
+            )
+        };
+        findings.push(Finding {
+            fingerprint: fingerprint(rule, &[dist]),
+            rule: rule.into(),
+            category: Category::DependencyHygiene,
+            severity: Severity::Warn,
+            confidence,
+            attribution: None,
+            reason,
+            location: Location {
+                path: pyproject_path.clone(),
+                line: 1,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![Action {
+                kind: "add-dependency".into(),
+                description: action,
+                auto_fixable: false,
+                suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+            }],
+        });
     }
 
     findings
@@ -265,10 +290,12 @@ fn internal_top_levels(graph: &ModuleGraph) -> FxHashSet<String> {
 }
 
 /// Distributions imported by the project (external, non-stdlib, non-internal).
+/// Prefers the installed env's accurate import→dist map when available.
 fn used_distributions(
     graph: &ModuleGraph,
     known: &Known,
     internal: &FxHashSet<String>,
+    installed: Option<&crate::installed::Installed>,
 ) -> FxHashSet<String> {
     let mut set = FxHashSet::default();
     for m in &graph.modules {
@@ -282,7 +309,10 @@ fn used_distributions(
             if top.is_empty() || internal.contains(top) || known.is_stdlib(top) {
                 continue;
             }
-            set.insert(known.dist_for_import(top));
+            let dist = installed
+                .and_then(|i| i.import_to_dist.get(top).cloned())
+                .unwrap_or_else(|| known.dist_for_import(top));
+            set.insert(dist);
         }
     }
     set
@@ -331,6 +361,31 @@ mod tests {
         // requests is declared and used → no finding; os is stdlib → ignored.
         assert!(!f.iter().any(|x| x.reason.contains("requests")));
         assert!(!f.iter().any(|x| x.reason.contains("`os`")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn transitive_when_installed_but_undeclared() {
+        let d = temp("trans");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = []\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("app.py"), "import requests\nrequests.get('x')\n").unwrap();
+        // Synthetic venv with requests installed (as if pulled in transitively).
+        let sp = d.join(".venv/lib/python3.11/site-packages/requests-2.31.0.dist-info");
+        std::fs::create_dir_all(&sp).unwrap();
+        std::fs::write(sp.join("METADATA"), "Name: requests\n").unwrap();
+        std::fs::write(sp.join("top_level.txt"), "requests\n").unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "transitive-dependency" && x.reason.contains("requests")),
+            "got {f:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

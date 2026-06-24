@@ -26,6 +26,7 @@ pub mod fingerprint;
 pub mod fix;
 pub mod git;
 pub mod hotspots;
+pub mod installed;
 pub mod known;
 pub mod metrics;
 pub mod plugins;
