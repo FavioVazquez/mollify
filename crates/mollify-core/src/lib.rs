@@ -215,6 +215,33 @@ pub fn inspect(root: &Utf8Path, file: &str) -> Inspection {
     }
 }
 
+/// Export the module import graph as Graphviz DOT or Mermaid `flowchart`.
+pub fn graph_export(root: &Utf8Path, mermaid: bool) -> String {
+    let graph = build_graph(root);
+    let mut edges: Vec<(String, String)> = graph
+        .import_edges()
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    edges.sort();
+    edges.dedup();
+    let id = |s: &str| s.replace(['.', '-', '/'], "_");
+    let mut out = String::new();
+    if mermaid {
+        out.push_str("flowchart LR\n");
+        for (a, b) in &edges {
+            out.push_str(&format!("    {}[\"{a}\"] --> {}[\"{b}\"]\n", id(a), id(b)));
+        }
+    } else {
+        out.push_str("digraph imports {\n  rankdir=LR;\n  node [shape=box];\n");
+        for (a, b) in &edges {
+            out.push_str(&format!("  \"{a}\" -> \"{b}\";\n"));
+        }
+        out.push_str("}\n");
+    }
+    out
+}
+
 /// Topology listing for `mollify list` / `mollify_list`.
 pub fn list_topology(root: &Utf8Path, kind: &str) -> Vec<String> {
     let graph = build_graph(root);

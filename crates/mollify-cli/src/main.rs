@@ -63,6 +63,8 @@ enum Command {
     List(ListArgs),
     /// Code metrics: Maintainability Index, Halstead, raw LOC, per-file complexity.
     Metrics(MetricsArgs),
+    /// Export the module import graph as Graphviz DOT (or Mermaid with --mermaid).
+    Graph(GraphArgs),
     /// Scaffold a .mollifyrc and report detected layout.
     Init(Scope),
     /// Run the Model Context Protocol server over stdio (for coding agents).
@@ -165,6 +167,16 @@ struct MetricsArgs {
 }
 
 #[derive(clap::Args)]
+struct GraphArgs {
+    /// Project root to analyze.
+    #[arg(long, default_value = ".")]
+    path: Utf8PathBuf,
+    /// Emit Mermaid `flowchart` instead of Graphviz DOT.
+    #[arg(long)]
+    mermaid: bool,
+}
+
+#[derive(clap::Args)]
 struct WatchArgs {
     /// Project root to analyze.
     #[arg(long, default_value = ".")]
@@ -234,11 +246,60 @@ fn apply_min_confidence(s: &Scope, findings: &mut Vec<Finding>) {
     findings.retain(|f| f.confidence <= threshold);
 }
 
-#[derive(Copy, Clone, ValueEnum)]
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 enum Format {
     Human,
     Json,
     Sarif,
+    /// GitHub Actions workflow annotations (`::error file=…`).
+    Github,
+    /// JUnit XML (one testcase per finding) for CI dashboards.
+    Junit,
+}
+
+/// Render findings as GitHub Actions annotations.
+fn github_annotations(findings: &[Finding]) -> String {
+    let mut s = String::new();
+    for f in findings {
+        let level = if f.severity == Severity::Error {
+            "error"
+        } else {
+            "warning"
+        };
+        s.push_str(&format!(
+            "::{level} file={},line={}::{}: {}\n",
+            f.location.path, f.location.line, f.rule, f.reason
+        ));
+    }
+    s
+}
+
+/// Render findings as JUnit XML (one testcase per finding).
+fn junit_xml(findings: &[Finding], suite: &str) -> String {
+    fn esc(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+    let mut s = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    s.push_str(&format!(
+        "<testsuites>\n  <testsuite name=\"mollify:{}\" tests=\"{}\" failures=\"{}\">\n",
+        esc(suite),
+        findings.len(),
+        findings.len()
+    ));
+    for f in findings {
+        let name = format!("{}: {}:{}", f.rule, f.location.path, f.location.line);
+        s.push_str(&format!(
+            "    <testcase name=\"{}\" classname=\"{}\">\n      <failure message=\"{}\"/>\n    </testcase>\n",
+            esc(&name),
+            esc(f.rule.as_str()),
+            esc(&f.reason)
+        ));
+    }
+    s.push_str("  </testsuite>\n</testsuites>\n");
+    s
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -308,6 +369,10 @@ fn main() {
         Command::Inspect(a) => run_inspect(&a),
         Command::List(a) => run_list(&a),
         Command::Metrics(a) => run_metrics(&a),
+        Command::Graph(a) => {
+            print!("{}", mollify_core::graph_export(&a.path, a.mermaid));
+            0
+        }
         Command::Init(s) => run_init(&s),
         Command::Mcp => match mollify_mcp::run() {
             Ok(()) => 0,
@@ -408,6 +473,8 @@ fn run_audit(s: &Scope) -> i32 {
             ))
             .unwrap()
         ),
+        Format::Github => print!("{}", github_annotations(&report.findings)),
+        Format::Junit => print!("{}", junit_xml(&report.findings, "audit")),
         Format::Human => {
             println!("Mollify audit — {}", s.path);
             println!("Quality score: {}/100", report.quality_score);
@@ -448,6 +515,8 @@ fn run_findings(
             ))
             .unwrap()
         ),
+        Format::Github => print!("{}", github_annotations(&report.findings)),
+        Format::Junit => print!("{}", junit_xml(&report.findings, label)),
         Format::Human => {
             println!("Mollify {label} — {}", s.path);
             print_summary(&report.summary);
@@ -473,6 +542,8 @@ fn run_coverage(a: &CoverageArgs) -> i32 {
             ))
             .unwrap()
         ),
+        Format::Github => print!("{}", github_annotations(&report.findings)),
+        Format::Junit => print!("{}", junit_xml(&report.findings, "coverage")),
         Format::Human => {
             println!("Mollify coverage — {}", a.path);
             print_summary(&report.summary);
@@ -547,6 +618,8 @@ fn run_supply_chain(a: &SupplyChainArgs) -> i32 {
             ))
             .unwrap()
         ),
+        Format::Github => print!("{}", github_annotations(&report.findings)),
+        Format::Junit => print!("{}", junit_xml(&report.findings, "supply-chain")),
         Format::Human => {
             println!("Mollify supply-chain — {} (db: {db})", a.path);
             print_summary(&report.summary);
