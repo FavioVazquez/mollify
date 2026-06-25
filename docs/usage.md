@@ -8,12 +8,18 @@ a reason, and a stable fingerprint.
 ## Install
 
 ```bash
-# From source (the only path today)
-git clone https://github.com/FavioVazquez/mollify
-cd mollify
-cargo build --release
-# binary at ./target/release/mollify  (put it on your PATH)
+uvx mollify audit                 # one-off via uv (no install)
+uv tool install mollify           # or: pip install mollify
+npm install --save-dev mollify    # Node projects (npx mollify audit)
+cargo install mollify-cli         # from crates.io (binary: mollify)
+
+# from source:
+git clone https://github.com/FavioVazquez/mollify && cd mollify
+cargo build --release             # binary at ./target/release/mollify
 ```
+
+See the [README](../README.md#install) for the full matrix and the
+`mollify init --agent <name>` agent-integration installer.
 
 ## Commands
 
@@ -28,7 +34,7 @@ cargo build --release
 | `mollify types` | Fully-untyped public functions (annotation health). |
 | `mollify security` | Bandit-style security candidates. |
 | `mollify coverage --coverage-file <f>` | Reachable-but-never-executed functions (cold paths) from a coverage.py JSON report. |
-| `mollify supply-chain [--advisory-db <f>]` | Pinned/locked dependency versions matched against a local CVE/advisory DB. |
+| `mollify supply-chain [--offline]` | Pinned/locked dependency versions matched against vulnerability advisories (live OSV by default; `--offline` uses the local DB). |
 | `mollify fix [--apply]` | Remove safe (certain) unused symbols. Dry-run unless `--apply`. |
 | `mollify explain [<rule>]` | Explain a rule (semantics/confidence/action); lists all rules with no argument. |
 | `mollify trace <module>` | A module's import neighborhood: what it imports and what imports it. |
@@ -38,7 +44,8 @@ cargo build --release
 | `mollify metrics` | Maintainability Index, Halstead, raw LOC, per-file complexity. |
 | `mollify graph [--mermaid]` | Export the module import graph (Graphviz DOT or Mermaid). |
 | `mollify lsp` | Run the Language Server (stdio) for real-time editor diagnostics. |
-| `mollify init` | Write a starter `.mollifyrc.json`. |
+| `mollify init` | Write a starter `.mollifyrc.json`, or scaffold agent integrations with `--agent <name>` / `--all`. |
+| `mollify mcp` | Start the MCP server for coding agents (stdio). |
 
 ### Regression baselines (CI gate without git)
 
@@ -52,7 +59,6 @@ survives file moves (fingerprints are content-derived).
 mollify audit --save-baseline .mollify/baseline.json     # once, on a clean main
 mollify audit --baseline .mollify/baseline.json --fail-on-regression   # in CI
 ```
-| `mollify mcp` | Start the MCP server for coding agents (stdio). |
 
 Common flags: `--path <dir>`, `--format human|json|sarif|github|junit`,
 `--gate all|new-only`, `--base <ref>`, `--min-confidence certain|likely|uncertain`,

@@ -6,7 +6,7 @@
 
 *Dead code · duplication · circular dependencies · complexity & hotspots · architecture · dependency hygiene · type health · security — as evidence, not guesses.*
 
-[Usage](docs/usage.md) · [Configuration](docs/configuration.md) · [Architecture](docs/architecture.md) · [CI integration](docs/ci-integration.md) · [Agent integrations](INTEGRATIONS.md) · [Build status](docs/STATUS.md)
+[Usage](docs/usage.md) · [Configuration](docs/configuration.md) · [Architecture](docs/architecture.md) · [CI integration](docs/ci-integration.md) · [Agent integrations](#agent-integrations)
 
 </div>
 
@@ -22,9 +22,8 @@ Its one rule: **no AI invents findings.** Every result is a piece of determinist
 evidence with a stable fingerprint, a confidence tier, and a human-readable reason.
 Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
-> **Project status:** early but real. Phases 0–4 of the [plan](PLAN.md) are
-> substantially implemented, tested (79+ tests), and dogfooded; CI is green.
-> See [`docs/STATUS.md`](docs/STATUS.md) for exactly what's done vs pending and
+> **Project status:** early but real. The core analysis phases are substantially
+> implemented, tested (99 tests), and dogfooded; CI is green. See
 > [`docs/adr/`](docs/adr) for design decisions. Honest about its edges — see
 > *Known limitations* below.
 
@@ -213,7 +212,7 @@ One MCP server (`mollify mcp`), many front-ends. Shipped, ready-to-commit artifa
 | **Cursor** | `.cursor/rules/mollify.mdc`, `.cursor/mcp.json`, `.cursor/commands/` |
 | **Gemini CLI** | `GEMINI.md`, `.gemini/settings.json`, `.gemini/commands/mollify/` |
 
-Details and copy-pasteable examples: [INTEGRATIONS.md](INTEGRATIONS.md).
+Scaffold any of these into a repo with `mollify init --agent <name>` (or `--all`) — see [Install agent integrations](#install-agent-integrations) above.
 
 ## Architecture
 
@@ -241,8 +240,8 @@ See [docs/architecture.md](docs/architecture.md).
 | One deterministic pass + agent/MCP contract | – | – | – | – | – | – | – | ✅ |
 
 `~` = partial. Mollify's wedge is the **unified deterministic pass** with one
-contract — see [RESEARCH.md](RESEARCH.md) for the honest, sourced landscape
-(including where individual tools already do a piece well).
+contract — individual tools each already do a piece well; Mollify unifies them
+into a single evidence stream.
 
 ## Known limitations (we're honest about these)
 
@@ -250,15 +249,13 @@ contract — see [RESEARCH.md](RESEARCH.md) for the honest, sourced landscape
   GitHub git-deps are blocked in the build env; ruff is the planned migration.
 - Symbol usage is name-table-assisted, not full scope/binding resolution.
 - Duplication is Rabin-Karp token matching (SA-IS+LCP is the planned upgrade).
-- `--gate` attribution is file-level (line-level base-worktree is planned).
 - Supply-chain matching needs **pinned/locked** versions (requirements `==`,
   poetry/uv lockfiles); unpinned ranges can't be matched precisely. The
   `supply-chain` command fetches OSV live by default (offline DB fallback);
   `mollify audit` stays fully offline/deterministic, reading only the cached DB.
-- Remaining roadmap items are lower-impact and tracked in
-  [docs/STATUS.md](docs/STATUS.md) (e.g. LSP keystroke-incremental reparse,
-  line-level gate attribution, LibCST format-preserving fixes, transitive-dep
-  detection which needs the installed environment).
+- Remaining roadmap items are lower-impact (e.g. LSP keystroke-incremental
+  reparse, LibCST format-preserving fixes, transitive-dep detection which needs
+  the installed environment).
 
 ## Contributing
 

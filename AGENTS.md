@@ -48,10 +48,12 @@ Acting / exploring:
 `--gate new-only` and `--format sarif` are fully implemented.)
 
 Reading the kind-discriminated JSON envelope:
-- Top-level `kind` ("audit" | "dead-code" | "deps") discriminates the result;
-  switch on it and iterate `findings[]`. `audit` also has `quality_score` (0-100).
-- `kind` is one of audit | dead-code | deps | arch | complexity | dupes | types |
-  security | coverage | supply-chain.
+- Top-level `kind` discriminates the result; switch on it and iterate
+  `findings[]`. `audit` also has `quality_score` (0-100).
+- `kind` is one of: audit | dead-code | deps | arch | complexity | dupes | types |
+  security | coverage | metrics. The `supply-chain` command's results come back
+  under the `security` kind (as `vulnerable-dependency`); `metrics` carries
+  `files`/`totals`, not `findings[]`.
 - Each finding has `rule`, `category` (dead-code | dependency-hygiene |
   circular-dependency | complexity | architecture | duplication | type-health |
   security), `severity` (error|warn|off), `confidence` (certain|likely|uncertain),
@@ -63,7 +65,7 @@ Reading the kind-discriminated JSON envelope:
   untyped-function, cold-code, hotspot, low-cohesion, dangerous-eval, subprocess-shell-true,
   sql-injection, unsafe-yaml-load, unsafe-deserialization, tls-verify-disabled,
   hardcoded-secret, weak-hash, weak-cipher, insecure-random,
-  request-without-timeout, vulnerable-dependency, plus custom policy ids.
+  request-without-timeout, vulnerable-dependency, policy-violation, plus custom policy ids.
 - Act only on `confidence: "certain"` without confirming with the user. Surface
   `likely`/`uncertain` with their reason and ask before changing code.
 - To silence a known-good finding, add its action's `suppression_comment` instead

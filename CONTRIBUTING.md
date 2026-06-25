@@ -30,14 +30,14 @@ Read [docs/architecture.md](docs/architecture.md) first. Do not break these:
 2. Give it a stable `rule` id and a `Category`; tier the `confidence` honestly.
 3. Wire it into `audit_report` and (optionally) a CLI subcommand + `Report` variant.
 4. Add unit tests (use a temp project; see existing engines for the pattern).
-5. Update `docs/STATUS.md` and the CLI reference under `.agents/skills/mollify/references/`.
+5. Update the docs (`docs/`) and the CLI reference under `.agents/skills/mollify/references/`.
 
-## Documenting deviations
+## Documenting decisions
 
-If you must deviate from `PLAN.md`, write an ADR in `docs/adr/` and note it in
-`docs/STATUS.md` (see ADR-0001 for the format). Never silently diverge.
+For any significant design decision or deviation, write an ADR in `docs/adr/`
+(see ADR-0001 for the format). Never silently diverge.
 
 ## Commits
 
 Keep commits focused and the tree green. Conventional, descriptive messages.
-Update `docs/STATUS.md` in the same commit as the behavior change.
+Keep the docs and CLI reference in sync with behavior changes.

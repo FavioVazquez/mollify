@@ -4,7 +4,7 @@ Every `--format json` invocation prints one envelope. Clients **switch on `kind`
 
 ```jsonc
 {
-  "kind": "audit",            // audit|dead-code|deps|arch|complexity|dupes|types|security|coverage
+  "kind": "audit",            // audit|dead-code|deps|arch|complexity|dupes|types|security|coverage|metrics (supply-chain → security)
   "schema_version": "0.1",
   "quality_score": 77,         // audit only, 0–100
   "summary": {
@@ -12,7 +12,7 @@ Every `--format json` invocation prints one envelope. Clients **switch on `kind`
     "errors": 0,
     "warnings": 7,
     "files_analyzed": 3,
-    "introduced": 0            // present with --gate new-only (file-level attribution)
+    "introduced": 0            // present with --gate new-only (line-level attribution)
   },
   "findings": [
     {

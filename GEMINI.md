@@ -39,13 +39,15 @@ delete, or whether dependencies are unused/missing.
   `dangerous-eval`, `subprocess-shell-true`, `sql-injection`, `unsafe-yaml-load`,
   `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`,
   `weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`,
-  `vulnerable-dependency`, plus custom policy ids. Categories: `dead-code`,
+  `vulnerable-dependency`, `policy-violation`, plus custom policy ids. Categories: `dead-code`,
   `dependency-hygiene`, `circular-dependency`, `complexity`, `architecture`,
   `duplication`, `type-health`, `security`.
 - Read the JSON envelope by its top-level `kind` (`audit` | `dead-code` | `deps` |
   `arch` | `complexity` | `dupes` | `types` | `security` | `coverage` |
-  `supply-chain`); `audit` also includes a `quality_score` (0–100). Iterate
-  `findings[]`.
+  `metrics`); `audit` also includes a `quality_score` (0–100). Iterate
+  `findings[]` (except `metrics`, which carries `files`/`totals`). The
+  `supply-chain` command's results come back under the `security` kind as
+  `vulnerable-dependency` findings.
 - Auto-act ONLY on `confidence: certain` (and only where an action is
   `auto_fixable: true`). Surface `likely`/`uncertain` findings with their reason
   and let the user decide; never hand-delete code on a guess.

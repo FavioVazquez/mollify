@@ -28,7 +28,8 @@ static ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/assets");
 /// A coding agent we can scaffold integration files for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
-    /// Claude Code: `.mcp.json`, `CLAUDE.md`, `.claude/` (skills, commands, hooks).
+    /// Claude Code: `.mcp.json`, `.claude/` (skills, commands, hooks). The
+    /// "use mollify" instructions live in the skill, so no root memory file.
     Claude,
     /// Cursor: `.cursor/` (rules, MCP config, slash commands).
     Cursor,
@@ -79,12 +80,7 @@ impl Agent {
         match self {
             // Claude and Cascade install hooks that invoke the advisory report
             // helper (`scripts/mollify-report.sh`), so they ship it too.
-            Agent::Claude => &[
-                ".claude",
-                ".mcp.json",
-                "CLAUDE.md",
-                "scripts/mollify-report.sh",
-            ],
+            Agent::Claude => &[".claude", ".mcp.json", "scripts/mollify-report.sh"],
             Agent::Cursor => &[".cursor"],
             Agent::Gemini => &[".gemini", "GEMINI.md"],
             Agent::Codex => &[".codex", ".agents", "AGENTS.md"],

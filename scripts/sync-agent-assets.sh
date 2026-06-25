@@ -26,7 +26,6 @@ ITEMS=(
   .devin
   .windsurf
   .mcp.json
-  CLAUDE.md
   GEMINI.md
   AGENTS.md
   scripts/mollify-report.sh

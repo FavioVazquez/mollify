@@ -98,4 +98,5 @@ publishes real-time diagnostics on document open/save. Register it as a language
 server for Python in any LSP-capable editor (point the editor at `mollify lsp`).
 
 ## Not yet implemented (do not rely on)
-Line-level gate attribution (current gate is file-level). See docs/STATUS.md.
+Keystroke-incremental LSP reparse (diagnostics refresh on open/save, not per
+edit) and LibCST format-preserving fixes (current `fix` is text-based).
