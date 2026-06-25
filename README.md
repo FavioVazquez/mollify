@@ -6,7 +6,7 @@
 
 *Dead code · duplication · circular dependencies · complexity & hotspots · architecture · dependency hygiene · type health · security — as evidence, not guesses.*
 
-[Usage](docs/usage.md) · [Configuration](docs/configuration.md) · [Architecture](docs/architecture.md) · [CI integration](docs/ci-integration.md) · [Agent integrations](#agent-integrations)
+[Usage](docs/usage.md) · [Cookbook](cookbook/) · [Configuration](docs/configuration.md) · [Architecture](docs/architecture.md) · [CI integration](docs/ci-integration.md) · [Agent integrations](#agent-integrations)
 
 </div>
 
