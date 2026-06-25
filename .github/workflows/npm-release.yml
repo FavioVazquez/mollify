@@ -30,7 +30,7 @@ jobs:
           - { suffix: win32-x64-msvc, target: x86_64-pc-windows-msvc, runner: windows-latest, cross: false }
           - { suffix: win32-arm64-msvc, target: aarch64-pc-windows-msvc, runner: windows-latest, cross: false }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -55,7 +55,7 @@ jobs:
           [ "${{ runner.os }}" = "Windows" ] && BIN="${BIN}.exe"
           node npm/mollify/scripts/make-platform-package.mjs \
             "${{ matrix.suffix }}" "${{ steps.ver.outputs.version }}" "$BIN" npm
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: platform-${{ matrix.suffix }}
           path: npm/@mollify-cli/${{ matrix.suffix }}
@@ -67,13 +67,13 @@ jobs:
     needs: [build]
     environment: npm
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org
       - name: Download platform packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: platform-*
           path: staged
