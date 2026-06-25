@@ -7,6 +7,13 @@ every deviation from `PLAN.md` (with rationale).
 Legend: ✅ done & tested · 🟡 in progress · ⬜ not started · 🔵 scaffolded (compiles, stubbed)
 
 ## Session log
+- **2026-06-25 (cookbook)** — Added `cookbook/` — a newcomer-facing set of seven
+  copy-pasteable recipes (first audit → finding anatomy → safe `fix` → deps → CI
+  baseline gate → codebase map → JSON/agents) plus two runnable scripts
+  (`tour.sh`, `ci-gate.sh`). All recipes run against a bundled, deliberately-messy
+  `cookbook/sample-project/` (`billing/`, scores 71/100 with 20 findings) and
+  every output block is real captured output. Both scripts smoke-tested green
+  against the source build; README nav links to it. Docs-only, no crate changes.
 - **2026-06-24 (hook path fix)** — The installed agent hooks failed with
   `bash /home/user/mollify/scripts/mollify-report.sh: No such file or directory`.
   Two root causes: (1) the hook command hardcoded a bogus absolute path in
