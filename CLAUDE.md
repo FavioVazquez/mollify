@@ -6,19 +6,25 @@ hotspots, architecture boundaries, dependency hygiene) ported to Python and
 extended. It emits **evidence, not decisions**.
 
 ## Where things are
+Local working docs (gitignored — not published):
 - `PLAN.md` — the build plan (capability matrix, architecture, phased roadmap, orchestration).
 - `RESEARCH.md` — the landscape + fallow internals + Python-tool currency pass (§8).
-- `INTEGRATIONS.md` — agent integrations (Claude Code, Codex, Cursor, Gemini, **Devin/Cascade**).
+- `INTEGRATIONS.md` — agent integration notes (Claude Code, Codex, Cursor, Gemini, **Devin/Cascade**).
 - `docs/STATUS.md` — **the running build log. Read it first; update it every session.**
-- `docs/adr/` — architecture decision records (deviations from the plan live here).
+
+Published:
+- `docs/adr/` — architecture decision records (significant decisions live here).
+- `docs/` — usage, configuration, architecture, CI integration.
 - `crates/` — the Cargo workspace.
 
 ## Crates (workspace)
 - `mollify-types` — the serde **contract** (kind-discriminated envelope). The public API.
 - `mollify-parse` — Python parsing (tree-sitter today, see ADR-0001).
-- `mollify-graph` — module/symbol graph + reachability (planned).
-- `mollify-core` — analysis orchestration: dead-code, deps, dupes, complexity, arch (planned).
-- `mollify-cli` — the `mollify` binary (planned).
+- `mollify-graph` — module/symbol graph + reachability + Tarjan cycles.
+- `mollify-core` — the engines: dead-code, deps, arch, complexity, hotspots, dupes, security, type-health, coverage, supply-chain (+ plugins, config, git gate, sarif, fix, fingerprint).
+- `mollify-cli` — the `mollify` binary (clap).
+- `mollify-mcp` — the MCP stdio server (`mollify mcp`).
+- `mollify-lsp` — the Language Server (`mollify lsp`).
 
 ## Non-negotiable invariants (RESEARCH.md §2.11)
 1. **Determinism** — identical input → byte-identical output. Sort before emit; use `FxHashMap`.

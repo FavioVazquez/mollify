@@ -18,5 +18,11 @@ node_modules/
 # Sprang dashboard data (local-only)
 .sprang/
 
+# Internal planning / research / build-log docs (kept local, not published)
+/PLAN.md
+/RESEARCH.md
+/INTEGRATIONS.md
+/docs/STATUS.md
+
 # Local Testing
 /local_testing/
