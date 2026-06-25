@@ -50,6 +50,11 @@ jobs:
         run: |
           ./target/release/mollify audit --path . --format sarif > mollify.sarif || true
       - name: Upload SARIF to code scanning
+        # Code scanning is free on PUBLIC repos; on private repos it needs
+        # GitHub Advanced Security (paid). Skip while private and on PRs (which
+        # may come from forks without write access) — this auto-activates once
+        # the repo is public, no workflow change needed.
+        if: ${{ github.event_name == 'push' && github.event.repository.private == false }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: mollify.sarif
