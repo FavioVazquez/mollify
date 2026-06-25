@@ -20,20 +20,23 @@ Make specific rules blocking via `.mollifyrc.json` (`"severity": {"dead-code": "
 ```yaml
 name: mollify
 on: [pull_request]
+permissions:
+  contents: read
+  security-events: write          # required to upload SARIF to code scanning
 jobs:
   mollify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { fetch-depth: 0 }          # needed for --gate/--base diffing
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install --git https://github.com/FavioVazquez/mollify mollify-cli
+      - run: cargo install mollify-cli     # or: --git https://github.com/FavioVazquez/mollify
       - name: Audit changed code
         run: mollify audit --gate new-only --base origin/${{ github.base_ref }}
       - name: SARIF for code scanning
         if: always()
         run: mollify audit --format sarif > mollify.sarif
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with: { sarif_file: mollify.sarif }
 ```

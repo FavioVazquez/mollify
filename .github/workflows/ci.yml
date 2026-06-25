@@ -5,6 +5,10 @@ on:
     branches: [main, research-and-plan]
   pull_request:
 
+# Least privilege by default; the SARIF upload job widens its own scope below.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -13,7 +17,7 @@ jobs:
     name: build · test · clippy · fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -30,8 +34,14 @@ jobs:
   self-audit:
     name: mollify audits a sample project (dogfood)
     runs-on: ubuntu-latest
+    # Code-scanning upload needs to write security events; `actions: read` lets
+    # the CodeQL action read the run metadata (avoids the telemetry warning).
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build mollify
@@ -40,7 +50,7 @@ jobs:
         run: |
           ./target/release/mollify audit --path . --format sarif > mollify.sarif || true
       - name: Upload SARIF to code scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: mollify.sarif
         continue-on-error: true
