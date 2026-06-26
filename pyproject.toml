@@ -65,3 +65,4 @@ Changelog = "https://github.com/FavioVazquez/mollify/blob/main/CHANGELOG.md"
 bindings = "bin"
 manifest-path = "crates/mollify-cli/Cargo.toml"
 strip = true
+include = ["LICENSE"]

@@ -4,6 +4,17 @@ All notable changes to Mollify. This project follows the spirit of
 [Keep a Changelog](https://keepachangelog.com/) and the JSON contract is
 versioned by `schema_version` (currently `0.1`).
 
+## 0.1.2 - 2026-06-26
+
+### Fixed
+- **PyPI sdist upload failed with a 400** (`License-File LICENSE does not
+  exist in distribution file`). `[tool.maturin] manifest-path` points at the
+  CLI crate, not the workspace root where `LICENSE` lives, so maturin wrote a
+  `License-File: LICENSE` metadata pointer into the sdist without actually
+  including the file — reproduced across maturin 1.7.8–1.14.1. Fixed with
+  `[tool.maturin] include = ["LICENSE"]`. (0.1.1's wheels published fine and
+  are unaffected; only its sdist is missing from PyPI.)
+
 ## Unreleased
 
 ### Fixed
