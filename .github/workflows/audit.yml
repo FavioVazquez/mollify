@@ -1,18 +1,22 @@
 name: Security audit
 
 # Scans the Cargo dependency tree against the RUSTSEC advisory database.
-# Runs when dependencies change (so a new/updated crate is checked before merge)
-# and on a weekly schedule (so advisories disclosed *without* a code change here
-# still surface). Dogfooding: a supply-chain-aware tool should watch its own.
+# Runs only on real code changes — Rust source (`**/*.rs`) or the dependency
+# manifests (`Cargo.toml`/`Cargo.lock`) — so a new/updated crate is checked
+# before merge, but docs/README/Markdown-only changes never trigger it. Also on
+# a weekly schedule (so advisories disclosed *without* a code change here still
+# surface). Dogfooding: a supply-chain-aware tool should watch its own.
 on:
   push:
     branches: [main, research-and-plan]
     paths:
+      - "**/*.rs"
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - ".github/workflows/audit.yml"
   pull_request:
     paths:
+      - "**/*.rs"
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - ".github/workflows/audit.yml"
