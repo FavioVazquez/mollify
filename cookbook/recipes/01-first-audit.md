@@ -71,4 +71,44 @@ No config file required. When you *want* to tune thresholds, severities, or
 ignore paths, add a `.mollifyrc.json` (`mollify init` scaffolds one) — see
 [configuration.md](../../docs/configuration.md).
 
+## Control what gets scanned
+
+Discovery always prunes a builtin denylist (`.venv`, `.git`, `__pycache__`,
+`node_modules`, `build`, `dist`, …) plus anything your `.mollifyrc.json` adds via
+`exclude_dirs` — so vendored or virtualenv code never shows up as a false
+positive. The sample project actually has a `node_modules/` directory checked in
+(an accidentally-vendored helper), and it's invisible by default:
+
+```bash
+mollify audit
+```
+
+```text
+Mollify audit — .
+Quality score: 71/100
+20 finding(s) across 7 file(s) — 0 error, 20 warn
+```
+
+Need to scan one anyway — auditing a vendored fork before deleting it, or a
+`node_modules` package you suspect is stale? `--include <DIR>` (repeatable)
+overrides *both* the builtin denylist and `exclude_dirs` for that directory name,
+one invocation at a time:
+
+```bash
+mollify audit --include node_modules
+```
+
+```text
+Mollify audit — .
+Quality score: 73/100
+22 finding(s) across 8 file(s) — 0 error, 22 warn
+  …
+  ./node_modules/leftpad/__init__.py:4 [warn/likely] untyped-function — public function `pad` has no type annotations (0/2 params typed, no return type)  (untyped-function:89f6096f)
+  ./node_modules/leftpad/__init__.py:4 [warn/likely] unused-export — function `pad` has no reachable references in the project  (unused-export:fc72f998)
+  …
+```
+
+`--include` is a per-invocation override, not a config setting — it doesn't
+touch `.mollifyrc.json`, so your team's defaults stay intact for everyone else.
+
 **Next:** [Recipe 02 — Anatomy of a finding »](02-anatomy-of-a-finding.md)

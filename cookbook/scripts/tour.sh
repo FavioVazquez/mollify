@@ -57,5 +57,8 @@ else
   "$MOLLIFY" audit --format json | head -c 200; echo
 fi
 
+step "9. --include overrides discovery for one run (sample-project has a vendored node_modules/)" "mollify audit --include node_modules"
+"$MOLLIFY" audit --include node_modules
+
 echo
 cyan "Done. Next: point it at your own code →  mollify audit --path /your/project"

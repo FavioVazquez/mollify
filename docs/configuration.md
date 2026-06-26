@@ -136,11 +136,20 @@ that directly contains a `pyvenv.cfg` file is pruned regardless of its name —
 this catches custom-named virtualenvs (e.g. from `mkvirtualenv` or a
 non-standard Poetry/conda env name) that the name list can't anticipate.
 
-`exclude_dirs` *adds to* this builtin list; it can't be used to un-exclude a
-builtin name.
+`exclude_dirs` *adds to* this builtin list; it has no way to un-exclude a
+builtin name from `.mollifyrc.json` itself.
 
 ```json
 "exclude_dirs": ["vendor", "third_party"]
+```
+
+To scan a directory despite either list — the builtin denylist or your own
+`exclude_dirs` — pass `--include <DIR>` on the command line (repeatable). It's a
+per-invocation override, not a config setting, and works on every analysis
+command:
+
+```bash
+mollify audit --include node_modules --include vendor
 ```
 
 ## `duplication`

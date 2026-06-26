@@ -86,7 +86,8 @@ remove `certain` unused symbols; `mollify explain <rule>` for rule semantics; an
 `mollify trace <module>` for a module's import neighborhood; `mollify inspect
 <file>` for a per-file evidence bundle; `mollify list` for project topology; and
 **regression baselines** (`--save-baseline` / `--baseline --fail-on-regression`)
-to gate CI on *new* issues without git.
+to gate CI on *new* issues without git; and `--include <dir>` (repeatable) to
+scan a directory normally pruned by the builtin denylist or `exclude_dirs`.
 
 ## Install
 

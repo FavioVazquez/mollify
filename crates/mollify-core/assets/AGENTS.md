@@ -43,8 +43,10 @@ Acting / exploring:
 (Add `--path <dir>` to scope a subproject. Analysis commands also accept
 `--format human|json|sarif|github|junit` (`github` = GitHub Actions annotations,
 `junit` = JUnit XML), `--gate all|new-only` + `--base <ref>`,
-`--save-baseline <f>`/`--baseline <f>`/`--fail-on-regression`, `--brief`, and
-`--min-confidence certain|likely|uncertain`. `mollify graph` accepts `--mermaid`.
+`--save-baseline <f>`/`--baseline <f>`/`--fail-on-regression`, `--brief`,
+`--min-confidence certain|likely|uncertain`, and `--include <dir>` (repeatable)
+to scan a directory despite the builtin exclude list or `.mollifyrc.json`'s
+`exclude_dirs`. `mollify graph` accepts `--mermaid`.
 `--gate new-only` and `--format sarif` are fully implemented.)
 
 Reading the kind-discriminated JSON envelope:
