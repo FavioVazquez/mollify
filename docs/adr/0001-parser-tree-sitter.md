@@ -1,26 +1,28 @@
-# ADR-0001: Parser foundation — tree-sitter-python now, ruff_python_parser later
+# ADR-0001: Parser foundation — ruff_python_parser / ruff_python_ast
 
-- **Status:** Accepted (2026-06-24)
+- **Status:** Accepted (2026-06-24); **revised 2026-06-26** to adopt the ruff
+  parser (the original tree-sitter decision is superseded — see History).
 - **Context:** `PLAN.md` §3.2 specifies building on Astral's `ruff_python_parser`
-  / `ruff_python_ast` crates, consumed via a pinned git revision (pyrefly's
-  pattern), because they are the de-facto Rust Python foundation.
-- **Problem:** In the current build environment, **cargo cannot fetch git
-  dependencies from GitHub** — `cargo fetch` of a `git = "https://github.com/astral-sh/ruff"`
-  dependency fails with HTTP 403 (the egress proxy blocks github.com git access;
-  only crates.io and a few hosts are allowlisted). The ruff crates are **not
-  published to crates.io**, so there is no buildable path to them here.
-- **Decision:** Build on **`tree-sitter-python`** (crates.io, compiles cleanly
-  with the available `cc`), wrapped behind the `mollify-parse` crate's
-  parser-agnostic types (`ParsedModule`, `Definition`, `Import`). This is the
-  same foundation skylos and Bury use for Python reachability.
+  / `ruff_python_ast` crates — the de-facto, full-fidelity Rust Python parser
+  foundation (the same one that powers `ruff`).
+- **Decision:** Build `mollify-parse` on **`ruff_python_parser` + `ruff_python_ast`**
+  (with `ruff_source_file` for line indexing), pinned to an exact **crates.io**
+  release (`=0.0.3`). The crate exposes parser-agnostic types (`ParsedModule`,
+  `Definition`, `Import`, `FunctionComplexity`, …), so the concrete parser stays
+  an implementation detail confined to one crate.
 - **Consequences:**
-  - ✅ The project builds and tests in this environment today.
+  - ✅ Full-fidelity, error-resilient typed AST with `Load`/`Store` contexts —
+    enabling real **scope/binding resolution** (LEGB) for precise dead-code, not
+    coarse token counting.
+  - ✅ Published on crates.io, so **every** distribution channel — crates.io
+    publish, PyPI (maturin), npm, and source — builds the identical binary. No
+    git dependency, fully reproducible (pinned `=0.0.3`).
   - ✅ The rest of the engine depends only on `mollify-parse`'s types, so the
-    parser swap is localized to one crate.
-  - ⚠️ tree-sitter is a lossy/untyped CST vs ruff's typed AST; some precision
-    (full scope/binding resolution) is more work than it would be on ruff.
-  - 🔭 **Migration path:** when git access or a vendored copy of the ruff crates
-    is available, re-implement `mollify-parse` against `ruff_python_parser` +
-    `ruff_python_ast` (+ build resolution like pyrefly, per RESEARCH.md §8.6),
-    keeping the public types stable. Track under a future ADR.
-- **Re-verify:** if the egress policy changes to allow github.com git, revisit.
+    backend swap was localized to one crate (all downstream tests passed
+    unchanged).
+- **History:** The first cut (2026-06-24) used `tree-sitter-python` because the
+  build environment then appeared to block GitHub git dependencies (cargo HTTP
+  403) and the ruff crates were thought to be git-only. Both premises proved
+  **stale**: git deps work, and the ruff parser crates are now published to
+  crates.io. `mollify-parse` was migrated to ruff on 2026-06-26 (public types
+  preserved); tree-sitter was removed.

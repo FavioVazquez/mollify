@@ -16,8 +16,13 @@ serde_json = "1"
 anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
-tree-sitter = "0.26"
-tree-sitter-python = "0.25"
+# Astral's ruff Python parser/AST (full-fidelity) — published on crates.io, so
+# every distribution channel (crates.io publish, PyPI, npm, source) builds it.
+# Pinned for reproducibility. See docs/adr/0001-parser-tree-sitter.md.
+ruff_python_parser = "=0.0.3"
+ruff_python_ast = "=0.0.3"
+ruff_source_file = "=0.0.3"
+ruff_text_size = "=0.0.3"
 rayon = "1"
 ignore = "0.4"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

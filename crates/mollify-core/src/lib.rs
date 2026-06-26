@@ -35,6 +35,7 @@ pub mod plugins;
 pub mod policy;
 pub mod sarif;
 pub mod security;
+pub mod suffix;
 pub mod supplychain;
 pub mod trace;
 pub mod typehealth;

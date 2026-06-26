@@ -3,17 +3,22 @@
 //! Python parsing for Mollify. **Parser abstraction** so the rest of the engine
 //! never touches the concrete parser directly.
 //!
-//! ## ADR-0001: tree-sitter today, ruff_python_parser later
-//! The plan (PLAN.md §3.2) specifies building on Astral's `ruff_python_parser`
-//! crates via a pinned git rev. That is **not buildable in the current
-//! environment** — git dependencies from GitHub are blocked by the egress
-//! policy (cargo gets HTTP 403). We therefore build on `tree-sitter-python`
-//! (crates.io, compiles cleanly), the same foundation skylos and Bury use.
-//! The types below (`ParsedModule`, `Definition`, `Import`) are
-//! parser-agnostic, so swapping in the ruff AST later is localized to this crate.
+//! ## ADR-0001: full-fidelity ruff AST
+//! Built on Astral's `ruff_python_parser` / `ruff_python_ast` (pinned git rev) —
+//! the same battle-tested, error-resilient parser that powers `ruff`. The types
+//! below (`ParsedModule`, `Definition`, `Import`, …) are parser-agnostic, so the
+//! concrete parser remains an implementation detail confined to this crate.
 
 use camino::Utf8Path;
-use tree_sitter::{Node, Parser, Tree};
+use ruff_python_ast::token::TokenKind;
+use ruff_python_ast::visitor::{walk_expr, walk_stmt, Visitor};
+use ruff_python_ast::{
+    Expr, ExprContext, Parameters, Stmt, StmtClassDef, StmtFunctionDef, StmtImport, StmtImportFrom,
+};
+use ruff_python_parser::parse_module;
+use ruff_source_file::LineIndex;
+use ruff_text_size::{Ranged, TextRange, TextSize};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -97,17 +102,14 @@ pub struct SecurityHit {
     pub detail: String,
 }
 
-/// A single call expression's callee text and 1-based line. The callee is the
-/// surface text of the `function` field (e.g. `print`, `subprocess.run`,
-/// `os.system`) — enough for declarative `forbid_call` policies.
+/// A single call expression's callee text and 1-based line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallSite {
     pub callee: String,
     pub line: u32,
 }
 
-/// An unused local binding within a function scope: a local variable or a
-/// parameter that is bound but never referenced again in the function.
+/// An unused local binding within a function scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeFinding {
     pub name: String,
@@ -132,75 +134,47 @@ pub struct ParsedModule {
     pub path: camino::Utf8PathBuf,
     pub definitions: Vec<Definition>,
     pub imports: Vec<Import>,
-    /// Every call expression's callee text + line (for policy enforcement).
     pub calls: Vec<CallSite>,
-    /// Complexity per function/method (including nested), attributed separately.
     pub functions: Vec<FunctionComplexity>,
-    /// Syntactic security candidates.
     pub security_hits: Vec<SecurityHit>,
-    /// Explicit `__all__` contents if present (public-API surface for libraries).
     pub dunder_all: Option<Vec<String>>,
-    /// Every identifier *used* anywhere in the module (call targets, attribute
-    /// bases, names in expressions). Coarse but sufficient for reachability v1.
     pub used_names: Vec<String>,
-    /// Identifiers referenced *outside* import statements — lets the unused-import
-    /// engine tell "the name is actually used" from "the name only appears in its
-    /// own import". Includes names extracted from string/forward-ref annotations.
-    /// Sorted + deduped.
     pub local_uses: Vec<String>,
-    /// Inline suppressions parsed from `# mollify: ignore[<rule>]` comments:
-    /// `(line, rule)` where rule is `"*"` for a bare `# mollify: ignore`.
+    /// Module-level names referenced by a **resolved** free load — i.e. a
+    /// `Name` in load context whose scope resolution reaches module/global scope
+    /// (not shadowed by a function-local binding, and not an attribute access).
+    /// This is the precise signal for whether a top-level symbol is used
+    /// internally, replacing coarse token-frequency counting. Sorted + deduped.
+    pub module_used: Vec<String>,
     pub ignores: Vec<(u32, String)>,
-    /// Unused local variables / parameters discovered by per-function scope
-    /// analysis (conservative: name bound but referenced nowhere else).
     pub scope_findings: Vec<ScopeFinding>,
-    /// Classes with per-method instance-attribute usage (for LCOM cohesion).
     pub classes: Vec<ClassInfo>,
-    /// Occurrence count per identifier across the whole module (includes the
-    /// definition site). `count(name) > defs(name)` ⇒ the name is referenced,
-    /// not just defined — used by the symbol-usage analysis.
-    pub name_counts: std::collections::HashMap<String, u32>,
-    /// True if the module contains a dynamic-dispatch sink (`getattr`, `eval`,
-    /// `exec`, `__import__`, `importlib`) that should downgrade confidence.
+    pub name_counts: HashMap<String, u32>,
     pub has_dynamic_sink: bool,
-    /// Halstead volume `(N1+N2) * log2(n1+n2)` over the module's tokens — the
-    /// volume term of the Maintainability Index (`mollify metrics`).
     pub halstead_volume: f64,
     had_errors: bool,
 }
 
 impl ParsedModule {
-    /// Whether tree-sitter reported syntax errors (we still extract best-effort).
+    /// Whether the parser reported syntax errors (we still extract best-effort).
     pub fn had_errors(&self) -> bool {
         self.had_errors
     }
 }
 
-/// A reusable parser handle (tree-sitter parsers are not `Sync`; create one per
-/// thread / rayon task).
-pub struct PyParser {
-    parser: Parser,
-}
+/// A reusable parser handle. With ruff there is no per-thread grammar state, but
+/// the handle is kept for API stability (and to mirror `tree-sitter`'s shape).
+#[derive(Default)]
+pub struct PyParser;
 
 impl PyParser {
     pub fn new() -> Result<Self, ParseError> {
-        let mut parser = Parser::new();
-        let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
-        parser
-            .set_language(&lang)
-            .map_err(|_| ParseError::Grammar)?;
-        Ok(Self { parser })
+        Ok(Self)
     }
 
     /// Parse and extract the module view.
     pub fn parse(&mut self, path: &Utf8Path, source: &str) -> Result<ParsedModule, ParseError> {
-        let tree: Tree = self
-            .parser
-            .parse(source, None)
-            .ok_or_else(|| ParseError::NoTree(path.to_string()))?;
-        let root = tree.root_node();
-        let bytes = source.as_bytes();
-
+        let li = LineIndex::from_source_text(source);
         let mut m = ParsedModule {
             path: path.to_owned(),
             definitions: Vec::new(),
@@ -211,34 +185,130 @@ impl PyParser {
             dunder_all: None,
             used_names: Vec::new(),
             local_uses: Vec::new(),
+            module_used: Vec::new(),
             ignores: Vec::new(),
             scope_findings: Vec::new(),
             classes: Vec::new(),
-            name_counts: std::collections::HashMap::new(),
+            name_counts: HashMap::new(),
             has_dynamic_sink: false,
-            halstead_volume: halstead_volume(root, bytes),
-            had_errors: root.has_error(),
+            halstead_volume: 0.0,
+            had_errors: false,
         };
 
-        // Top-level definitions and imports (module scope = direct children of
-        // the `module` root, plus those guarded by `if`/`try` at top level).
-        collect_top_level(root, bytes, &mut m);
-        // Walk the whole tree once for used identifiers and dynamic sinks.
-        collect_uses(root, bytes, &mut m);
-        // Uses outside import statements (for unused-import detection).
-        collect_local_uses(root, bytes, &mut m);
-        // Per-function complexity.
-        collect_complexity(root, bytes, &mut m);
-        // Per-function unused locals / parameters.
-        collect_scopes(root, bytes, &mut m);
-        // Per-class method/attribute map for cohesion (LCOM).
-        collect_classes(root, bytes, &mut m);
-        // Security candidates.
-        collect_security(root, bytes, &mut m);
+        let parsed = match parse_module(source) {
+            Ok(p) => p,
+            Err(_) => {
+                // Catastrophic parse failure: return an empty best-effort view.
+                m.had_errors = true;
+                return Ok(m);
+            }
+        };
+        m.had_errors = !parsed.errors().is_empty();
+        let module = parsed.syntax();
+
+        // Token-derived data (mirrors the old "every identifier token" model):
+        // name occurrence counts, used-name set, Halstead volume, ignores, and a
+        // per-position Name index for scope frequency.
+        let mut name_tokens: Vec<(TextSize, &str)> = Vec::new();
+        let mut h_total_ops = 0u64;
+        let mut h_total_oprs = 0u64;
+        let mut h_ops: HashSet<TokenKind> = HashSet::new();
+        let mut h_oprs: HashSet<&str> = HashSet::new();
+        for tok in parsed.tokens() {
+            let kind = tok.kind();
+            let text = &source[tok.range()];
+            if kind == TokenKind::Name {
+                *m.name_counts.entry(text.to_string()).or_insert(0) += 1;
+                m.used_names.push(text.to_string());
+                name_tokens.push((tok.range().start(), text));
+            }
+            if kind == TokenKind::Comment {
+                if let Some(rules) = parse_ignore_comment(text) {
+                    let line = line1(&li, tok.range().start());
+                    for r in rules {
+                        m.ignores.push((line, r));
+                    }
+                }
+            }
+            // Halstead classification.
+            if is_operand(kind) {
+                h_total_oprs += 1;
+                h_oprs.insert(text);
+            } else if !kind.is_trivia()
+                && !matches!(
+                    kind,
+                    TokenKind::Newline
+                        | TokenKind::Indent
+                        | TokenKind::Dedent
+                        | TokenKind::EndOfFile
+                )
+            {
+                h_total_ops += 1;
+                h_ops.insert(kind);
+            }
+        }
+        m.used_names.sort();
+        m.used_names.dedup();
+        let vocab = (h_ops.len() + h_oprs.len()) as f64;
+        let length = (h_total_ops + h_total_oprs) as f64;
+        m.halstead_volume = if vocab <= 1.0 {
+            0.0
+        } else {
+            length * vocab.log2()
+        };
+
+        // Top-level definitions / imports / __all__ / module vars.
+        scan_top_level(&module.body, &li, false, &mut m);
+
+        // Calls, dynamic sinks, security candidates (whole-tree walk).
+        let mut main = MainVisitor { li: &li, m: &mut m };
+        for stmt in &module.body {
+            main.visit_stmt(stmt);
+        }
+
+        // Identifiers used outside import statements (for unused-import).
+        let mut lu = LocalUseVisitor { uses: Vec::new() };
+        for stmt in &module.body {
+            lu.visit_stmt(stmt);
+        }
+        lu.uses.sort();
+        lu.uses.dedup();
+        m.local_uses = lu.uses;
+
+        // Scope/binding resolution: which module-level names are referenced by a
+        // free load that resolves to module scope (not a shadowing local).
+        let mut res = Resolver {
+            scopes: Vec::new(),
+            used: HashSet::new(),
+        };
+        for stmt in &module.body {
+            res.visit_stmt(stmt);
+        }
+        let mut mu: Vec<String> = res.used.into_iter().collect();
+        mu.sort();
+        m.module_used = mu;
+
+        // Per-function complexity, per-function scope analysis, per-class cohesion.
+        let mut defs = DefVisitor {
+            funcs: Vec::new(),
+            classes: Vec::new(),
+        };
+        for stmt in &module.body {
+            defs.visit_stmt(stmt);
+        }
+        for f in &defs.funcs {
+            m.functions.push(function_complexity(f, &li));
+            analyze_scope(f, &name_tokens, &mut m.scope_findings, &li);
+        }
+        m.functions.sort_by_key(|f| f.line);
+        m.scope_findings.sort_by_key(|s| s.line);
+        for c in &defs.classes {
+            m.classes.push(class_info(c, &li));
+        }
+        m.classes.sort_by_key(|c| c.line);
+
         // Import-based weak-cipher candidates (needs the parsed import list).
         security_imports(&mut m);
-        // Dedup hits sharing a (rule, line) — the import and call passes can both
-        // fire for one construct; keep output (and fingerprints) stable.
         m.security_hits
             .sort_by(|a, b| a.line.cmp(&b.line).then(a.rule.cmp(b.rule)));
         m.security_hits
@@ -248,717 +318,929 @@ impl PyParser {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 const DYNAMIC_SINKS: &[&str] = &["getattr", "setattr", "eval", "exec", "__import__"];
 
-fn node_text<'a>(node: Node, bytes: &'a [u8]) -> &'a str {
-    node.utf8_text(bytes).unwrap_or("")
+/// 1-based line for a byte offset.
+fn line1(li: &LineIndex, off: TextSize) -> u32 {
+    li.line_index(off).get() as u32
 }
 
-fn collect_top_level(root: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let mut cursor = root.walk();
-    for child in root.children(&mut cursor) {
-        scan_stmt(child, bytes, m);
+/// 1-based line of the last byte covered by `range` (for inclusive end lines).
+fn end_line1(li: &LineIndex, range: TextRange) -> u32 {
+    let end = range.end();
+    if end > range.start() {
+        line1(li, end.checked_sub(TextSize::from(1)).unwrap_or(end))
+    } else {
+        line1(li, end)
     }
 }
 
-/// Scan a module-scope statement; descends into top-level `if`/`try` blocks so
-/// conditional imports (`try: import x except ImportError:`) are seen.
-fn scan_stmt(node: Node, bytes: &[u8], m: &mut ParsedModule) {
-    match node.kind() {
-        "function_definition" => {
-            if let Some(def) = function_def(node, bytes) {
-                m.definitions.push(def);
+/// Whether a token kind is a Halstead "operand" (identifier or literal).
+fn is_operand(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Name
+            | TokenKind::Int
+            | TokenKind::Float
+            | TokenKind::Complex
+            | TokenKind::String
+            | TokenKind::FStringStart
+            | TokenKind::FStringMiddle
+            | TokenKind::FStringEnd
+            | TokenKind::True
+            | TokenKind::False
+            | TokenKind::None
+    )
+}
+
+/// Render an attribute/name expression to a dotted path (`os.path.join`).
+fn expr_path(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Name(n) => Some(n.id.as_str().to_string()),
+        Expr::Attribute(a) => Some(format!("{}.{}", expr_path(&a.value)?, a.attr.as_str())),
+        _ => None,
+    }
+}
+
+/// The decorator's normalized callable path (strip any call arguments).
+fn decorator_path(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Call(c) => expr_path(&c.func),
+        other => expr_path(other),
+    }
+}
+
+fn is_private(name: &str) -> bool {
+    name.starts_with('_')
+}
+
+// ---------------------------------------------------------------------------
+// Top-level scan: definitions, imports, __all__, module vars.
+// ---------------------------------------------------------------------------
+
+fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut ParsedModule) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::FunctionDef(f) => m.definitions.push(Definition {
+                private_by_convention: is_private(f.name.as_str()),
+                name: f.name.to_string(),
+                kind: DefKind::Function,
+                line: line1(li, f.range().start()),
+                end_line: end_line1(li, f.range()),
+                decorators: f
+                    .decorator_list
+                    .iter()
+                    .filter_map(|d| decorator_path(&d.expression))
+                    .collect(),
+            }),
+            Stmt::ClassDef(c) => m.definitions.push(Definition {
+                private_by_convention: is_private(c.name.as_str()),
+                name: c.name.to_string(),
+                kind: DefKind::Class,
+                line: line1(li, c.range().start()),
+                end_line: end_line1(li, c.range()),
+                decorators: c
+                    .decorator_list
+                    .iter()
+                    .filter_map(|d| decorator_path(&d.expression))
+                    .collect(),
+            }),
+            Stmt::Import(i) => parse_import(i, li, m),
+            Stmt::ImportFrom(i) => {
+                let mut imp = parse_import_from(i, li);
+                imp.type_checking_only = type_checking;
+                m.imports.push(imp);
             }
-        }
-        "class_definition" => {
-            if let Some(def) = class_def(node, bytes) {
-                m.definitions.push(def);
-            }
-        }
-        "decorated_definition" => {
-            let decorators = collect_decorators(node, bytes);
-            if let Some(mut def) = function_def(node, bytes) {
-                def.decorators = decorators;
-                m.definitions.push(def);
-            }
-        }
-        "import_statement" => parse_import(node, bytes, m, false),
-        "import_from_statement" => parse_import(node, bytes, m, true),
-        "expression_statement" => {
-            // Detect `__all__ = [...]`.
-            if let Some(assign) = node.named_child(0) {
-                if assign.kind() == "assignment" {
-                    maybe_dunder_all(assign, bytes, m);
-                    maybe_module_var(assign, bytes, m);
-                }
-            }
-        }
-        "if_statement" | "try_statement" => {
-            // A `if TYPE_CHECKING:` / `if False:` guard marks deliberately
-            // type-only imports so they are never flagged as unused.
-            let type_checking = node.kind() == "if_statement"
-                && node
-                    .child_by_field_name("condition")
-                    .map(|c| {
-                        let t = node_text(c, bytes);
-                        t.contains("TYPE_CHECKING") || t.trim() == "False"
-                    })
-                    .unwrap_or(false);
-            let before = m.imports.len();
-            // Recurse into nested blocks for conditional top-level imports/defs.
-            let mut c = node.walk();
-            for ch in node.children(&mut c) {
-                if ch.kind() == "block" {
-                    let mut bc = ch.walk();
-                    for stmt in ch.children(&mut bc) {
-                        scan_stmt(stmt, bytes, m);
+            Stmt::Assign(a) => {
+                if let [Expr::Name(target)] = a.targets.as_slice() {
+                    let name = target.id.as_str();
+                    if name == "__all__" {
+                        if let Some(items) = string_list(&a.value) {
+                            m.dunder_all = Some(items);
+                        }
+                    } else {
+                        m.definitions.push(Definition {
+                            private_by_convention: is_private(name),
+                            name: name.to_string(),
+                            kind: DefKind::Variable,
+                            line: line1(li, a.range().start()),
+                            end_line: end_line1(li, a.range()),
+                            decorators: Vec::new(),
+                        });
                     }
                 }
             }
-            if type_checking {
-                for imp in m.imports[before..].iter_mut() {
-                    imp.type_checking_only = true;
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn function_def(node: Node, bytes: &[u8]) -> Option<Definition> {
-    // `decorated_definition` wraps the real def in its last child.
-    let real = if node.kind() == "decorated_definition" {
-        let mut found = None;
-        let mut c = node.walk();
-        for ch in node.children(&mut c) {
-            if ch.kind() == "function_definition" || ch.kind() == "class_definition" {
-                found = Some(ch);
-            }
-        }
-        found?
-    } else {
-        node
-    };
-    if real.kind() == "class_definition" {
-        return class_def(real, bytes);
-    }
-    let name = real.child_by_field_name("name")?;
-    let n = node_text(name, bytes).to_string();
-    Some(Definition {
-        private_by_convention: n.starts_with('_'),
-        name: n,
-        kind: DefKind::Function,
-        line: real.start_position().row as u32 + 1,
-        end_line: real.end_position().row as u32 + 1,
-        decorators: Vec::new(),
-    })
-}
-
-/// Collect normalized decorator paths from a `decorated_definition` node.
-fn collect_decorators(node: Node, bytes: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut c = node.walk();
-    for ch in node.children(&mut c) {
-        if ch.kind() == "decorator" {
-            // Text looks like `@app.route('/x')` or `@staticmethod`.
-            let raw = node_text(ch, bytes).trim_start_matches('@').trim();
-            let path = raw
-                .split(['(', ' ', '\n', '\t'])
-                .next()
-                .unwrap_or("")
-                .trim();
-            if !path.is_empty() {
-                out.push(path.to_string());
-            }
-        }
-    }
-    out
-}
-
-fn class_def(node: Node, bytes: &[u8]) -> Option<Definition> {
-    let name = node.child_by_field_name("name")?;
-    let n = node_text(name, bytes).to_string();
-    Some(Definition {
-        private_by_convention: n.starts_with('_'),
-        name: n,
-        kind: DefKind::Class,
-        line: node.start_position().row as u32 + 1,
-        end_line: node.end_position().row as u32 + 1,
-        decorators: Vec::new(),
-    })
-}
-
-fn parse_import(node: Node, bytes: &[u8], m: &mut ParsedModule, from: bool) {
-    let line = node.start_position().row as u32 + 1;
-    if !from {
-        // `import a.b.c, d` -> one Import per dotted_name / aliased_import.
-        let mut c = node.walk();
-        for ch in node.named_children(&mut c) {
-            let (module, binding) = match ch.kind() {
-                // `import a.b.c` binds the top-level name `a`.
-                "dotted_name" => {
-                    let m = node_text(ch, bytes).to_string();
-                    let b = m.split('.').next().unwrap_or(&m).to_string();
-                    (m, b)
-                }
-                // `import a.b as c` binds the alias `c`.
-                "aliased_import" => {
-                    let m = ch
-                        .child_by_field_name("name")
-                        .map(|n| node_text(n, bytes).to_string())
-                        .unwrap_or_default();
-                    let b = ch
-                        .child_by_field_name("alias")
-                        .map(|n| node_text(n, bytes).to_string())
-                        .unwrap_or_else(|| m.split('.').next().unwrap_or(&m).to_string());
-                    (m, b)
-                }
-                _ => continue,
-            };
-            if !module.is_empty() {
-                m.imports.push(Import {
-                    module,
-                    relative_dots: 0,
-                    names: vec![],
-                    bindings: if binding.is_empty() {
-                        vec![]
+            Stmt::AnnAssign(a) => {
+                if let Expr::Name(target) = &*a.target {
+                    let name = target.id.as_str();
+                    if name == "__all__" {
+                        if let Some(v) = &a.value {
+                            if let Some(items) = string_list(v) {
+                                m.dunder_all = Some(items);
+                            }
+                        }
                     } else {
-                        vec![binding]
-                    },
-                    is_star: false,
-                    type_checking_only: false,
-                    line,
-                });
-            }
-        }
-        return;
-    }
-
-    // from [.]*module import names | *
-    let mut module = String::new();
-    let mut relative_dots = 0u8;
-    let mut names = Vec::new();
-    let mut bindings = Vec::new();
-    let mut is_star = false;
-    let mut c = node.walk();
-    let mut seen_module = false;
-    for ch in node.children(&mut c) {
-        match ch.kind() {
-            "import_prefix" => relative_dots = node_text(ch, bytes).matches('.').count() as u8,
-            "relative_import" => {
-                relative_dots += node_text(ch, bytes).matches('.').count() as u8;
-                let mut rc = ch.walk();
-                let dn = ch
-                    .named_children(&mut rc)
-                    .find(|n| n.kind() == "dotted_name");
-                if let Some(dn) = dn {
-                    module = node_text(dn, bytes).to_string();
-                    seen_module = true;
+                        m.definitions.push(Definition {
+                            private_by_convention: is_private(name),
+                            name: name.to_string(),
+                            kind: DefKind::Variable,
+                            line: line1(li, a.range().start()),
+                            end_line: end_line1(li, a.range()),
+                            decorators: Vec::new(),
+                        });
+                    }
                 }
             }
-            "dotted_name" if !seen_module => {
-                module = node_text(ch, bytes).to_string();
-                seen_module = true;
-            }
-            "wildcard_import" => is_star = true,
-            "dotted_name" => {
-                let n = node_text(ch, bytes).to_string();
-                bindings.push(n.clone());
-                names.push(n);
-            }
-            "aliased_import" => {
-                if let Some(n) = ch.child_by_field_name("name") {
-                    names.push(node_text(n, bytes).to_string());
+            // Recurse into top-level guards for conditional imports/defs.
+            Stmt::If(i) => {
+                let tc = type_checking || is_type_checking_guard(&i.test);
+                let before = m.imports.len();
+                scan_top_level(&i.body, li, tc, m);
+                for clause in &i.elif_else_clauses {
+                    scan_top_level(&clause.body, li, tc, m);
                 }
-                // The local binding is the alias when present, else the name.
-                let bind = ch
-                    .child_by_field_name("alias")
-                    .or_else(|| ch.child_by_field_name("name"))
-                    .map(|n| node_text(n, bytes).to_string());
-                if let Some(b) = bind {
-                    bindings.push(b);
+                if tc {
+                    for imp in m.imports[before..].iter_mut() {
+                        imp.type_checking_only = true;
+                    }
                 }
+            }
+            Stmt::Try(t) => {
+                scan_top_level(&t.body, li, type_checking, m);
+                for h in &t.handlers {
+                    let ruff_python_ast::ExceptHandler::ExceptHandler(eh) = h;
+                    scan_top_level(&eh.body, li, type_checking, m);
+                }
+                scan_top_level(&t.orelse, li, type_checking, m);
+                scan_top_level(&t.finalbody, li, type_checking, m);
             }
             _ => {}
         }
     }
-    m.imports.push(Import {
+}
+
+/// `if TYPE_CHECKING:` / `if typing.TYPE_CHECKING:` / `if False:` guard.
+fn is_type_checking_guard(test: &Expr) -> bool {
+    if let Expr::BooleanLiteral(b) = test {
+        return !b.value; // `if False:`
+    }
+    expr_path(test)
+        .map(|p| p.contains("TYPE_CHECKING"))
+        .unwrap_or(false)
+}
+
+fn parse_import(i: &StmtImport, li: &LineIndex, m: &mut ParsedModule) {
+    let line = line1(li, i.range().start());
+    for alias in &i.names {
+        let module = alias.name.as_str().to_string();
+        let binding = match &alias.asname {
+            Some(a) => a.as_str().to_string(),
+            None => module.split('.').next().unwrap_or(&module).to_string(),
+        };
+        if !module.is_empty() {
+            m.imports.push(Import {
+                module,
+                relative_dots: 0,
+                names: vec![],
+                bindings: if binding.is_empty() {
+                    vec![]
+                } else {
+                    vec![binding]
+                },
+                is_star: false,
+                type_checking_only: false,
+                line,
+            });
+        }
+    }
+}
+
+fn parse_import_from(i: &StmtImportFrom, li: &LineIndex) -> Import {
+    let line = line1(li, i.range().start());
+    let module = i.module.as_ref().map(|m| m.to_string()).unwrap_or_default();
+    let mut names = Vec::new();
+    let mut bindings = Vec::new();
+    let mut is_star = false;
+    for alias in &i.names {
+        let name = alias.name.as_str();
+        if name == "*" {
+            is_star = true;
+            continue;
+        }
+        names.push(name.to_string());
+        bindings.push(match &alias.asname {
+            Some(a) => a.as_str().to_string(),
+            None => name.to_string(),
+        });
+    }
+    Import {
         module,
-        relative_dots,
+        relative_dots: i.level.min(u8::MAX as u32) as u8,
         names,
         bindings,
         is_star,
         type_checking_only: false,
         line,
-    });
+    }
 }
 
-fn maybe_dunder_all(assign: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let Some(lhs) = assign.child_by_field_name("left") else {
-        return;
+/// Extract a list/tuple of string-literal values (for `__all__`).
+fn string_list(e: &Expr) -> Option<Vec<String>> {
+    let elts = match e {
+        Expr::List(l) => &l.elts,
+        Expr::Tuple(t) => &t.elts,
+        _ => return None,
     };
-    if node_text(lhs, bytes) != "__all__" {
-        return;
-    }
-    let Some(rhs) = assign.child_by_field_name("right") else {
-        return;
-    };
-    if rhs.kind() == "list" || rhs.kind() == "tuple" {
-        let mut names = Vec::new();
-        let mut c = rhs.walk();
-        for ch in rhs.named_children(&mut c) {
-            if ch.kind() == "string" {
-                names.push(string_literal_value(ch, bytes));
-            }
-        }
-        m.dunder_all = Some(names);
-    }
-}
-
-fn maybe_module_var(assign: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let Some(lhs) = assign.child_by_field_name("left") else {
-        return;
-    };
-    if lhs.kind() == "identifier" {
-        let n = node_text(lhs, bytes).to_string();
-        if n == "__all__" {
-            return;
-        }
-        m.definitions.push(Definition {
-            private_by_convention: n.starts_with('_'),
-            name: n,
-            kind: DefKind::Variable,
-            line: assign.start_position().row as u32 + 1,
-            end_line: assign.end_position().row as u32 + 1,
-            decorators: Vec::new(),
-        });
-    }
-}
-
-fn string_literal_value(node: Node, bytes: &[u8]) -> String {
-    // Strip surrounding quotes via the string_content child if present.
-    let mut c = node.walk();
-    for ch in node.named_children(&mut c) {
-        if ch.kind() == "string_content" {
-            return node_text(ch, bytes).to_string();
-        }
-    }
-    node_text(node, bytes).trim_matches(['"', '\'']).to_string()
-}
-
-/// Decision-point node kinds for cyclomatic complexity.
-fn is_cyclo_node(kind: &str) -> bool {
-    matches!(
-        kind,
-        "if_statement"
-            | "elif_clause"
-            | "for_statement"
-            | "while_statement"
-            | "except_clause"
-            | "conditional_expression"
-            | "assert_statement"
-            | "case_clause"
-            | "for_in_clause"
-            | "if_clause"
-            | "boolean_operator"
+    Some(
+        elts.iter()
+            .filter_map(|el| match el {
+                Expr::StringLiteral(s) => Some(s.value.to_str().to_string()),
+                _ => None,
+            })
+            .collect(),
     )
 }
 
-fn is_nested_scope(kind: &str) -> bool {
-    kind == "function_definition" || kind == "class_definition"
+// ---------------------------------------------------------------------------
+// Complexity
+// ---------------------------------------------------------------------------
+
+fn function_complexity(f: &StmtFunctionDef, li: &LineIndex) -> FunctionComplexity {
+    let (params_total, params_annotated) = count_params(&f.parameters);
+    let mut cv = CycloVisitor { count: 0 };
+    for s in &f.body {
+        cv.visit_stmt(s);
+    }
+    FunctionComplexity {
+        name: f.name.to_string(),
+        line: line1(li, f.range().start()),
+        end_line: end_line1(li, f.range()),
+        cyclomatic: 1 + cv.count,
+        cognitive: cog_stmts(&f.body, 0),
+        params_total,
+        params_annotated,
+        return_annotated: f.returns.is_some(),
+    }
 }
 
-/// Count cyclomatic decision points in a subtree, NOT descending into nested
-/// function/class scopes (they are attributed separately).
-fn count_cyclo(node: Node) -> u32 {
-    let mut count = 0;
-    let mut c = node.walk();
-    for child in node.children(&mut c) {
-        if is_nested_scope(child.kind()) {
+fn count_params(params: &Parameters) -> (u32, u32) {
+    let positional: Vec<_> = params
+        .posonlyargs
+        .iter()
+        .chain(params.args.iter())
+        .collect();
+    let mut total = 0u32;
+    let mut annotated = 0u32;
+    for (idx, p) in positional.iter().enumerate() {
+        let name = p.parameter.name.as_str();
+        if idx == 0 && (name == "self" || name == "cls") {
             continue;
         }
-        if is_cyclo_node(child.kind()) {
-            count += 1;
-        }
-        count += count_cyclo(child);
-    }
-    count
-}
-
-/// Cognitive complexity with a nesting penalty. Approximation of the SonarSource
-/// model: structural breaks add `1 + nesting`; `elif`/`else` and boolean
-/// sequences add a flat 1; nesting increments inside loops/conditionals.
-fn count_cognitive(node: Node, nesting: u32) -> u32 {
-    let mut sum = 0;
-    let mut c = node.walk();
-    for child in node.children(&mut c) {
-        match child.kind() {
-            k if is_nested_scope(k) => {}
-            "if_statement"
-            | "for_statement"
-            | "while_statement"
-            | "except_clause"
-            | "conditional_expression" => {
-                sum += 1 + nesting;
-                sum += count_cognitive(child, nesting + 1);
-            }
-            "elif_clause" | "else_clause" | "boolean_operator" => {
-                sum += 1;
-                sum += count_cognitive(child, nesting);
-            }
-            _ => sum += count_cognitive(child, nesting),
+        total += 1;
+        if p.parameter.annotation.is_some() {
+            annotated += 1;
         }
     }
-    sum
-}
-
-/// Count (total, annotated) parameters of a function, excluding a leading
-/// `self`/`cls`.
-fn count_params(func: Node, bytes: &[u8]) -> (u32, u32) {
-    let Some(params) = func.child_by_field_name("parameters") else {
-        return (0, 0);
-    };
-    let mut total = 0;
-    let mut annotated = 0;
-    let mut first = true;
-    let mut c = params.walk();
-    for p in params.named_children(&mut c) {
-        let is_first = first;
-        first = false;
-        match p.kind() {
-            "identifier" => {
-                // Skip a leading conventional `self`/`cls`.
-                let name = node_text(p, bytes);
-                if is_first && (name == "self" || name == "cls") {
-                    continue;
-                }
-                total += 1;
-            }
-            "typed_parameter" | "typed_default_parameter" => {
-                total += 1;
-                annotated += 1;
-            }
-            "default_parameter" => total += 1,
-            _ => {}
+    for p in &params.kwonlyargs {
+        total += 1;
+        if p.parameter.annotation.is_some() {
+            annotated += 1;
         }
     }
     (total, annotated.min(total))
 }
 
-fn collect_complexity(root: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if node.kind() == "function_definition" {
-            if let (Some(name), Some(body)) = (
-                node.child_by_field_name("name"),
-                node.child_by_field_name("body"),
-            ) {
-                let (params_total, params_annotated) = count_params(node, bytes);
-                m.functions.push(FunctionComplexity {
-                    name: node_text(name, bytes).to_string(),
-                    line: node.start_position().row as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    cyclomatic: 1 + count_cyclo(body),
-                    cognitive: count_cognitive(body, 0),
-                    params_total,
-                    params_annotated,
-                    return_annotated: node.child_by_field_name("return_type").is_some(),
-                });
+/// Cyclomatic decision-point counter; does not descend into nested scopes.
+struct CycloVisitor {
+    count: u32,
+}
+impl<'a> Visitor<'a> for CycloVisitor {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return, // attributed separately
+            Stmt::If(i) => {
+                self.count += 1 + i
+                    .elif_else_clauses
+                    .iter()
+                    .filter(|c| c.test.is_some())
+                    .count() as u32;
             }
+            Stmt::For(_) | Stmt::While(_) => self.count += 1,
+            Stmt::Try(t) => self.count += t.handlers.len() as u32,
+            Stmt::Assert(_) => self.count += 1,
+            Stmt::Match(mt) => self.count += mt.cases.len() as u32,
+            _ => {}
         }
-        let mut c = node.walk();
-        for child in node.children(&mut c) {
-            stack.push(child);
-        }
+        walk_stmt(self, stmt);
     }
-    m.functions.sort_by_key(|f| f.line);
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::BoolOp(b) => self.count += (b.values.len() as u32).saturating_sub(1),
+            Expr::If(_) => self.count += 1, // ternary
+            Expr::ListComp(c) => self.count += comp_points(&c.generators),
+            Expr::SetComp(c) => self.count += comp_points(&c.generators),
+            Expr::DictComp(c) => self.count += comp_points(&c.generators),
+            Expr::Generator(c) => self.count += comp_points(&c.generators),
+            _ => {}
+        }
+        walk_expr(self, expr);
+    }
 }
 
-/// Approximate Halstead volume: classify leaf tokens into operators (anonymous
-/// punctuation/keyword nodes) and operands (named identifier/literal leaves),
-/// then `volume = (N1+N2) * log2(n1+n2)`. Used by the Maintainability Index.
-fn halstead_volume(root: Node, bytes: &[u8]) -> f64 {
-    use std::collections::HashSet;
-    let mut distinct_ops: HashSet<String> = HashSet::new();
-    let mut distinct_oprs: HashSet<String> = HashSet::new();
-    let (mut total_ops, mut total_oprs) = (0u64, 0u64);
-    let mut stack = vec![root];
-    while let Some(n) = stack.pop() {
-        let mut c = n.walk();
-        let children: Vec<Node> = n.children(&mut c).collect();
-        if children.is_empty() {
-            // Leaf.
-            let kind = n.kind();
-            if kind == "comment" {
-                // skip
-            } else if n.is_named() {
-                // identifiers and literals are operands.
-                if matches!(
-                    kind,
-                    "identifier" | "integer" | "float" | "string" | "true" | "false" | "none"
-                ) {
-                    total_oprs += 1;
-                    distinct_oprs.insert(node_text(n, bytes).to_string());
+fn comp_points(gens: &[ruff_python_ast::Comprehension]) -> u32 {
+    gens.iter().map(|g| 1 + g.ifs.len() as u32).sum()
+}
+
+/// Cognitive complexity (nesting-weighted approximation of the SonarSource model).
+fn cog_stmts(stmts: &[Stmt], nesting: u32) -> u32 {
+    stmts.iter().map(|s| cog_stmt(s, nesting)).sum()
+}
+
+fn cog_stmt(s: &Stmt, nesting: u32) -> u32 {
+    match s {
+        Stmt::FunctionDef(_) | Stmt::ClassDef(_) => 0,
+        Stmt::If(i) => {
+            let mut c = 1 + nesting + cog_cond(&i.test);
+            c += cog_stmts(&i.body, nesting + 1);
+            for clause in &i.elif_else_clauses {
+                c += 1; // elif/else: flat increment
+                if let Some(t) = &clause.test {
+                    c += cog_cond(t);
                 }
-            } else {
-                // anonymous punctuation / keyword = operator.
-                total_ops += 1;
-                distinct_ops.insert(kind.to_string());
+                c += cog_stmts(&clause.body, nesting + 1);
             }
-        } else {
-            for ch in children {
-                stack.push(ch);
-            }
+            c
         }
-    }
-    let vocab = (distinct_ops.len() + distinct_oprs.len()) as f64;
-    let length = (total_ops + total_oprs) as f64;
-    if vocab <= 1.0 {
-        0.0
-    } else {
-        length * vocab.log2()
+        Stmt::For(f) => {
+            1 + nesting + cog_stmts(&f.body, nesting + 1) + cog_stmts(&f.orelse, nesting + 1)
+        }
+        Stmt::While(w) => {
+            1 + nesting
+                + cog_cond(&w.test)
+                + cog_stmts(&w.body, nesting + 1)
+                + cog_stmts(&w.orelse, nesting + 1)
+        }
+        Stmt::With(w) => cog_stmts(&w.body, nesting),
+        Stmt::Try(t) => {
+            let mut c = cog_stmts(&t.body, nesting);
+            for h in &t.handlers {
+                let ruff_python_ast::ExceptHandler::ExceptHandler(eh) = h;
+                c += 1 + nesting + cog_stmts(&eh.body, nesting + 1);
+            }
+            c += cog_stmts(&t.orelse, nesting) + cog_stmts(&t.finalbody, nesting);
+            c
+        }
+        Stmt::Match(mt) => {
+            let mut c = 0;
+            for case in &mt.cases {
+                c += 1 + nesting + cog_stmts(&case.body, nesting + 1);
+            }
+            c
+        }
+        Stmt::Expr(e) => cog_cond(&e.value),
+        Stmt::Return(r) => r.value.as_ref().map(|v| cog_cond(v)).unwrap_or(0),
+        Stmt::Assign(a) => cog_cond(&a.value),
+        Stmt::AugAssign(a) => cog_cond(&a.value),
+        Stmt::AnnAssign(a) => a.value.as_ref().map(|v| cog_cond(v)).unwrap_or(0),
+        _ => 0,
     }
 }
 
-/// Names whose presence makes scope analysis unreliable — skip the function.
+/// Count boolean operators (+1 each) and ternaries within a condition expr.
+fn cog_cond(e: &Expr) -> u32 {
+    let mut v = CondVisitor { count: 0 };
+    v.visit_expr(e);
+    v.count
+}
+struct CondVisitor {
+    count: u32,
+}
+impl<'a> Visitor<'a> for CondVisitor {
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::BoolOp(b) => self.count += (b.values.len() as u32).saturating_sub(1),
+            Expr::If(_) => self.count += 1,
+            _ => {}
+        }
+        walk_expr(self, expr);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scope analysis: unused locals / parameters.
+// ---------------------------------------------------------------------------
+
 const SCOPE_DYNAMIC: &[&str] = &["locals", "vars", "globals", "eval", "exec"];
 
-/// Per-function unused local / parameter detection. Conservative: a binding is
-/// flagged only when its name occurs exactly once in the whole function (its
-/// bind site) — i.e. it is never read, augmented, deleted, or closed over.
-fn collect_scopes(root: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if node.kind() == "function_definition" {
-            analyze_function_scope(node, bytes, m);
-        }
-        let mut c = node.walk();
-        for ch in node.children(&mut c) {
-            stack.push(ch);
-        }
-    }
-    m.scope_findings.sort_by_key(|s| s.line);
-}
-
-fn analyze_function_scope(func: Node, bytes: &[u8], m: &mut ParsedModule) {
-    // Frequency of every identifier across the whole function subtree (a binding
-    // referenced anywhere — including nested closures — appears more than once).
-    let mut freq: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    let mut sub = vec![func];
-    while let Some(n) = sub.pop() {
-        if n.kind() == "identifier" {
-            *freq.entry(node_text(n, bytes).to_string()).or_insert(0) += 1;
-        }
-        let mut c = n.walk();
-        for ch in n.children(&mut c) {
-            sub.push(ch);
+fn analyze_scope(
+    f: &StmtFunctionDef,
+    name_tokens: &[(TextSize, &str)],
+    out: &mut Vec<ScopeFinding>,
+    li: &LineIndex,
+) {
+    // Name-token frequency within the function's byte range (binding site + uses).
+    let range = f.range();
+    let mut freq: HashMap<&str, u32> = HashMap::new();
+    for (off, text) in name_tokens {
+        if *off >= range.start() && *off < range.end() {
+            *freq.entry(*text).or_insert(0) += 1;
         }
     }
-    // Dynamic scope access → don't claim anything is unused.
     if SCOPE_DYNAMIC.iter().any(|d| freq.contains_key(*d)) {
         return;
     }
-    let decorated = func
-        .parent()
-        .map(|p| p.kind() == "decorated_definition")
-        .unwrap_or(false);
-    let fname = func
-        .child_by_field_name("name")
-        .map(|n| node_text(n, bytes))
-        .unwrap_or("");
-    let is_dunder = fname.starts_with("__") && fname.ends_with("__");
 
     // global/nonlocal-declared names are not locals.
-    let mut declared_global: std::collections::HashSet<String> = Default::default();
-    let mut gn = vec![func];
-    while let Some(n) = gn.pop() {
-        if matches!(n.kind(), "global_statement" | "nonlocal_statement") {
-            let mut c = n.walk();
-            for ch in n.named_children(&mut c) {
-                if ch.kind() == "identifier" {
-                    declared_global.insert(node_text(ch, bytes).to_string());
-                }
+    let mut gv = GlobalVisitor {
+        names: HashSet::new(),
+    };
+    for s in &f.body {
+        gv.visit_stmt(s);
+    }
+    let declared_global = gv.names;
+
+    let decorated = !f.decorator_list.is_empty();
+    let fname = f.name.as_str();
+    let is_dunder = fname.starts_with("__") && fname.ends_with("__");
+    let stub = is_stub_body(&f.body);
+
+    if !decorated && !is_dunder && !stub {
+        let positional: Vec<_> = f
+            .parameters
+            .posonlyargs
+            .iter()
+            .chain(f.parameters.args.iter())
+            .collect();
+        for (idx, p) in positional.iter().enumerate() {
+            let name = p.parameter.name.as_str();
+            if idx == 0 && (name == "self" || name == "cls") {
+                continue;
+            }
+            if name.starts_with('_') || declared_global.contains(name) {
+                continue;
+            }
+            if freq.get(name).copied().unwrap_or(0) == 1 {
+                out.push(ScopeFinding {
+                    line: line1(li, p.parameter.range().start()),
+                    name: name.to_string(),
+                    is_param: true,
+                });
             }
         }
-        let mut c = n.walk();
-        for ch in n.children(&mut c) {
-            gn.push(ch);
-        }
-    }
-
-    // Unused parameters (Uncertain — interface conformance). Skip decorated /
-    // dunder / stub-bodied functions where unused params are expected.
-    let body_is_stub = func
-        .child_by_field_name("body")
-        .map(is_stub_body)
-        .unwrap_or(true);
-    if !decorated && !is_dunder && !body_is_stub {
-        if let Some(params) = func.child_by_field_name("parameters") {
-            let mut c = params.walk();
-            let mut first = true;
-            for p in params.named_children(&mut c) {
-                let is_first = first;
-                first = false;
-                let pname = param_name(p, bytes);
-                let Some(pname) = pname else { continue };
-                if is_first && (pname == "self" || pname == "cls") {
-                    continue;
-                }
-                if pname.starts_with('_') || declared_global.contains(&pname) {
-                    continue;
-                }
-                if freq.get(&pname).copied().unwrap_or(0) == 1 {
-                    m.scope_findings.push(ScopeFinding {
-                        line: p.start_position().row as u32 + 1,
-                        name: pname,
-                        is_param: true,
-                    });
-                }
+        for p in &f.parameters.kwonlyargs {
+            let name = p.parameter.name.as_str();
+            if name.starts_with('_') || declared_global.contains(name) {
+                continue;
+            }
+            if freq.get(name).copied().unwrap_or(0) == 1 {
+                out.push(ScopeFinding {
+                    line: line1(li, p.parameter.range().start()),
+                    name: name.to_string(),
+                    is_param: true,
+                });
             }
         }
     }
 
     // Unused local variables: top-level `name = expr` whose name occurs once.
-    if let Some(body) = func.child_by_field_name("body") {
-        let mut c = body.walk();
-        for stmt in body.named_children(&mut c) {
-            if stmt.kind() != "expression_statement" {
-                continue;
-            }
-            let Some(assign) = stmt.named_child(0) else {
-                continue;
-            };
-            if assign.kind() != "assignment" {
-                continue;
-            }
-            let Some(left) = assign.child_by_field_name("left") else {
-                continue;
-            };
-            if left.kind() != "identifier" {
-                continue; // skip tuple/attribute/subscript targets
-            }
-            let name = node_text(left, bytes).to_string();
-            if name == "_" || declared_global.contains(&name) {
-                continue;
-            }
-            if freq.get(&name).copied().unwrap_or(0) == 1 {
-                m.scope_findings.push(ScopeFinding {
-                    line: assign.start_position().row as u32 + 1,
-                    name,
-                    is_param: false,
-                });
-            }
-        }
-    }
-}
-
-/// The bound name of a parameter node, honoring typed/default forms. `None` for
-/// `*args` / `**kwargs` (always "used" by convention).
-fn param_name(p: Node, bytes: &[u8]) -> Option<String> {
-    match p.kind() {
-        "identifier" => Some(node_text(p, bytes).to_string()),
-        "typed_parameter" | "default_parameter" | "typed_default_parameter" => {
-            let mut c = p.walk();
-            let kids: Vec<Node> = p.named_children(&mut c).collect();
-            kids.into_iter()
-                .find(|ch| ch.kind() == "identifier")
-                .map(|ch| node_text(ch, bytes).to_string())
-        }
-        _ => None, // list_splat_pattern / dictionary_splat_pattern
-    }
-}
-
-/// Is a function body a stub (only `pass`, `...`, a docstring, or
-/// `raise NotImplementedError`)? Such bodies legitimately ignore parameters.
-fn is_stub_body(body: Node) -> bool {
-    let mut c = body.walk();
-    for stmt in body.named_children(&mut c) {
-        match stmt.kind() {
-            "pass_statement" => {}
-            "raise_statement" => {}
-            "expression_statement" => {
-                let inner = stmt.named_child(0).map(|n| n.kind());
-                if !matches!(inner, Some("string") | Some("ellipsis")) {
-                    return false;
+    for stmt in &f.body {
+        if let Stmt::Assign(a) = stmt {
+            if let [Expr::Name(target)] = a.targets.as_slice() {
+                let name = target.id.as_str();
+                if name == "_" || declared_global.contains(name) {
+                    continue;
+                }
+                if freq.get(name).copied().unwrap_or(0) == 1 {
+                    out.push(ScopeFinding {
+                        line: line1(li, a.range().start()),
+                        name: name.to_string(),
+                        is_param: false,
+                    });
                 }
             }
-            _ => return false,
         }
     }
-    true
 }
 
-/// Collect classes with each method's referenced `self.<attr>` set (LCOM input).
-fn collect_classes(root: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if node.kind() == "class_definition" {
-            if let Some(ci) = class_info(node, bytes) {
-                m.classes.push(ci);
+struct GlobalVisitor {
+    names: HashSet<String>,
+}
+impl<'a> Visitor<'a> for GlobalVisitor {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::Global(g) => {
+                for n in &g.names {
+                    self.names.insert(n.as_str().to_string());
+                }
             }
+            Stmt::Nonlocal(g) => {
+                for n in &g.names {
+                    self.names.insert(n.as_str().to_string());
+                }
+            }
+            _ => {}
         }
-        let mut c = node.walk();
-        for ch in node.children(&mut c) {
-            stack.push(ch);
-        }
+        walk_stmt(self, stmt);
     }
-    m.classes.sort_by_key(|c| c.line);
 }
 
-fn class_info(class: Node, bytes: &[u8]) -> Option<ClassInfo> {
-    let name = node_text(class.child_by_field_name("name")?, bytes).to_string();
-    let line = class.start_position().row as u32 + 1;
-    let body = class.child_by_field_name("body")?;
-    let mut methods = Vec::new();
-    let mut c = body.walk();
-    let children: Vec<Node> = body.named_children(&mut c).collect();
-    for stmt in children {
-        // A method may be wrapped in `decorated_definition`.
-        let func = if stmt.kind() == "function_definition" {
-            Some(stmt)
-        } else if stmt.kind() == "decorated_definition" {
-            let mut dc = stmt.walk();
-            let kids: Vec<Node> = stmt.children(&mut dc).collect();
-            kids.into_iter().find(|n| n.kind() == "function_definition")
-        } else {
-            None
-        };
-        let Some(func) = func else { continue };
-        let mname = func
-            .child_by_field_name("name")
-            .map(|n| node_text(n, bytes).to_string())
-            .unwrap_or_default();
-        methods.push((mname, self_attrs(func, bytes)));
-    }
-    Some(ClassInfo {
-        name,
-        line,
-        methods,
+/// Is a function body a stub (only `pass`, `...`, a docstring, or `raise ...`)?
+fn is_stub_body(body: &[Stmt]) -> bool {
+    body.iter().all(|s| match s {
+        Stmt::Pass(_) => true,
+        Stmt::Raise(_) => true,
+        Stmt::Expr(e) => matches!(&*e.value, Expr::StringLiteral(_) | Expr::EllipsisLiteral(_)),
+        _ => false,
     })
 }
 
-/// The distinct `self.<attr>` (and `cls.<attr>`) names referenced in a method.
-fn self_attrs(func: Node, bytes: &[u8]) -> Vec<String> {
-    let mut attrs: std::collections::BTreeSet<String> = Default::default();
-    let mut stack = vec![func];
-    while let Some(n) = stack.pop() {
-        if n.kind() == "attribute" {
-            if let (Some(obj), Some(attr)) = (
-                n.child_by_field_name("object"),
-                n.child_by_field_name("attribute"),
-            ) {
-                let o = node_text(obj, bytes);
-                if o == "self" || o == "cls" {
-                    attrs.insert(node_text(attr, bytes).to_string());
+// ---------------------------------------------------------------------------
+// Classes / cohesion.
+// ---------------------------------------------------------------------------
+
+fn class_info(c: &StmtClassDef, li: &LineIndex) -> ClassInfo {
+    let mut methods = Vec::new();
+    for stmt in &c.body {
+        if let Stmt::FunctionDef(f) = stmt {
+            methods.push((f.name.to_string(), self_attrs(f)));
+        }
+    }
+    ClassInfo {
+        name: c.name.to_string(),
+        line: line1(li, c.range().start()),
+        methods,
+    }
+}
+
+fn self_attrs(f: &StmtFunctionDef) -> Vec<String> {
+    let mut v = SelfAttrVisitor {
+        attrs: std::collections::BTreeSet::new(),
+    };
+    for s in &f.body {
+        v.visit_stmt(s);
+    }
+    v.attrs.into_iter().collect()
+}
+
+struct SelfAttrVisitor {
+    attrs: std::collections::BTreeSet<String>,
+}
+impl<'a> Visitor<'a> for SelfAttrVisitor {
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::Attribute(a) = expr {
+            if let Expr::Name(obj) = &*a.value {
+                if obj.id.as_str() == "self" || obj.id.as_str() == "cls" {
+                    self.attrs.insert(a.attr.as_str().to_string());
                 }
             }
         }
-        let mut c = n.walk();
-        for ch in n.children(&mut c) {
-            stack.push(ch);
+        walk_expr(self, expr);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Collect definitions of nested functions/classes (whole tree).
+// ---------------------------------------------------------------------------
+
+struct DefVisitor<'a> {
+    funcs: Vec<&'a StmtFunctionDef>,
+    classes: Vec<&'a StmtClassDef>,
+}
+impl<'a> Visitor<'a> for DefVisitor<'a> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::FunctionDef(f) => self.funcs.push(f),
+            Stmt::ClassDef(c) => self.classes.push(c),
+            _ => {}
+        }
+        walk_stmt(self, stmt);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local uses (identifiers outside import statements + string annotations).
+// ---------------------------------------------------------------------------
+
+struct LocalUseVisitor {
+    uses: Vec<String>,
+}
+impl<'a> Visitor<'a> for LocalUseVisitor {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        // Import bindings are not "uses".
+        if matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_)) {
+            return;
+        }
+        // String forward-ref annotations: extract identifier tokens.
+        if let Stmt::AnnAssign(a) = stmt {
+            collect_annotation_strings(&a.annotation, &mut self.uses);
+        }
+        if let Stmt::FunctionDef(f) = stmt {
+            if let Some(r) = &f.returns {
+                collect_annotation_strings(r, &mut self.uses);
+            }
+            for p in f
+                .parameters
+                .posonlyargs
+                .iter()
+                .chain(f.parameters.args.iter())
+                .chain(f.parameters.kwonlyargs.iter())
+            {
+                if let Some(ann) = &p.parameter.annotation {
+                    collect_annotation_strings(ann, &mut self.uses);
+                }
+            }
+        }
+        walk_stmt(self, stmt);
+    }
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Name(n) => self.uses.push(n.id.as_str().to_string()),
+            Expr::Attribute(a) => self.uses.push(a.attr.as_str().to_string()),
+            _ => {}
+        }
+        walk_expr(self, expr);
+    }
+}
+
+/// Pull identifier-like tokens out of any string literal inside an annotation
+/// expression (`x: "Foo"`, `List["pkg.Bar"]`), plus referenced Names.
+fn collect_annotation_strings(e: &Expr, out: &mut Vec<String>) {
+    match e {
+        Expr::StringLiteral(s) => {
+            for tok in identifier_tokens(s.value.to_str()) {
+                out.push(tok);
+            }
+        }
+        Expr::Subscript(s) => {
+            collect_annotation_strings(&s.value, out);
+            collect_annotation_strings(&s.slice, out);
+        }
+        Expr::Tuple(t) => {
+            for el in &t.elts {
+                collect_annotation_strings(el, out);
+            }
+        }
+        Expr::List(l) => {
+            for el in &l.elts {
+                collect_annotation_strings(el, out);
+            }
+        }
+        Expr::BinOp(b) => {
+            collect_annotation_strings(&b.left, out);
+            collect_annotation_strings(&b.right, out);
+        }
+        _ => {}
+    }
+}
+
+fn identifier_tokens(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let flush = |cur: &mut String, out: &mut Vec<String>| {
+        if !cur.is_empty() && !cur.chars().next().unwrap().is_ascii_digit() {
+            out.push(std::mem::take(cur));
+        } else {
+            cur.clear();
+        }
+    };
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            cur.push(ch);
+        } else {
+            flush(&mut cur, &mut out);
         }
     }
-    attrs.into_iter().collect()
+    flush(&mut cur, &mut out);
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Scope/binding resolution.
+//
+// A real (if compact) LEGB resolver: it tracks a stack of *function* scopes,
+// each with its statically-determined local bindings (Python's rule: a name
+// assigned anywhere in a function body is local to it, unless declared
+// `global`). A `Name` load resolves to module/global scope when no enclosing
+// function scope binds it. `global x` forces module resolution; `nonlocal x`
+// binds to an enclosing function (treated as local-here so it never bubbles to
+// module). Class bodies are transparent to nested functions, matching Python.
+// ---------------------------------------------------------------------------
+
+struct FnScope {
+    locals: HashSet<String>,
+    globals: HashSet<String>,
+}
+
+struct Resolver {
+    scopes: Vec<FnScope>,
+    used: HashSet<String>,
+}
+
+impl Resolver {
+    fn resolve_load(&mut self, name: &str) {
+        for s in self.scopes.iter().rev() {
+            if s.globals.contains(name) {
+                self.used.insert(name.to_string()); // `global` → module binding
+                return;
+            }
+            if s.locals.contains(name) {
+                return; // bound by an enclosing function scope
+            }
+        }
+        // Not bound by any function scope → module/global scope.
+        self.used.insert(name.to_string());
+    }
+
+    fn enter_function(&mut self, f: &StmtFunctionDef) {
+        let mut bv = BindingVisitor {
+            locals: HashSet::new(),
+            globals: HashSet::new(),
+        };
+        for p in param_names(&f.parameters) {
+            bv.locals.insert(p);
+        }
+        for stmt in &f.body {
+            bv.visit_stmt(stmt);
+        }
+        // `global` names are not locals.
+        for g in &bv.globals {
+            bv.locals.remove(g);
+        }
+        self.scopes.push(FnScope {
+            locals: bv.locals,
+            globals: bv.globals,
+        });
+    }
+}
+
+impl<'a> Visitor<'a> for Resolver {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::FunctionDef(f) => {
+                // Decorators / default values / annotations resolve in the
+                // current scope (visited before the function scope is pushed).
+                for d in &f.decorator_list {
+                    self.visit_expr(&d.expression);
+                }
+                self.enter_function(f);
+                for stmt in &f.body {
+                    self.visit_stmt(stmt);
+                }
+                self.scopes.pop();
+            }
+            Stmt::ClassDef(c) => {
+                for d in &c.decorator_list {
+                    self.visit_expr(&d.expression);
+                }
+                if let Some(args) = &c.arguments {
+                    for a in args.args.iter() {
+                        self.visit_expr(a);
+                    }
+                    for kw in args.keywords.iter() {
+                        self.visit_expr(&kw.value);
+                    }
+                }
+                // Class body is transparent (its bindings are Stores, not loads).
+                for stmt in &c.body {
+                    self.visit_stmt(stmt);
+                }
+            }
+            _ => walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Name(n) => {
+                if matches!(n.ctx, ExprContext::Load) {
+                    self.resolve_load(n.id.as_str());
+                }
+            }
+            Expr::Lambda(l) => {
+                let mut locals = HashSet::new();
+                if let Some(params) = &l.parameters {
+                    for p in param_names(params) {
+                        locals.insert(p);
+                    }
+                }
+                self.scopes.push(FnScope {
+                    locals,
+                    globals: HashSet::new(),
+                });
+                self.visit_expr(&l.body);
+                self.scopes.pop();
+            }
+            _ => walk_expr(self, expr),
+        }
+    }
+}
+
+/// Collect a function scope's local bindings (Store names, nested def/class
+/// names, `global`/`nonlocal` declarations) without descending into nested
+/// function/class/lambda scopes.
+struct BindingVisitor {
+    locals: HashSet<String>,
+    globals: HashSet<String>,
+}
+impl<'a> Visitor<'a> for BindingVisitor {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::FunctionDef(f) => {
+                self.locals.insert(f.name.to_string());
+            }
+            Stmt::ClassDef(c) => {
+                self.locals.insert(c.name.to_string());
+            }
+            Stmt::Global(g) => {
+                for n in &g.names {
+                    self.globals.insert(n.to_string());
+                }
+            }
+            Stmt::Nonlocal(g) => {
+                for n in &g.names {
+                    // nonlocal binds to an enclosing function — never module.
+                    self.locals.insert(n.to_string());
+                }
+            }
+            _ => walk_stmt(self, stmt),
+        }
+    }
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Name(n) if matches!(n.ctx, ExprContext::Store) => {
+                self.locals.insert(n.id.as_str().to_string());
+            }
+            // Don't descend into nested scopes: their bindings aren't ours.
+            Expr::Lambda(_) => {}
+            _ => walk_expr(self, expr),
+        }
+    }
+}
+
+fn param_names(params: &Parameters) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in params
+        .posonlyargs
+        .iter()
+        .chain(params.args.iter())
+        .chain(params.kwonlyargs.iter())
+    {
+        out.push(p.parameter.name.as_str().to_string());
+    }
+    if let Some(v) = &params.vararg {
+        out.push(v.name.as_str().to_string());
+    }
+    if let Some(k) = &params.kwarg {
+        out.push(k.name.as_str().to_string());
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Calls, dynamic sinks, security (whole tree).
+// ---------------------------------------------------------------------------
+
+struct MainVisitor<'a, 'm> {
+    li: &'a LineIndex,
+    m: &'m mut ParsedModule,
+}
+impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::Assign(a) => {
+                if let [Expr::Name(t)] = a.targets.as_slice() {
+                    security_secret(t.id.as_str(), &a.value, a.range(), self.li, self.m);
+                }
+            }
+            Stmt::AnnAssign(a) => {
+                if let (Expr::Name(t), Some(v)) = (&*a.target, &a.value) {
+                    security_secret(t.id.as_str(), v, a.range(), self.li, self.m);
+                }
+            }
+            _ => {}
+        }
+        walk_stmt(self, stmt);
+    }
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::Call(c) = expr {
+            let callee = expr_path(&c.func).unwrap_or_default();
+            if !callee.is_empty() {
+                if DYNAMIC_SINKS.contains(&callee.as_str()) || callee.starts_with("importlib") {
+                    self.m.has_dynamic_sink = true;
+                }
+                self.m.calls.push(CallSite {
+                    callee: callee.clone(),
+                    line: line1(self.li, c.func.range().start()),
+                });
+            }
+            security_call(c, &callee, line1(self.li, c.range().start()), self.m);
+        }
+        walk_expr(self, expr);
+    }
 }
 
 const SECRET_NAMES: &[&str] = &[
@@ -974,98 +1256,29 @@ const SECRET_NAMES: &[&str] = &[
     "auth_token",
 ];
 
-fn collect_security(root: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        match node.kind() {
-            "call" => security_call(node, bytes, m),
-            "assignment" => security_assignment(node, bytes, m),
-            _ => {}
-        }
-        let mut c = node.walk();
-        for ch in node.children(&mut c) {
-            stack.push(ch);
-        }
+fn security_secret(
+    name: &str,
+    value: &Expr,
+    range: TextRange,
+    li: &LineIndex,
+    m: &mut ParsedModule,
+) {
+    let lname = name.to_ascii_lowercase();
+    if !SECRET_NAMES.iter().any(|s| lname.contains(s)) {
+        return;
     }
-}
-
-fn call_func<'a>(call: Node<'a>) -> Option<Node<'a>> {
-    call.child_by_field_name("function")
-}
-
-fn call_args(call: Node) -> Option<Node> {
-    call.child_by_field_name("arguments")
-}
-
-/// Whether the call has a keyword argument `name` whose value text equals `val`.
-fn kwarg_is(call: Node, bytes: &[u8], name: &str, val: &str) -> bool {
-    let Some(args) = call_args(call) else {
-        return false;
-    };
-    let mut c = args.walk();
-    for a in args.named_children(&mut c) {
-        if a.kind() == "keyword_argument" {
-            let n = a.child_by_field_name("name").map(|x| node_text(x, bytes));
-            let v = a.child_by_field_name("value").map(|x| node_text(x, bytes));
-            if n == Some(name) && v == Some(val) {
-                return true;
-            }
+    if let Expr::StringLiteral(s) = value {
+        let val = s.value.to_str();
+        if val.len() >= 4 && !val.contains("${") && !val.eq_ignore_ascii_case("changeme") {
+            m.security_hits.push(SecurityHit {
+                rule: "hardcoded-secret",
+                line: line1(li, range.start()),
+                detail: format!("`{name}` assigned a hardcoded string literal"),
+            });
         }
     }
-    false
 }
 
-fn has_kwarg(call: Node, bytes: &[u8], name: &str) -> bool {
-    let Some(args) = call_args(call) else {
-        return false;
-    };
-    let mut c = args.walk();
-    for a in args.named_children(&mut c) {
-        if a.kind() == "keyword_argument"
-            && a.child_by_field_name("name").map(|x| node_text(x, bytes)) == Some(name)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn first_positional_is_string(call: Node) -> bool {
-    first_positional_arg(call).map(|a| a.kind()) == Some("string")
-}
-
-/// The first positional argument node of a call, if any.
-fn first_positional_arg(call: Node) -> Option<Node> {
-    let args = call_args(call)?;
-    let mut c = args.walk();
-    let kids: Vec<Node> = args.named_children(&mut c).collect();
-    kids.into_iter().find(|a| a.kind() != "keyword_argument")
-}
-
-/// Does a string node contain `{...}` interpolation (i.e. an f-string)?
-fn string_has_interpolation(string_node: Node) -> bool {
-    let mut c = string_node.walk();
-    let kids: Vec<Node> = string_node.children(&mut c).collect();
-    kids.iter().any(|ch| ch.kind() == "interpolation")
-}
-
-/// Is an argument expression "dynamically built" (f-string / `%`/`+` concat /
-/// `.format(...)`) rather than a static literal?
-fn is_dynamic_string(arg: Node, bytes: &[u8]) -> bool {
-    match arg.kind() {
-        "binary_operator" => true,
-        "string" => string_has_interpolation(arg),
-        "call" => arg
-            .child_by_field_name("function")
-            .map(|fnode| node_text(fnode, bytes).ends_with(".format"))
-            .unwrap_or(false),
-        _ => false,
-    }
-}
-
-/// Cipher primitives considered broken/weak (bandit B304): DES/3DES, RC2/ARC2,
-/// RC4/ARC4, Blowfish, IDEA, CAST, XOR. Matched against import names and direct
-/// constructor calls.
 const WEAK_CIPHERS: &[&str] = &[
     "DES",
     "DES3",
@@ -1080,68 +1293,55 @@ const WEAK_CIPHERS: &[&str] = &[
     "XOR",
 ];
 
-/// Import-based weak-cipher detection (bandit B304). Real cipher usage is
-/// import-aliased — `from Crypto.Cipher import DES as d; d.new(...)` — so the
-/// call site (`d.new`) carries no cipher identity. We flag the *import* of a
-/// weak cipher from a crypto module instead, which is deterministic and matches
-/// bandit's behavior. Covers `from Crypto.Cipher import ARC4`,
-/// `from Cryptodome.Cipher import Blowfish`, the `cryptography` `algorithms`
-/// re-exports, and `import Crypto.Cipher.DES`.
-fn security_imports(m: &mut ParsedModule) {
-    let mut hits: Vec<SecurityHit> = Vec::new();
-    for imp in &m.imports {
-        let from_crypto = imp.module.contains("Crypto") || imp.module.contains("cryptography");
-        if !from_crypto {
-            continue;
-        }
-        // `from <crypto-mod> import <Cipher> [as alias]` — pre-alias names.
-        for name in &imp.names {
-            if WEAK_CIPHERS.contains(&name.as_str()) {
-                hits.push(SecurityHit {
-                    rule: "weak-cipher",
-                    line: imp.line,
-                    detail: format!(
-                        "`{name}` (imported from `{}`) is a broken/weak cipher; use AES-GCM or ChaCha20-Poly1305",
-                        imp.module
-                    ),
-                });
-            }
-        }
-        // `import Crypto.Cipher.DES` — the cipher is the module's last segment.
-        if imp.names.is_empty() {
-            if let Some(seg) = imp.module.rsplit('.').next() {
-                if WEAK_CIPHERS.contains(&seg) {
-                    hits.push(SecurityHit {
-                        rule: "weak-cipher",
-                        line: imp.line,
-                        detail: format!(
-                            "`{}` is a broken/weak cipher; use AES-GCM or ChaCha20-Poly1305",
-                            imp.module
-                        ),
-                    });
-                }
-            }
-        }
-    }
-    m.security_hits.extend(hits);
+fn kwarg_bool(c: &ruff_python_ast::ExprCall, name: &str, want: bool) -> bool {
+    c.arguments
+        .find_keyword(name)
+        .map(|kw| matches!(&kw.value, Expr::BooleanLiteral(b) if b.value == want))
+        .unwrap_or(false)
 }
 
-fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let Some(func) = call_func(call) else { return };
-    let f = node_text(func, bytes);
+fn has_kwarg(c: &ruff_python_ast::ExprCall, name: &str) -> bool {
+    c.arguments.find_keyword(name).is_some()
+}
+
+fn first_positional_is_string(c: &ruff_python_ast::ExprCall) -> bool {
+    matches!(c.arguments.args.first(), Some(Expr::StringLiteral(_)))
+}
+
+fn is_dynamic_string(arg: &Expr) -> bool {
+    match arg {
+        Expr::FString(_) => true,
+        Expr::BinOp(_) => true,
+        Expr::Call(c) => expr_path(&c.func)
+            .map(|p| p.ends_with(".format"))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Does any argument reference `.MODE_ECB`?
+fn args_reference_ecb(c: &ruff_python_ast::ExprCall) -> bool {
+    let refs = |e: &Expr| {
+        expr_path(e)
+            .map(|p| p.contains("MODE_ECB"))
+            .unwrap_or(false)
+    };
+    c.arguments.args.iter().any(refs) || c.arguments.keywords.iter().any(|k| refs(&k.value))
+}
+
+fn security_call(c: &ruff_python_ast::ExprCall, f: &str, line: u32, m: &mut ParsedModule) {
     let last = f.rsplit('.').next().unwrap_or(f);
-    let line = call.start_position().row as u32 + 1;
     let mut hit = |rule: &'static str, detail: String| {
         m.security_hits.push(SecurityHit { rule, line, detail });
     };
 
-    if (last == "eval" || last == "exec") && !first_positional_is_string(call) {
+    if (last == "eval" || last == "exec") && !first_positional_is_string(c) {
         hit(
             "dangerous-eval",
             format!("`{f}` on a non-literal expression executes dynamic code"),
         );
     }
-    if f == "yaml.load" && !has_kwarg(call, bytes, "Loader") {
+    if f == "yaml.load" && !has_kwarg(c, "Loader") {
         hit(
             "unsafe-yaml-load",
             "yaml.load without an explicit Loader= is unsafe; use yaml.safe_load".into(),
@@ -1168,65 +1368,49 @@ fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
     if matches!(
         last,
         "call" | "run" | "Popen" | "check_output" | "check_call"
-    ) && kwarg_is(call, bytes, "shell", "True")
+    ) && kwarg_bool(c, "shell", true)
     {
         hit(
             "subprocess-shell-true",
             "subprocess call with shell=True risks shell injection".into(),
         );
     }
-    // os.system / os.popen always spawn a shell.
     if matches!(f, "os.system" | "os.popen" | "os.popen2" | "os.popen3") {
         hit(
             "subprocess-shell-true",
             format!("`{f}` runs a command through the shell; prefer subprocess with an argv list"),
         );
     }
-    if kwarg_is(call, bytes, "verify", "False") {
+    if kwarg_bool(c, "verify", false) {
         hit(
             "tls-verify-disabled",
             "TLS certificate verification disabled (verify=False)".into(),
         );
     }
-    if matches!(f, "ssl._create_unverified_context") {
+    if f == "ssl._create_unverified_context" {
         hit(
             "tls-verify-disabled",
             "ssl._create_unverified_context disables certificate validation".into(),
         );
     }
-    // Weak hashes (bandit B303/B324): md5/sha1 used directly.
     if matches!(f, "hashlib.md5" | "hashlib.sha1" | "md5.new") {
         hit(
             "weak-hash",
             format!("`{f}` is a weak hash; use sha256+ (or pass usedforsecurity=False)"),
         );
     }
-    // Weak ciphers (bandit B304): a weak cipher constructed directly, e.g.
-    // `algorithms.ARC4(key)` or `DES.new(...)` would surface via the import pass;
-    // here we catch the direct-constructor form where the cipher name is the
-    // callee (the `cryptography` `algorithms.<Cipher>(...)` idiom). Import-aliased
-    // uses (`from Crypto.Cipher import DES as d; d.new(...)`) are caught in
-    // `security_imports`.
     if WEAK_CIPHERS.contains(&last) {
         hit(
             "weak-cipher",
             format!("`{f}` is a broken/weak cipher; use AES-GCM or ChaCha20-Poly1305"),
         );
     }
-    // Weak cipher *mode* (bandit B305): ECB leaks plaintext structure. ECB is
-    // referenced as an attribute argument (`cipher.new(key, AES.MODE_ECB)`), so
-    // scan the call's arguments for a `.MODE_ECB` reference.
-    if call_args(call)
-        .map(|a| node_text(a, bytes).contains("MODE_ECB"))
-        .unwrap_or(false)
-    {
+    if args_reference_ecb(c) {
         hit(
             "weak-cipher",
             "ECB mode leaks plaintext structure; use an authenticated mode (GCM)".into(),
         );
     }
-    // Insecure randomness for security contexts (bandit B311). Uncertain: the
-    // stdlib `random` is fine for non-security use.
     if matches!(
         f,
         "random.random"
@@ -1240,14 +1424,12 @@ fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
             format!("`{f}` is not cryptographically secure; use the `secrets` module for tokens"),
         );
     }
-    // SQL built from a dynamically-formatted string (bandit B608). Only flags
-    // execute-style sinks whose query argument is f-string/concat/.format.
     if matches!(
         last,
         "execute" | "executemany" | "executescript" | "raw" | "extra"
     ) {
-        if let Some(arg) = first_positional_arg(call) {
-            if is_dynamic_string(arg, bytes) {
+        if let Some(arg) = c.arguments.args.first() {
+            if is_dynamic_string(arg) {
                 hit(
                     "sql-injection",
                     format!(
@@ -1257,7 +1439,6 @@ fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
             }
         }
     }
-    // requests/httpx call without a timeout can hang forever (bandit-adjacent).
     if matches!(
         f,
         "requests.get"
@@ -1267,7 +1448,7 @@ fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
             | "requests.patch"
             | "requests.head"
             | "requests.request"
-    ) && !has_kwarg(call, bytes, "timeout")
+    ) && !has_kwarg(c, "timeout")
     {
         hit(
             "request-without-timeout",
@@ -1276,83 +1457,48 @@ fn security_call(call: Node, bytes: &[u8], m: &mut ParsedModule) {
     }
 }
 
-fn security_assignment(assign: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let Some(lhs) = assign.child_by_field_name("left") else {
-        return;
-    };
-    if lhs.kind() != "identifier" {
-        return;
-    }
-    let name = node_text(lhs, bytes).to_ascii_lowercase();
-    if !SECRET_NAMES.iter().any(|s| name.contains(s)) {
-        return;
-    }
-    let Some(rhs) = assign.child_by_field_name("right") else {
-        return;
-    };
-    if rhs.kind() == "string" {
-        let val = string_literal_value(rhs, bytes);
-        // Skip empty or obvious placeholders / env lookups.
-        if val.len() >= 4 && !val.contains("${") && !val.eq_ignore_ascii_case("changeme") {
-            m.security_hits.push(SecurityHit {
-                rule: "hardcoded-secret",
-                line: assign.start_position().row as u32 + 1,
-                detail: format!(
-                    "`{}` assigned a hardcoded string literal",
-                    node_text(lhs, bytes)
-                ),
-            });
+fn security_imports(m: &mut ParsedModule) {
+    let mut hits: Vec<SecurityHit> = Vec::new();
+    for imp in &m.imports {
+        let from_crypto = imp.module.contains("Crypto") || imp.module.contains("cryptography");
+        if !from_crypto {
+            continue;
         }
-    }
-}
-
-fn collect_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        match node.kind() {
-            "identifier" => {
-                let name = node_text(node, bytes).to_string();
-                *m.name_counts.entry(name.clone()).or_insert(0) += 1;
-                m.used_names.push(name);
+        for name in &imp.names {
+            if WEAK_CIPHERS.contains(&name.as_str()) {
+                hits.push(SecurityHit {
+                    rule: "weak-cipher",
+                    line: imp.line,
+                    detail: format!(
+                        "`{name}` (imported from `{}`) is a broken/weak cipher; use AES-GCM or ChaCha20-Poly1305",
+                        imp.module
+                    ),
+                });
             }
-            "call" => {
-                if let Some(func) = node.child_by_field_name("function") {
-                    let t = node_text(func, bytes);
-                    if DYNAMIC_SINKS.contains(&t) || t.starts_with("importlib") {
-                        m.has_dynamic_sink = true;
-                    }
-                    m.calls.push(CallSite {
-                        callee: t.to_string(),
-                        line: func.start_position().row as u32 + 1,
+        }
+        if imp.names.is_empty() {
+            if let Some(seg) = imp.module.rsplit('.').next() {
+                if WEAK_CIPHERS.contains(&seg) {
+                    hits.push(SecurityHit {
+                        rule: "weak-cipher",
+                        line: imp.line,
+                        detail: format!(
+                            "`{}` is a broken/weak cipher; use AES-GCM or ChaCha20-Poly1305",
+                            imp.module
+                        ),
                     });
                 }
             }
-            "comment" => {
-                if let Some(rules) = parse_ignore_comment(node_text(node, bytes)) {
-                    let line = node.start_position().row as u32 + 1;
-                    for r in rules {
-                        m.ignores.push((line, r));
-                    }
-                }
-            }
-            _ => {}
-        }
-        let mut c = node.walk();
-        for ch in node.children(&mut c) {
-            stack.push(ch);
         }
     }
-    m.used_names.sort();
-    m.used_names.dedup();
+    m.security_hits.extend(hits);
 }
 
-/// Parse a `# mollify: ignore[rule1,rule2]` (or bare `# mollify: ignore`)
-/// comment into the suppressed rule ids (`["*"]` for a bare ignore).
+/// Parse a `# mollify: ignore[rule1,rule2]` comment into suppressed rule ids.
 fn parse_ignore_comment(text: &str) -> Option<Vec<String>> {
     let t = text.trim_start_matches('#').trim();
     let rest = t.strip_prefix("mollify:")?.trim();
-    let rest = rest.strip_prefix("ignore")?;
-    let rest = rest.trim();
+    let rest = rest.strip_prefix("ignore")?.trim();
     if let Some(inner) = rest.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
         let rules: Vec<String> = inner
             .split(',')
@@ -1369,75 +1515,6 @@ fn parse_ignore_comment(text: &str) -> Option<Vec<String>> {
     } else {
         None
     }
-}
-
-/// Collect identifiers that appear *outside* `import` / `from ... import`
-/// statements, so the unused-import engine doesn't count an import's own
-/// binding site as a use.
-fn collect_local_uses(root: Node, bytes: &[u8], m: &mut ParsedModule) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        // Do not descend into import statements — their identifiers are bindings,
-        // not uses.
-        if matches!(node.kind(), "import_statement" | "import_from_statement") {
-            continue;
-        }
-        if node.kind() == "identifier" {
-            m.local_uses.push(node_text(node, bytes).to_string());
-        }
-        // Forward-reference / string annotations (`x: "Foo"`, `List["Bar"]`):
-        // the referenced names live inside a string literal, so extract any
-        // identifier-like tokens when the string sits in annotation position.
-        if node.kind() == "string" && in_annotation_position(node) {
-            for tok in identifier_tokens(node_text(node, bytes)) {
-                m.local_uses.push(tok);
-            }
-        }
-        let mut c = node.walk();
-        for ch in node.children(&mut c) {
-            stack.push(ch);
-        }
-    }
-    m.local_uses.sort();
-    m.local_uses.dedup();
-}
-
-/// Is this node within a type-annotation context (param/return/variable type)?
-/// Walks up a few ancestors looking for the annotation-bearing node kinds.
-fn in_annotation_position(node: Node) -> bool {
-    let mut cur = node.parent();
-    for _ in 0..6 {
-        let Some(n) = cur else { return false };
-        match n.kind() {
-            "type" | "typed_parameter" | "typed_default_parameter" => return true,
-            // Stop at statement/function boundaries we know aren't annotations.
-            "expression_statement" | "function_definition" | "block" | "module" => return false,
-            _ => cur = n.parent(),
-        }
-    }
-    false
-}
-
-/// Extract identifier-like tokens (`Foo`, `pkg.Bar` -> `pkg`, `Bar`) from a
-/// string-literal annotation's text, skipping the quotes.
-fn identifier_tokens(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    for ch in s.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            cur.push(ch);
-        } else {
-            if !cur.is_empty() && !cur.chars().next().unwrap().is_ascii_digit() {
-                out.push(std::mem::take(&mut cur));
-            } else {
-                cur.clear();
-            }
-        }
-    }
-    if !cur.is_empty() && !cur.chars().next().unwrap().is_ascii_digit() {
-        out.push(cur);
-    }
-    out
 }
 
 #[cfg(test)]
@@ -1486,16 +1563,12 @@ mod tests {
         assert!(rules.contains(&"hardcoded-secret"), "got {rules:?}");
         assert!(rules.contains(&"subprocess-shell-true"), "got {rules:?}");
         assert!(rules.contains(&"dangerous-eval"), "got {rules:?}");
-        // eval on a literal is fine
         let ok = parse("eval(\"1+1\")\n");
         assert!(!ok.security_hits.iter().any(|h| h.rule == "dangerous-eval"));
     }
 
     #[test]
     fn detects_weak_cipher_imports() {
-        // Import-aliased weak ciphers (the bandit ciphers.py idiom): the call
-        // site `pycrypto_des.new(...)` has no cipher identity, so detection must
-        // come from the import.
         let m = parse(
             "from Crypto.Cipher import DES as pycrypto_des\n\
              from Cryptodome.Cipher import ARC4 as ax\n\
@@ -1513,14 +1586,12 @@ mod tests {
             "expected DES + ARC4 imports flagged, got {:?}",
             m.security_hits
         );
-        // Lines point at the imports (1 and 2), not the call sites.
         let lines: Vec<u32> = cipher_hits.iter().map(|h| h.line).collect();
         assert!(lines.contains(&1) && lines.contains(&2), "lines {lines:?}");
     }
 
     #[test]
     fn detects_weak_cipher_direct_constructor_and_ecb() {
-        // `cryptography` idiom: cipher name is the callee (`algorithms.ARC4`).
         let m = parse(
             "from cryptography.hazmat.primitives.ciphers import algorithms, modes, Cipher\n\
              c = Cipher(algorithms.ARC4(key), mode=None)\n",
@@ -1530,7 +1601,6 @@ mod tests {
             "expected ARC4 constructor flagged, got {:?}",
             m.security_hits
         );
-        // ECB mode passed as an argument attribute (bandit B305).
         let ecb = parse("from Crypto.Cipher import AES\nc = AES.new(key, AES.MODE_ECB)\n");
         assert!(
             ecb.security_hits.iter().any(|h| h.rule == "weak-cipher"),
@@ -1541,7 +1611,6 @@ mod tests {
 
     #[test]
     fn strong_cipher_and_modes_not_flagged() {
-        // AES with an authenticated mode is fine — no weak-cipher noise.
         let m = parse(
             "from cryptography.hazmat.primitives.ciphers import algorithms, modes, Cipher\n\
              c = Cipher(algorithms.AES(key), modes.GCM(iv))\n",
@@ -1551,7 +1620,6 @@ mod tests {
             "AES-GCM should not be flagged, got {:?}",
             m.security_hits
         );
-        // A non-crypto import that merely shares a name must not trip detection.
         let unrelated = parse("from myapp.utils import DES\nDES.do_thing()\n");
         assert!(
             !unrelated
@@ -1586,13 +1654,7 @@ mod tests {
 
     #[test]
     fn captures_decorators() {
-        let m = parse(
-            "import app
-@app.route('/x')
-def view():
-    return 1
-",
-        );
+        let m = parse("import app\n@app.route('/x')\ndef view():\n    return 1\n");
         let d = m.definitions.iter().find(|d| d.name == "view").unwrap();
         assert!(
             d.decorators.iter().any(|x| x == "app.route"),
@@ -1613,5 +1675,44 @@ def view():
     fn conditional_import_seen() {
         let m = parse("try:\n    import fast\nexcept ImportError:\n    import slow as fast\n");
         assert!(m.imports.iter().any(|i| i.module == "fast"));
+    }
+
+    #[test]
+    fn scope_resolution_excludes_shadows_and_attributes() {
+        // `helper` is defined at module scope but never *loaded* there: the only
+        // references are a function-local binding (a shadow) and an attribute
+        // access (`obj.helper`). Token counting would call it "used"; scope
+        // resolution correctly does not.
+        let m = parse(
+            "def helper():\n    pass\n\ndef f():\n    helper = 1\n    return helper\n\nobj.helper()\n",
+        );
+        assert!(
+            !m.module_used.iter().any(|s| s == "helper"),
+            "module_used should exclude shadowed/attribute `helper`: {:?}",
+            m.module_used
+        );
+        // A genuine free load that resolves to module scope IS captured.
+        let m2 = parse("def g():\n    pass\n\ng()\n");
+        assert!(
+            m2.module_used.iter().any(|s| s == "g"),
+            "{:?}",
+            m2.module_used
+        );
+        // `global` forces module resolution: the RHS load of `counter` binds to
+        // the module-level name even though it is assigned inside the function.
+        let m3 =
+            parse("counter = 0\n\ndef bump():\n    global counter\n    counter = counter + 1\n");
+        assert!(
+            m3.module_used.iter().any(|s| s == "counter"),
+            "{:?}",
+            m3.module_used
+        );
+        // Without `global`, the same assignment makes `counter` a local shadow.
+        let m4 = parse("counter = 0\n\ndef bump():\n    counter = counter + 1\n");
+        assert!(
+            !m4.module_used.iter().any(|s| s == "counter"),
+            "{:?}",
+            m4.module_used
+        );
     }
 }

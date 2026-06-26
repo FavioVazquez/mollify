@@ -34,7 +34,7 @@ See the [README](../README.md#install) for the full matrix and the
 | `mollify types` | Fully-untyped public functions (annotation health). |
 | `mollify security` | Bandit-style security candidates. |
 | `mollify coverage --coverage-file <f>` | Reachable-but-never-executed functions (cold paths) from a coverage.py JSON report. |
-| `mollify supply-chain [--offline]` | Pinned/locked dependency versions matched against vulnerability advisories (live OSV by default; `--offline` uses the local DB). |
+| `mollify supply-chain [--offline]` | Pinned/locked versions **and declared ranges** matched against vulnerability advisories (ranges resolve via the installed venv, else flagged when they permit a vulnerable version). Live OSV by default; `--offline` uses the local DB. |
 | `mollify fix [--apply]` | Remove safe (certain) unused symbols. Dry-run unless `--apply`. |
 | `mollify explain [<rule>]` | Explain a rule (semantics/confidence/action); lists all rules with no argument. |
 | `mollify trace <module>` | A module's import neighborhood: what it imports and what imports it. |
@@ -101,9 +101,13 @@ mollify supply-chain
 
 ## Supply-chain advisories
 
-`mollify supply-chain` matches **pinned/locked** dependency versions
-(`requirements*.txt` `==` pins, `poetry.lock`, `uv.lock`) against vulnerability
-advisories.
+`mollify supply-chain` matches dependency versions against vulnerability
+advisories. **Pinned/locked** versions (`requirements*.txt` `==` pins,
+`poetry.lock`, `uv.lock`) are matched precisely. **Declared ranges**
+(`requirements` specifiers, PEP 621 `[project].dependencies`, Poetry caret/tilde)
+are resolved to the concrete **installed** version when a virtualenv is present;
+otherwise the range is flagged (at `uncertain` confidence) when it *permits* a
+vulnerable version.
 
 **Live by default, offline fallback.** Advisories change constantly, so the
 `supply-chain` command queries **OSV.dev live** for each pinned package (honoring

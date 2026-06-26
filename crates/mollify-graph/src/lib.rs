@@ -261,8 +261,19 @@ impl ModuleGraph {
     /// the name (to discount the definition site in the internal count).
     pub fn symbol_used(&self, module: FileId, name: &str, defs_named: u32) -> bool {
         let m = self.module(module);
-        // Internal use: appears more times than it is defined.
-        let internal = m.parsed.name_counts.get(name).copied().unwrap_or(0) > defs_named;
+        // Internal use. With scope/binding resolution, a top-level symbol is used
+        // iff some free `Name` load resolves to it (module_used) — precise: it
+        // ignores shadowing function-locals and attribute accesses. In modules
+        // with a dynamic sink (getattr/eval/importlib) we can't trust static
+        // resolution, so fall back to the conservative token-frequency count.
+        let internal = if m.parsed.has_dynamic_sink {
+            m.parsed.name_counts.get(name).copied().unwrap_or(0) > defs_named
+        } else {
+            m.parsed
+                .module_used
+                .binary_search_by(|s| s.as_str().cmp(name))
+                .is_ok()
+        };
         if internal {
             return true;
         }
