@@ -2,7 +2,7 @@ Find dead code in this repository with Mollify and summarize the findings. Molli
 
 Steps:
 1. Run `mollify dead-code --format json` (alias `mollify check`; or call the mollify MCP `mollify_dead_code` tool). Add `--path <dir>` if a subproject was specified.
-2. Group findings by `rule` (`unused-file`, `unused-export`, `unused-import`, `commented-code`) and by `confidence` (`certain` / `likely` / `uncertain`), with counts.
+2. Group findings by `rule` (`unused-file`, `unused-export`, `unused-import`, `unused-method`, `unused-attribute`, `unused-enum-member`, `unreachable-code`, `duplicate-export`, `commented-code`) and by `confidence` (`certain` / `likely` / `uncertain`), with counts.
 3. List every `certain` finding with its file:line, its `reason`, the `fingerprint`, and whether the action's `auto_fixable` is true.
 4. Do NOT apply any changes. Present a plan and ask for approval first; preview any proposed deletion (file, line, reason) before the user confirms.
 

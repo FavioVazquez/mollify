@@ -74,12 +74,17 @@ const ENTRY_DECORATORS: &[&str] = &[
     "teardown",
 ];
 
+/// True if a single decorator path marks a symbol as a framework entry point.
+pub fn is_framework_entry_decorator(dec: &str) -> bool {
+    let seg = dec.rsplit('.').next().unwrap_or(dec);
+    ENTRY_DECORATORS.contains(&seg)
+}
+
 /// True if any of this definition's decorators marks it as a framework entry.
 pub fn is_framework_entry(def: &Definition) -> bool {
-    def.decorators.iter().any(|d| {
-        let seg = d.rsplit('.').next().unwrap_or(d);
-        ENTRY_DECORATORS.contains(&seg)
-    })
+    def.decorators
+        .iter()
+        .any(|d| is_framework_entry_decorator(d))
 }
 
 #[cfg(test)]

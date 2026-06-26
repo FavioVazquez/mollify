@@ -19,7 +19,7 @@ Published:
 
 ## Crates (workspace)
 - `mollify-types` — the serde **contract** (kind-discriminated envelope). The public API.
-- `mollify-parse` — Python parsing (tree-sitter today, see ADR-0001).
+- `mollify-parse` — Python parsing via ruff_python_parser/ruff_python_ast (see ADR-0001).
 - `mollify-graph` — module/symbol graph + reachability + Tarjan cycles.
 - `mollify-core` — the engines: dead-code, deps, arch, complexity, hotspots, dupes, security, type-health, coverage, supply-chain (+ plugins, config, git gate, sarif, fix, fingerprint).
 - `mollify-cli` — the `mollify` binary (clap).

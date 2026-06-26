@@ -31,6 +31,36 @@ pub fn text(rule: &str) -> Option<&'static str> {
             module and not listed in `__all__`. Confidence: likely (dynamic access via \
             getattr downgrades it). Action: remove it or make it private."
         }
+        "unused-method" => {
+            "A class method never referenced anywhere as an attribute \
+            (`obj.m`/`self.m`/`Class.m`). Confidence: likely for private (`_m`), \
+            uncertain for public (may be an override/duck-typed/external API). \
+            Skips dunders, properties, static/class/abstract methods, and \
+            framework-registered methods. Action: remove it, or confirm the API use."
+        }
+        "unused-attribute" => {
+            "A class-level attribute/constant never referenced as an attribute \
+            and never read as a bare name. Confidence: likely for private, uncertain \
+            for public. Skips dataclass/Pydantic/NamedTuple/TypedDict fields. \
+            Action: remove it, or confirm dynamic use."
+        }
+        "unused-enum-member" => {
+            "An `enum.Enum` member never referenced. Confidence: uncertain — enums \
+            are often accessed dynamically (`Color[name]`, `Color(value)`, iteration, \
+            serialization). Action: remove it, or confirm dynamic/serialized use."
+        }
+        "unreachable-code" => {
+            "A statement that can never execute because it follows an \
+            unconditional terminator (`return`/`raise`/`break`/`continue`/`sys.exit()`) \
+            in the same block. Confidence: certain — provable syntactically. \
+            Action: remove the dead statement."
+        }
+        "private-type-leak" => {
+            "A public function/method whose signature references a private \
+            (`_Name`) type a caller cannot name (intentional `TypeVar`s are \
+            excluded). Confidence: likely. Action: make the type public, or stop \
+            exposing it in the public signature."
+        }
         "unused-dependency" => {
             "A distribution declared in pyproject/requirements but never \
             imported. Confidence: likely. Action: remove it from your dependency list."
@@ -43,6 +73,30 @@ pub fn text(rule: &str) -> Option<&'static str> {
         "missing-dependency" => {
             "A third-party module imported but absent from your declared \
             dependencies (not stdlib, not first-party). Action: add it to your project metadata."
+        }
+        "misplaced-dev-dependency" => {
+            "A distribution declared only in a dev/test group (PEP 735 \
+            `dependency-groups`, Poetry/uv/pdm dev deps) but imported from \
+            production (non-test) code (deptry DEP004). Confidence: likely. \
+            Action: move it to your runtime dependencies."
+        }
+        "unresolved-import" => {
+            "An import that looks internal — relative (`from . import x`) or under \
+            a first-party top-level package — but resolves to no module in the \
+            project. Confidence: certain for relative imports, likely for absolute \
+            (path hacks exist). Action: fix the module path or remove the broken import."
+        }
+        "duplicate-export" => {
+            "An `__init__.py` re-exports the same name from two different \
+            modules; the later import silently shadows the earlier, so one \
+            re-export is dead and the public API is ambiguous. Confidence: likely. \
+            Action: keep a single source for the name."
+        }
+        "private-import" => {
+            "A module imports another *package*'s private (`_name`) symbol, \
+            reaching past its public API (tach/knip interface enforcement). \
+            Intra-package and relative imports are not flagged. Confidence: likely. \
+            Action: import via the package's public API, or make the name public."
         }
         "circular-dependency" => {
             "A cycle of modules that import one another (Tarjan SCC). \
@@ -69,8 +123,8 @@ pub fn text(rule: &str) -> Option<&'static str> {
             configured threshold. Action: decompose it; extract helpers and flatten branches."
         }
         "duplication" => {
-            "A token sequence repeated across locations (Rabin-Karp clone). \
-            Action: extract the shared logic into one definition."
+            "A token sequence repeated across locations (exact clone found via a \
+            suffix array + LCP). Action: extract the shared logic into one definition."
         }
         "cold-code" => {
             "A statically reachable function with zero executed lines in the \
@@ -146,6 +200,20 @@ pub fn text(rule: &str) -> Option<&'static str> {
             "An HTTP request without a timeout can block indefinitely \
             (CWE-400). Action: pass timeout=."
         }
+        "flask-debug-true" => {
+            "A web app run with debug=True ships the interactive debugger — \
+            remote code execution in production (CWE-94). Action: drive debug \
+            from config/env and never enable it in production."
+        }
+        "jinja2-autoescape-false" => {
+            "A Jinja2 Environment created with autoescape=False risks XSS \
+            (CWE-79). Action: enable autoescaping (or use select_autoescape)."
+        }
+        "try-except-pass" => {
+            "A broad `except: pass` (bare or Exception/BaseException) silently \
+            swallows all errors (CWE-703). Confidence: uncertain. Action: log or \
+            handle the error, or narrow the exception type."
+        }
         _ => return None,
     };
     Some(t)
@@ -158,9 +226,17 @@ pub const RULES: &[&str] = &[
     "unused-import",
     "unused-variable",
     "unused-parameter",
+    "unused-method",
+    "unused-attribute",
+    "unused-enum-member",
+    "unreachable-code",
     "unused-dependency",
     "missing-dependency",
     "transitive-dependency",
+    "misplaced-dev-dependency",
+    "unresolved-import",
+    "duplicate-export",
+    "private-import",
     "circular-dependency",
     "layer-violation",
     "forbidden-import",
@@ -172,6 +248,7 @@ pub const RULES: &[&str] = &[
     "hotspot",
     "low-cohesion",
     "untyped-function",
+    "private-type-leak",
     "policy-violation",
     "dangerous-eval",
     "subprocess-shell-true",
@@ -184,6 +261,9 @@ pub const RULES: &[&str] = &[
     "insecure-random",
     "sql-injection",
     "request-without-timeout",
+    "flask-debug-true",
+    "jinja2-autoescape-false",
+    "try-except-pass",
     "vulnerable-dependency",
 ];
 

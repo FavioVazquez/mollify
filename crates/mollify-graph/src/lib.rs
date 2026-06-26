@@ -6,7 +6,7 @@
 //! `mollify-core` crate turns these into [`mollify_parse`]-backed findings.
 
 use camino::{Utf8Path, Utf8PathBuf};
-use mollify_parse::{ParsedModule, PyParser};
+use mollify_parse::{Import, ParsedModule, PyParser};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -24,6 +24,18 @@ pub struct ModuleInfo {
     pub parsed: ParsedModule,
     /// True if this module is an analysis root (entry point).
     pub is_entry: bool,
+}
+
+/// An import that looks first-party/relative but resolves to no module.
+#[derive(Debug, Clone)]
+pub struct UnresolvedImport {
+    /// The importing module's file path.
+    pub importer: Utf8PathBuf,
+    /// The import as written (`.sub.thing` for relative, `pkg.mod` for absolute).
+    pub display: String,
+    pub line: u32,
+    /// True for a relative import (`from . import x`) — these must be internal.
+    pub relative: bool,
 }
 
 /// The whole project graph.
@@ -223,6 +235,70 @@ impl ModuleGraph {
         self.by_dotted.get(dotted)
     }
 
+    /// True if an import target resolves to an internal module — directly, or as
+    /// `from pkg import submodule` where `pkg.submodule` is a module.
+    fn import_resolves(&self, target: &str, imp: &Import) -> bool {
+        if self.lookup(target).is_some() {
+            return true;
+        }
+        imp.names
+            .iter()
+            .any(|n| self.lookup(&format!("{target}.{n}")).is_some())
+    }
+
+    /// Imports that *look* internal but resolve to no module in the project:
+    /// every relative import that fails to resolve, plus absolute imports under a
+    /// first-party top-level package that fail to resolve. These are typically a
+    /// typo or a broken refactor — distinct from third-party `missing-dependency`.
+    pub fn unresolved_imports(&self) -> Vec<UnresolvedImport> {
+        // First-party top-level package names (the first segment of any module).
+        let mut first_party: FxHashSet<&str> = FxHashSet::default();
+        for k in self.by_dotted.keys() {
+            if let Some(top) = k.split('.').next() {
+                first_party.insert(top);
+            }
+        }
+        let mut out = Vec::new();
+        for m in &self.modules {
+            for imp in &m.parsed.imports {
+                let relative = imp.relative_dots > 0;
+                let target = if relative {
+                    resolve_relative(&m.dotted, imp.relative_dots, &imp.module)
+                } else {
+                    imp.module.clone()
+                };
+                if target.is_empty() || self.import_resolves(&target, imp) {
+                    continue;
+                }
+                if !relative {
+                    let top = target.split('.').next().unwrap_or(&target);
+                    if !first_party.contains(top) {
+                        continue; // third-party → handled by dependency hygiene
+                    }
+                }
+                let display = if relative {
+                    format!("{}{}", ".".repeat(imp.relative_dots as usize), imp.module)
+                } else {
+                    imp.module.clone()
+                };
+                out.push(UnresolvedImport {
+                    importer: m.path.clone(),
+                    display,
+                    line: imp.line,
+                    relative,
+                });
+            }
+        }
+        out.sort_by(|a, b| {
+            a.importer
+                .cmp(&b.importer)
+                .then(a.line.cmp(&b.line))
+                .then(a.display.cmp(&b.display))
+        });
+        out.dedup_by(|a, b| a.importer == b.importer && a.line == b.line && a.display == b.display);
+        out
+    }
+
     /// BFS mark-reachable from all entry modules over import edges.
     fn compute_reachability(&mut self) {
         let mut adj: FxHashMap<FileId, Vec<FileId>> = FxHashMap::default();
@@ -261,8 +337,19 @@ impl ModuleGraph {
     /// the name (to discount the definition site in the internal count).
     pub fn symbol_used(&self, module: FileId, name: &str, defs_named: u32) -> bool {
         let m = self.module(module);
-        // Internal use: appears more times than it is defined.
-        let internal = m.parsed.name_counts.get(name).copied().unwrap_or(0) > defs_named;
+        // Internal use. With scope/binding resolution, a top-level symbol is used
+        // iff some free `Name` load resolves to it (module_used) — precise: it
+        // ignores shadowing function-locals and attribute accesses. In modules
+        // with a dynamic sink (getattr/eval/importlib) we can't trust static
+        // resolution, so fall back to the conservative token-frequency count.
+        let internal = if m.parsed.has_dynamic_sink {
+            m.parsed.name_counts.get(name).copied().unwrap_or(0) > defs_named
+        } else {
+            m.parsed
+                .module_used
+                .binary_search_by(|s| s.as_str().cmp(name))
+                .is_ok()
+        };
         if internal {
             return true;
         }

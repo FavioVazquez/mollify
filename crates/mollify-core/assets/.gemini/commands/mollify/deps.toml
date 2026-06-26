@@ -1,4 +1,4 @@
-description = "Check dependency hygiene (unused / missing distributions)"
+description = "Check dependency hygiene (unused / missing / transitive / misplaced-dev distributions + unresolved imports)"
 prompt = """
 You are reviewing this repository with Mollify, a deterministic Python
 code-intelligence engine. Mollify emits evidence, not decisions.
@@ -8,7 +8,8 @@ Here is the current dependency output:
 
 Using ONLY this output (do not grep, do not guess, do not invent findings):
 
-1. Group findings by `rule` (`unused-dependency`, `missing-dependency`) and by
+1. Group findings by `rule` (`unused-dependency`, `missing-dependency`,
+   `transitive-dependency`, `misplaced-dev-dependency`, `unresolved-import`) and by
    `confidence`, with counts.
 2. List each finding with `location.path:location.line`, its `reason`, and the
    `fingerprint`.

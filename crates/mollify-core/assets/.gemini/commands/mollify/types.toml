@@ -1,4 +1,4 @@
-description = "Check type-annotation health (fully-untyped public functions)"
+description = "Check type-annotation health (untyped public functions + private-type leaks)"
 prompt = """
 You are reviewing this repository with Mollify, a deterministic Python
 code-intelligence engine. Mollify emits evidence, not decisions.
@@ -8,8 +8,10 @@ Here is the current type-health output:
 
 Using ONLY this output (do not grep, do not guess, do not invent findings):
 
-1. Group findings by `confidence`, with counts. The `rule` is `untyped-function`.
-2. List each fully-untyped public function with `location.path:location.line`,
+1. Group findings by `rule` (`untyped-function` for fully-untyped public
+   functions, `private-type-leak` for public signatures exposing a private
+   `_Type`) and by `confidence`, with counts.
+2. List each finding with `location.path:location.line`,
    its `reason`, and the `fingerprint`.
 3. Propose where to add annotations, ordered by impact. Do NOT modify files
    without explicit user confirmation.

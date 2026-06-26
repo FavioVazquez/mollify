@@ -59,13 +59,16 @@ Reading the kind-discriminated JSON envelope:
   security), `severity` (error|warn|off), `confidence` (certain|likely|uncertain),
   a stable `fingerprint`, a `reason`, and `location {path, line, end_line}`.
   Rules: unused-file, unused-export, unused-import, unused-variable,
-  unused-parameter, commented-code,
-  unused-dependency, missing-dependency, transitive-dependency, circular-dependency, layer-violation,
+  unused-parameter, unused-method, unused-attribute, unused-enum-member,
+  unreachable-code, commented-code,
+  unused-dependency, missing-dependency, transitive-dependency, misplaced-dev-dependency,
+  unresolved-import, duplicate-export, private-import, circular-dependency, layer-violation,
   forbidden-import, independence-violation, high-complexity, duplication,
-  untyped-function, cold-code, hotspot, low-cohesion, dangerous-eval, subprocess-shell-true,
+  untyped-function, private-type-leak, cold-code, hotspot, low-cohesion, dangerous-eval, subprocess-shell-true,
   sql-injection, unsafe-yaml-load, unsafe-deserialization, tls-verify-disabled,
   hardcoded-secret, weak-hash, weak-cipher, insecure-random,
-  request-without-timeout, vulnerable-dependency, policy-violation, plus custom policy ids.
+  request-without-timeout, flask-debug-true, jinja2-autoescape-false, try-except-pass,
+  vulnerable-dependency, policy-violation, plus custom policy ids.
 - Act only on `confidence: "certain"` without confirming with the user. Surface
   `likely`/`uncertain` with their reason and ask before changing code.
 - To silence a known-good finding, add its action's `suppression_comment` instead

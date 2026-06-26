@@ -1,15 +1,17 @@
-//! Duplication engine — token-based clone detection.
+//! Duplication engine — exact token-clone detection via suffix array + LCP.
 //!
-//! Algorithm (v1): a lightweight Python tokenizer produces a normalized token
-//! stream per file (string/number literals blinded → Type-1.5); equal-length
-//! windows are Rabin-Karp hashed; colliding windows are content-verified and
-//! **extended to maximal length**, then grouped into clone families. This is the
-//! jscpd/CPD family of detector.
-//!
-//! Planned upgrade (ADR/STATUS): a **SA-IS suffix array + LCP** engine for exact
-//! maximal-match detection in O(n), and identifier-blinding for full Type-2.
+//! Algorithm: a lightweight Python tokenizer produces a normalized token stream
+//! per file (string/number literals blinded → Type-1.5). Every file's tokens are
+//! concatenated into one global symbol sequence, separated by **unique
+//! sentinels** so no clone can straddle a file boundary. A linear-time **SA-IS
+//! suffix array** + **Kasai LCP** array is built over that sequence
+//! (`crate::suffix`); maximal runs of `LCP ≥ min_tokens` are exact maximal
+//! repeats — the clone classes. Longer clones are emitted first and cover the
+//! shorter shifted sub-windows they contain, so each duplicated region is
+//! reported once. O(n) construction, exact matches (no hash collisions).
 
 use crate::fingerprint::fingerprint;
+use crate::suffix::{lcp_kasai, suffix_array};
 use mollify_graph::ModuleGraph;
 use mollify_types::{Action, Category, Confidence, Finding, Location, Severity};
 use rustc_hash::FxHashMap;
@@ -31,95 +33,105 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     analyze_with(graph, MIN_TOKENS, MIN_LINES)
 }
 
-/// Duplication analysis with configurable `min_tokens` window and minimum
-/// clone line `min_lines` span.
+/// Duplication analysis with a configurable `min_tokens` clone window and
+/// minimum clone line `min_lines` span.
 pub fn analyze_with(graph: &ModuleGraph, min_tokens: usize, min_lines: u32) -> Vec<Finding> {
-    let min_tokens = min_tokens.max(8);
-    // Tokenize each module from disk (deterministic order via sorted modules).
+    let min_tokens = min_tokens.max(8) as u32;
+
+    // Tokenize each module (deterministic order via sorted modules).
     let mut files: Vec<(usize, Vec<Tok>)> = Vec::new();
     for (i, m) in graph.modules.iter().enumerate() {
         if let Ok(src) = std::fs::read_to_string(&m.path) {
             let toks = tokenize(&src);
-            if toks.len() >= min_tokens {
+            if toks.len() as u32 >= min_tokens {
                 files.push((i, toks));
             }
         }
     }
+    if files.is_empty() {
+        return Vec::new();
+    }
 
-    // Window hash -> occurrences (file-list-index, token-start).
-    let mut map: FxHashMap<u64, Vec<(usize, usize)>> = FxHashMap::default();
+    // Intern token strings to compact ids in 1..=D (0 reserved for the sentinel).
+    let mut dict: FxHashMap<&str, u32> = FxHashMap::default();
+    for (_m, toks) in &files {
+        for t in toks {
+            let next = dict.len() as u32 + 1;
+            dict.entry(t.norm.as_str()).or_insert(next);
+        }
+    }
+    let d = dict.len() as u32;
+
+    // Build the global sequence: file tokens, a unique separator after each file,
+    // and a single terminating 0. Separators get ids `d+1 ..= d+files.len()` so
+    // they are unique and larger than any token — no clone can cross them.
+    let mut seq: Vec<u32> = Vec::new();
+    let mut pos_map: Vec<Option<(usize, usize)>> = Vec::new();
     for (fi, (_m, toks)) in files.iter().enumerate() {
-        for start in 0..=toks.len() - min_tokens {
-            let h = window_hash(&toks[start..start + min_tokens]);
-            map.entry(h).or_default().push((fi, start));
+        for (ti, t) in toks.iter().enumerate() {
+            seq.push(dict[t.norm.as_str()]);
+            pos_map.push(Some((fi, ti)));
+        }
+        seq.push(d + 1 + fi as u32); // unique separator
+        pos_map.push(None);
+    }
+    seq.push(0); // unique smallest terminator
+    pos_map.push(None);
+
+    let alphabet_size = (d + files.len() as u32 + 1) as usize + 1;
+    let sa = suffix_array(&seq, alphabet_size);
+    let lcp = lcp_kasai(&seq, &sa);
+    let n = seq.len();
+
+    // Collect maximal runs of LCP ≥ min_tokens. Each run groups the suffixes
+    // `sa[lo..=hi]`; their common prefix length is the minimum LCP in the run.
+    let mut blocks: Vec<(usize, usize, u32)> = Vec::new();
+    let mut k = 1;
+    while k < n {
+        if lcp[k] >= min_tokens {
+            let lo = k - 1;
+            let mut minl = u32::MAX;
+            while k < n && lcp[k] >= min_tokens {
+                minl = minl.min(lcp[k]);
+                k += 1;
+            }
+            blocks.push((lo, k - 1, minl));
+        } else {
+            k += 1;
         }
     }
 
-    // Deterministic iteration over candidate hashes.
-    let mut hashes: Vec<u64> = map.keys().copied().collect();
-    hashes.sort_unstable();
+    // Emit longer clones first so they cover the shorter shifted sub-windows.
+    blocks.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
 
-    let mut covered: FxHashMap<usize, Vec<(usize, usize)>> = FxHashMap::default(); // fi -> covered [start,end) token ranges
+    let mut covered: FxHashMap<usize, Vec<(usize, usize)>> = FxHashMap::default();
     let mut findings = Vec::new();
 
-    for h in hashes {
-        let occs = &map[&h];
-        if occs.len() < 2 {
-            continue;
-        }
-        // Group occurrences whose min_tokens window content actually matches the
-        // first (guards against hash collisions).
-        let mut sorted = occs.clone();
-        sorted.sort_unstable();
-        let (f0, s0) = sorted[0];
-        if is_covered(&covered, f0, s0) {
-            continue;
-        }
-        let ref_win: Vec<&str> = files[f0].1[s0..s0 + min_tokens]
-            .iter()
-            .map(|t| t.norm.as_str())
-            .collect();
-        let group: Vec<(usize, usize)> = sorted
-            .iter()
-            .copied()
-            .filter(|&(fi, st)| {
-                !is_covered(&covered, fi, st)
-                    && files[fi].1[st..st + min_tokens]
-                        .iter()
-                        .map(|t| t.norm.as_str())
-                        .eq(ref_win.iter().copied())
-            })
-            .collect();
-        if group.len() < 2 {
-            continue;
-        }
-        // Extend to maximal common length across all group members.
-        let mut len = min_tokens;
-        loop {
-            let next: Option<&str> = group
-                .first()
-                .and_then(|&(fi, st)| files[fi].1.get(st + len).map(|t| t.norm.as_str()));
-            let Some(tok) = next else { break };
-            let all_match = group
-                .iter()
-                .all(|&(fi, st)| files[fi].1.get(st + len).map(|t| t.norm.as_str()) == Some(tok));
-            if all_match {
-                len += 1;
-            } else {
-                break;
+    for (lo, hi, len) in blocks {
+        let len = len as usize;
+        // Gather this class's occurrences (skip separators and already-covered).
+        let mut occ: Vec<(usize, usize)> = Vec::new();
+        for &si in &sa[lo..=hi] {
+            if let Some((fi, ti)) = pos_map[si as usize] {
+                if !is_covered(&covered, fi, ti) {
+                    occ.push((fi, ti));
+                }
             }
         }
-
-        // Mark covered and build instance locations.
-        let mut instances = Vec::new();
-        for &(fi, st) in &group {
-            covered.entry(fi).or_default().push((st, st + len));
-            let toks = &files[fi].1;
-            let start_line = toks[st].line;
-            let end_line = toks[st + len - 1].line;
-            instances.push((files[fi].0, start_line, end_line));
+        occ.sort_unstable();
+        occ.dedup();
+        if occ.len() < 2 {
+            continue;
         }
-        // Dedup identical (module,line) instances; require min line span.
+
+        // Mark covered and build instance line ranges.
+        let mut instances: Vec<(usize, u32, u32)> = Vec::new();
+        for &(fi, ti) in &occ {
+            covered.entry(fi).or_default().push((ti, ti + len));
+            let toks = &files[fi].1;
+            let end_idx = (ti + len - 1).min(toks.len() - 1);
+            instances.push((files[fi].0, toks[ti].line, toks[end_idx].line));
+        }
         instances.sort();
         instances.dedup();
         let span = instances
@@ -131,6 +143,10 @@ pub fn analyze_with(graph: &ModuleGraph, min_tokens: usize, min_lines: u32) -> V
             continue;
         }
 
+        // Stable fingerprint from the clone's normalized content + length.
+        let (cfi, cti) = occ[0];
+        let content_hash = clone_hash(&files[cfi].1[cti..cti + len]);
+
         let locs: Vec<String> = instances
             .iter()
             .map(|(mi, s, _e)| format!("{}:{}", graph.modules[*mi].path, s))
@@ -138,7 +154,7 @@ pub fn analyze_with(graph: &ModuleGraph, min_tokens: usize, min_lines: u32) -> V
         let rule = "duplication";
         let (first_mi, first_s, first_e) = instances[0];
         findings.push(Finding {
-            fingerprint: fingerprint(rule, &[&format!("{h:016x}"), &len.to_string()]),
+            fingerprint: fingerprint(rule, &[&format!("{content_hash:016x}"), &len.to_string()]),
             rule: rule.into(),
             category: Category::Duplication,
             severity: Severity::Warn,
@@ -179,7 +195,7 @@ fn is_covered(covered: &FxHashMap<usize, Vec<(usize, usize)>>, fi: usize, start:
         .is_some_and(|ranges| ranges.iter().any(|&(s, e)| start >= s && start < e))
 }
 
-fn window_hash(toks: &[Tok]) -> u64 {
+fn clone_hash(toks: &[Tok]) -> u64 {
     let mut buf = String::new();
     for t in toks {
         buf.push_str(&t.norm);
@@ -213,8 +229,6 @@ fn tokenize(src: &str) -> Vec<Tok> {
             }
             continue;
         }
-        // Strings (incl. triple-quoted). Ignore prefixes like r, b, f handled as
-        // identifiers immediately followed by a quote → treat the quote here.
         if c == '"' || c == '\'' {
             let (consumed, lines) = consume_string(&b[i..], c);
             i += consumed;
@@ -226,13 +240,11 @@ fn tokenize(src: &str) -> Vec<Tok> {
             continue;
         }
         if c.is_ascii_digit() {
-            let start = i;
             while i < b.len()
                 && (b[i].is_ascii_alphanumeric() || b[i] == b'.' || b[i] == b'_' || b[i] == b'x')
             {
                 i += 1;
             }
-            let _ = start;
             out.push(Tok {
                 norm: "NUM".into(),
                 line,
@@ -244,8 +256,7 @@ fn tokenize(src: &str) -> Vec<Tok> {
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                 i += 1;
             }
-            // Identifier possibly a string prefix (r"...", f"..."): if next is a
-            // quote, fold it into a STR token.
+            // String prefix (r"...", f"..."): fold into a STR token.
             if i < b.len() && (b[i] == b'"' || b[i] == b'\'') {
                 let q = b[i] as char;
                 let (consumed, lines) = consume_string(&b[i..], q);
@@ -263,7 +274,6 @@ fn tokenize(src: &str) -> Vec<Tok> {
             });
             continue;
         }
-        // Operator / punctuation — single char token.
         out.push(Tok {
             norm: c.to_string(),
             line,
@@ -291,7 +301,6 @@ fn consume_string(b: &[u8], quote: char) -> (usize, u32) {
         if b[i] == b'\n' {
             lines += 1;
             if !triple {
-                // unterminated single-line string; stop at newline
                 return (i, lines);
             }
             i += 1;
@@ -332,7 +341,6 @@ mod tests {
     }
 
     fn block(name: &str) -> String {
-        // ~10 lines of identical-structure code.
         format!(
             "def {name}(items):\n    total = 0\n    for it in items:\n        if it > 0:\n            total += it\n        else:\n            total -= it\n    result = total * 2\n    print(result)\n    return result\n"
         )
@@ -358,6 +366,27 @@ mod tests {
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         assert!(analyze(&g).is_empty());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn reports_each_duplicated_region_once() {
+        // Three identical copies of a long block → a single clone family with
+        // three locations, not a cascade of overlapping sub-window findings.
+        let d = temp("triple");
+        write(&d, "a.py", &block("f"));
+        write(&d, "b.py", &block("f"));
+        write(&d, "c.py", &block("f"));
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let dups: Vec<_> = f.iter().filter(|x| x.rule == "duplication").collect();
+        assert_eq!(dups.len(), 1, "expected one clone family, got {dups:?}");
+        assert!(
+            dups[0].reason.contains("3 locations"),
+            "reason: {}",
+            dups[0].reason
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 }

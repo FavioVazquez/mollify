@@ -1,4 +1,4 @@
-description = "Find dead code (unused files/exports/imports) and summarize prioritized candidates"
+description = "Find dead code (unused files/exports/imports/members/enum members, unreachable code, duplicate re-exports) and summarize prioritized candidates"
 prompt = """
 You are reviewing this repository with Mollify, a deterministic Python
 code-intelligence engine. Mollify emits evidence, not decisions — every finding
@@ -10,7 +10,9 @@ Here is the current dead-code output:
 Using ONLY this output (do not grep, do not guess, do not invent findings):
 
 1. Group findings by `rule` (`unused-file`, `unused-export`, `unused-import`,
-   `commented-code`) and by `confidence` (certain/likely/uncertain), with counts.
+   `unused-method`, `unused-attribute`, `unused-enum-member`, `unreachable-code`,
+   `duplicate-export`, `commented-code`) and by `confidence`
+   (certain/likely/uncertain), with counts.
 2. List every `confidence: certain` finding with `location.path:location.line`,
    its `reason`, the `fingerprint`, and whether an action is `auto_fixable: true`.
 3. Before recommending deletion, verify reachability with `mollify trace <module>`

@@ -1,9 +1,10 @@
 //! # mollify-core
 //!
 //! Analysis orchestration. Builds the graph, runs the engines, and assembles the
-//! kind-discriminated [`mollify_types::Report`] envelopes. Engines implemented:
-//! dead-code and dependency hygiene (Phase 1). Duplication, complexity, and
-//! architecture engines land in Phase 2 (see `docs/STATUS.md`).
+//! kind-discriminated [`mollify_types::Report`] envelopes. Engines: dead-code,
+//! dependency hygiene, architecture (cycles/layers/contracts/policies),
+//! complexity + hotspots, duplication, type-health, security, cohesion,
+//! commented-code, coverage, and supply-chain — all folded into `audit`.
 
 use camino::Utf8Path;
 use mollify_graph::{discover_python_files, ModuleGraph};
@@ -13,6 +14,7 @@ use mollify_types::{
 };
 
 pub mod agents;
+pub mod apihygiene;
 pub mod arch;
 pub mod baseline;
 pub mod cohesion;
@@ -30,11 +32,13 @@ pub mod git;
 pub mod hotspots;
 pub mod installed;
 pub mod known;
+pub mod members;
 pub mod metrics;
 pub mod plugins;
 pub mod policy;
 pub mod sarif;
 pub mod security;
+pub mod suffix;
 pub mod supplychain;
 pub mod trace;
 pub mod typehealth;
@@ -92,6 +96,7 @@ pub fn apply_suppressions(graph: &ModuleGraph, findings: &mut Vec<Finding>) {
 pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
     let mut findings = deadcode::analyze(&graph);
+    findings.extend(members::analyze(&graph));
     findings.extend(commented::analyze(&graph));
     finalize(&config::load(root), &graph, findings)
 }
@@ -99,7 +104,9 @@ pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
 /// `mollify deps` — dependency hygiene.
 pub fn deps_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(&config::load(root), &graph, deps::analyze(root, &graph))
+    let mut findings = deps::analyze(root, &graph);
+    findings.extend(deps::unresolved(&graph));
+    finalize(&config::load(root), &graph, findings)
 }
 
 /// `mollify arch` — circular dependencies (boundary presets later).
@@ -109,6 +116,7 @@ pub fn arch_report(root: &Utf8Path) -> FindingsReport {
     let mut findings = arch::analyze(&graph);
     findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
     findings.extend(arch::analyze_contracts(&graph, &cfg.contracts));
+    findings.extend(arch::private_imports(&graph));
     findings.extend(policy::analyze(&graph, &cfg.policies));
     finalize(&cfg, &graph, findings)
 }
@@ -131,10 +139,12 @@ pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
     finalize(&cfg, &graph, findings)
 }
 
-/// `mollify types` — type-annotation health.
+/// `mollify types` — type-annotation health + API-hygiene (private-type leaks).
 pub fn types_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(&config::load(root), &graph, typehealth::analyze(&graph))
+    let mut findings = typehealth::analyze(&graph);
+    findings.extend(apihygiene::analyze(&graph));
+    finalize(&config::load(root), &graph, findings)
 }
 
 /// `mollify security` — security candidates (deterministic; review before acting).
@@ -377,11 +387,14 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     let cfg = config::load(root);
     let mut findings: Vec<Finding> = Vec::new();
     findings.extend(deadcode::analyze(&graph));
+    findings.extend(members::analyze(&graph));
     findings.extend(commented::analyze(&graph));
     findings.extend(deps::analyze(root, &graph));
+    findings.extend(deps::unresolved(&graph));
     findings.extend(arch::analyze(&graph));
     findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
     findings.extend(arch::analyze_contracts(&graph, &cfg.contracts));
+    findings.extend(arch::private_imports(&graph));
     findings.extend(policy::analyze(&graph, &cfg.policies));
     findings.extend(complexity::analyze_with(
         &graph,
@@ -394,6 +407,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
         cfg.dup_min_lines,
     ));
     findings.extend(typehealth::analyze(&graph));
+    findings.extend(apihygiene::analyze(&graph));
     findings.extend(security::analyze(&graph));
     findings.extend(hotspots::analyze(root, &graph));
     findings.extend(cohesion::analyze(&graph));

@@ -22,10 +22,9 @@ Its one rule: **no AI invents findings.** Every result is a piece of determinist
 evidence with a stable fingerprint, a confidence tier, and a human-readable reason.
 Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
-> **Project status:** early but real. The core analysis phases are substantially
-> implemented, tested (99 tests), and dogfooded; CI is green. See
-> [`docs/adr/`](docs/adr) for design decisions. Honest about its edges — see
-> *Known limitations* below.
+> **Project status:** early but real. The core analysis phases are implemented,
+> tested (100+ tests), and dogfooded; CI is green. See [`docs/adr/`](docs/adr)
+> for design decisions and *Engineering notes* below for how it works.
 
 ## Why Mollify
 
@@ -46,13 +45,13 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 | Area | Command | Rules |
 |---|---|---|
-| **Dead code** | `mollify dead-code` | `unused-file`, `unused-export`, `unused-import`, `unused-variable`, `unused-parameter`, `commented-code` |
-| **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency`, `transitive-dependency` (pyproject + requirements/uv/pdm; venv-aware) |
-| **Architecture** | `mollify arch` | `circular-dependency`, `layer-violation`, `forbidden-import`, `independence-violation`, custom policies |
+| **Dead code** | `mollify dead-code` | `unused-file`, `unused-export`, `unused-import`, `unused-variable`, `unused-parameter`, `unused-method`, `unused-attribute`, `unused-enum-member`, `unreachable-code`, `duplicate-export`, `commented-code` |
+| **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency`, `transitive-dependency`, `misplaced-dev-dependency`, `unresolved-import` (pyproject + requirements/uv/pdm; venv-aware) |
+| **Architecture** | `mollify arch` | `circular-dependency`, `layer-violation`, `forbidden-import`, `independence-violation`, `private-import`, custom policies |
 | **Complexity & cohesion** | `mollify complexity` | `high-complexity`, `hotspot` (churn × complexity), `low-cohesion` (LCOM*) |
 | **Duplication** | `mollify dupes` | `duplication` (clone families) |
-| **Type health** | `mollify types` | `untyped-function` |
-| **Security** | `mollify security` | eval/exec, shell, `sql-injection`, weak hash/cipher, insecure-random, unsafe deserialization, TLS, secrets, missing-timeout — each with a CWE id |
+| **Type health** | `mollify types` | `untyped-function`, `private-type-leak` |
+| **Security** | `mollify security` | eval/exec, shell, `sql-injection`, weak hash/cipher, insecure-random, unsafe deserialization, TLS, secrets, missing-timeout, Flask debug, Jinja2 autoescape, broad `except: pass` — each with a CWE id |
 | **Cold paths** | `mollify coverage --coverage-file` | `cold-code` (reachable but never executed) |
 | **Supply chain** | `mollify supply-chain` | `vulnerable-dependency` (live OSV; offline DB fallback) |
 | **Metrics** | `mollify metrics` | Maintainability Index, Halstead, raw LOC, per-file complexity |
@@ -218,7 +217,7 @@ Scaffold any of these into a repo with `mollify init --agent <name>` (or `--all`
 
 A Cargo workspace; data flows parse → graph → engines → report:
 
-`mollify-types` (JSON contract) · `mollify-parse` (Python parsing, tree-sitter) ·
+`mollify-types` (JSON contract) · `mollify-parse` (Python parsing, ruff AST) ·
 `mollify-graph` (module/symbol graph + reachability + cycles) · `mollify-core`
 (the engines) · `mollify-cli` (`mollify`) · `mollify-mcp` (MCP server) ·
 `mollify-lsp` (Language Server).
@@ -229,33 +228,48 @@ See [docs/architecture.md](docs/architecture.md).
 
 | | vulture | ruff | deptry | tach | radon | jscpd | bandit | **Mollify** |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| Whole-project dead code | ~ | – | – | – | – | – | – | ✅ (reachability + tiers) |
-| Dependency hygiene | – | – | ✅ | – | – | – | – | ✅ |
+| Whole-project dead code | ✅ | – | – | – | – | – | – | ✅ (reachability + tiers) |
+| Unused class members / enum members | ✅ | – | – | – | – | – | – | ✅ |
+| Unreachable code | ✅ | ~ | – | – | – | – | – | ✅ |
+| Dependency hygiene (unused/missing/transitive) | – | – | ✅ | – | – | – | – | ✅ |
+| Misplaced dev dependency | – | – | ✅ | – | – | – | – | ✅ |
+| Unresolved / broken imports | – | ~ | – | – | – | – | – | ✅ |
 | Circular deps | – | – | – | ✅ | – | – | – | ✅ |
+| Boundaries / interface (private-import) | – | – | – | ✅ | – | – | – | ✅ |
 | Complexity | – | ~ | – | – | ✅ | – | – | ✅ |
 | Churn × complexity | – | – | – | – | – | – | – | ✅ |
 | Duplication | – | – | – | – | – | ✅ | – | ✅ |
-| Type health | – | – | – | – | – | – | – | ✅ |
-| Security candidates | – | ~ | – | – | – | – | ✅ | ✅ |
+| Type health + private-type leaks | – | ~ | – | – | – | – | – | ✅ |
+| Security candidates (+CWE) | – | ~ | – | – | – | – | ✅ | ✅ |
 | One deterministic pass + agent/MCP contract | – | – | – | – | – | – | – | ✅ |
 
 `~` = partial. Mollify's wedge is the **unified deterministic pass** with one
 contract — individual tools each already do a piece well; Mollify unifies them
 into a single evidence stream.
 
-## Known limitations (we're honest about these)
+## Engineering notes
 
-- Built on **tree-sitter**, not the ruff AST ([ADR-0001](docs/adr/0001-parser-tree-sitter.md)) —
-  GitHub git-deps are blocked in the build env; ruff is the planned migration.
-- Symbol usage is name-table-assisted, not full scope/binding resolution.
-- Duplication is Rabin-Karp token matching (SA-IS+LCP is the planned upgrade).
-- Supply-chain matching needs **pinned/locked** versions (requirements `==`,
-  poetry/uv lockfiles); unpinned ranges can't be matched precisely. The
-  `supply-chain` command fetches OSV live by default (offline DB fallback);
-  `mollify audit` stays fully offline/deterministic, reading only the cached DB.
-- Remaining roadmap items are lower-impact (e.g. LSP keystroke-incremental
-  reparse, LibCST format-preserving fixes, transitive-dep detection which needs
-  the installed environment).
+Mollify is built to be precise and dependency-light:
+
+- **Full-fidelity parsing.** Built on Astral's `ruff_python_parser` / `ruff_python_ast`
+  — the same parser behind `ruff` — pinned to a crates.io release, so every
+  distribution channel builds the identical binary ([ADR-0001](docs/adr/0001-parser-tree-sitter.md)).
+- **Real scope/binding resolution.** Reachability resolves each name *load* to its
+  binding (LEGB), so shadowing function-locals and attribute accesses never mask a
+  dead top-level symbol.
+- **Exact duplication.** A linear-time **SA-IS suffix array + LCP** finds exact
+  maximal token clones — no hash-collision guessing, scales to large repos.
+- **Supply-chain.** Matches pinned/locked versions precisely; for declared
+  **ranges** it resolves the concrete installed version when a virtualenv is
+  present, otherwise flags (at `uncertain` confidence) when the range *permits* a
+  vulnerable version. `supply-chain` queries OSV live by default (offline DB
+  fallback); `mollify audit` stays fully offline and deterministic.
+- **Candidate-producer model.** Security findings are syntactic *candidates*
+  (never claimed as proven vulnerabilities), surfaced with a confidence tier — by
+  design, not a gap.
+
+There are no known correctness limitations; remaining roadmap items are
+performance optimizations (e.g. Salsa keystroke-incremental reparse for the LSP).
 
 ## Contributing
 

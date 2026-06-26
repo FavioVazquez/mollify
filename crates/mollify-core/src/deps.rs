@@ -21,6 +21,8 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     let pyproject_path = root.join("pyproject.toml");
     let mut declared = FxHashSet::default();
+    // Dependencies declared *only* in dev/test groups (deptry DEP004 input).
+    let mut dev_only: FxHashSet<String> = FxHashSet::default();
     // Manifest the findings point at (pyproject if present, else a requirements file).
     let mut manifest = pyproject_path.clone();
 
@@ -28,7 +30,14 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     if let Ok(text) = std::fs::read_to_string(&pyproject_path) {
         has_manifest = true;
         if let Ok(table) = text.parse::<toml::Table>() {
-            declared.extend(declared_dependencies(&toml::Value::Table(table)));
+            let val = toml::Value::Table(table);
+            declared.extend(declared_dependencies(&val));
+            let prod = prod_dependencies(&val);
+            for d in dev_dependencies(&val) {
+                if !prod.contains(&d) {
+                    dev_only.insert(d);
+                }
+            }
         }
     }
     // requirements*.txt (pip / pip-tools) — `name[extras]op version` per line.
@@ -150,6 +159,103 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
         });
     }
 
+    // Misplaced dev dependency (deptry DEP004): a dependency declared only in a
+    // dev/test group but imported from production (non-test) code. Reported once
+    // per distribution, pointing at the manifest.
+    if !dev_only.is_empty() {
+        let mut seen: FxHashSet<String> = FxHashSet::default();
+        for m in &graph.modules {
+            if is_test_module(&m.path) {
+                continue;
+            }
+            for dist in module_imported_dists(m, &known, &internal_tops, installed.as_ref()) {
+                if !dev_only.contains(&dist) || !seen.insert(dist.clone()) {
+                    continue;
+                }
+                let rule = "misplaced-dev-dependency";
+                findings.push(Finding {
+                    fingerprint: fingerprint(rule, &[&dist]),
+                    rule: rule.into(),
+                    category: Category::DependencyHygiene,
+                    severity: Severity::Warn,
+                    confidence,
+                    attribution: None,
+                    reason: format!(
+                        "`{dist}` is declared only as a dev dependency but is imported by production module `{}`",
+                        m.dotted
+                    ),
+                    location: Location {
+                        path: pyproject_path.clone(),
+                        line: 1,
+                        column: 0,
+                        end_line: None,
+                    },
+                    actions: vec![Action {
+                        kind: "move-dependency".into(),
+                        description: format!(
+                            "Move `{dist}` from the dev group to runtime dependencies"
+                        ),
+                        auto_fixable: false,
+                        suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+                    }],
+                });
+            }
+        }
+    }
+
+    findings
+}
+
+/// Flag imports that look first-party or relative but resolve to no module in
+/// the project (typo / broken refactor) — distinct from `missing-dependency`,
+/// which is third-party. Relative imports are `certain` (they *must* be
+/// internal); first-party absolute imports are `likely` (path hacks exist).
+/// Independent of any manifest, so it runs even with no `pyproject.toml`.
+pub fn unresolved(graph: &ModuleGraph) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for u in graph.unresolved_imports() {
+        let rule = "unresolved-import";
+        let confidence = if u.relative {
+            Confidence::Certain
+        } else {
+            Confidence::Likely
+        };
+        let kind = if u.relative {
+            "relative"
+        } else {
+            "first-party"
+        };
+        findings.push(Finding {
+            fingerprint: fingerprint(
+                rule,
+                &[u.importer.as_str(), &u.line.to_string(), &u.display],
+            ),
+            rule: rule.into(),
+            category: Category::DependencyHygiene,
+            severity: Severity::Warn,
+            confidence,
+            attribution: None,
+            reason: format!(
+                "{kind} import `{}` does not resolve to any module in the project",
+                u.display
+            ),
+            location: Location {
+                path: u.importer.clone(),
+                line: u.line,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![Action {
+                kind: "fix-import".into(),
+                description: format!(
+                    "Fix or remove the broken import `{}` (check the module path / refactor)",
+                    u.display
+                ),
+                auto_fixable: false,
+                suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+            }],
+        });
+    }
     findings
 }
 
@@ -331,6 +437,142 @@ fn used_distributions(
     set
 }
 
+/// Distributions declared in **dev/test/lint/docs/typing** groups only (PEP 735
+/// `dependency-groups`, Poetry dev groups + legacy dev-dependencies, uv/pdm dev
+/// dependencies). Runtime `optional-dependencies` extras are intentionally
+/// excluded (they are shipped extras, not dev tooling).
+fn dev_dependencies(value: &toml::Value) -> FxHashSet<String> {
+    let mut set = FxHashSet::default();
+    let add_spec_array = |arr: &toml::Value, set: &mut FxHashSet<String>| {
+        if let Some(arr) = arr.as_array() {
+            for item in arr {
+                if let Some(name) = item.as_str().and_then(spec_name) {
+                    set.insert(name);
+                }
+            }
+        }
+    };
+    // PEP 735 dependency-groups (dev/test/docs/...).
+    if let Some(tbl) = value.get("dependency-groups").and_then(|t| t.as_table()) {
+        for (_g, arr) in tbl {
+            add_spec_array(arr, &mut set);
+        }
+    }
+    // Poetry named groups (dev/test/lint/docs/typing).
+    if let Some(groups) = value
+        .get("tool")
+        .and_then(|t| t.get("poetry"))
+        .and_then(|p| p.get("group"))
+        .and_then(|g| g.as_table())
+    {
+        for (_g, gv) in groups {
+            if let Some(tbl) = gv.get("dependencies").and_then(|d| d.as_table()) {
+                for name in tbl.keys() {
+                    set.insert(normalize_dist(name));
+                }
+            }
+        }
+    }
+    // Legacy Poetry dev-dependencies (table keyed by name).
+    if let Some(tbl) = value
+        .get("tool")
+        .and_then(|t| t.get("poetry"))
+        .and_then(|p| p.get("dev-dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        for name in tbl.keys() {
+            set.insert(normalize_dist(name));
+        }
+    }
+    // uv dev-dependencies (array).
+    if let Some(arr) = value
+        .get("tool")
+        .and_then(|t| t.get("uv"))
+        .and_then(|u| u.get("dev-dependencies"))
+    {
+        add_spec_array(arr, &mut set);
+    }
+    // pdm dev-dependencies (table of group → array).
+    if let Some(tbl) = value
+        .get("tool")
+        .and_then(|t| t.get("pdm"))
+        .and_then(|p| p.get("dev-dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        for (_g, arr) in tbl {
+            add_spec_array(arr, &mut set);
+        }
+    }
+    set
+}
+
+/// Distributions declared as **runtime** dependencies (`[project].dependencies`
+/// and `[tool.poetry.dependencies]`).
+fn prod_dependencies(value: &toml::Value) -> FxHashSet<String> {
+    let mut set = FxHashSet::default();
+    if let Some(arr) = value
+        .get("project")
+        .and_then(|p| p.get("dependencies"))
+        .and_then(|d| d.as_array())
+    {
+        for item in arr {
+            if let Some(name) = item.as_str().and_then(spec_name) {
+                set.insert(name);
+            }
+        }
+    }
+    if let Some(tbl) = value
+        .get("tool")
+        .and_then(|t| t.get("poetry"))
+        .and_then(|p| p.get("dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        for name in tbl.keys() {
+            set.insert(normalize_dist(name));
+        }
+    }
+    set
+}
+
+/// Distributions imported by a single module (external, non-stdlib, non-internal).
+fn module_imported_dists(
+    m: &mollify_graph::ModuleInfo,
+    known: &Known,
+    internal: &FxHashSet<String>,
+    installed: Option<&crate::installed::Installed>,
+) -> FxHashSet<String> {
+    let mut set = FxHashSet::default();
+    for imp in &m.parsed.imports {
+        if imp.relative_dots > 0 {
+            continue;
+        }
+        let Some(top) = imp.module.split('.').next() else {
+            continue;
+        };
+        if top.is_empty() || internal.contains(top) || known.is_stdlib(top) {
+            continue;
+        }
+        let dist = installed
+            .and_then(|i| i.import_to_dist.get(top).cloned())
+            .unwrap_or_else(|| known.dist_for_import(top));
+        set.insert(dist);
+    }
+    set
+}
+
+/// True if a module path is test/dev code (so importing dev deps there is fine).
+fn is_test_module(path: &Utf8Path) -> bool {
+    let p = path.as_str();
+    let name = path.file_name().unwrap_or("");
+    p.contains("/tests/")
+        || p.contains("/test/")
+        || p.starts_with("tests/")
+        || p.starts_with("test/")
+        || name.starts_with("test_")
+        || name.ends_with("_test.py")
+        || name == "conftest.py"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +585,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         Utf8PathBuf::from_path_buf(base).unwrap()
+    }
+
+    #[test]
+    fn flags_misplaced_dev_dependency_used_in_prod() {
+        let d = temp("devdep");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\"requests\"]\n\n\
+             [dependency-groups]\ndev = [\"pytest\"]\n",
+        )
+        .unwrap();
+        // Production module imports the dev-only `pytest`.
+        std::fs::write(d.join("app.py"), "import requests\nimport pytest\n").unwrap();
+        // A test module importing pytest is fine.
+        std::fs::create_dir_all(d.join("tests")).unwrap();
+        std::fs::write(d.join("tests/test_app.py"), "import pytest\n").unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        let mis: Vec<_> = f
+            .iter()
+            .filter(|x| x.rule == "misplaced-dev-dependency")
+            .collect();
+        assert_eq!(mis.len(), 1, "expected one misplaced dep, got {f:?}");
+        assert!(mis[0].reason.contains("pytest") && mis[0].reason.contains("app"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn flags_unresolved_relative_and_firstparty_imports() {
+        let d = temp("unresolved");
+        // First-party package `app` with a broken relative + absolute import.
+        std::fs::write(d.join("__init__.py"), "").unwrap();
+        std::fs::write(
+            d.join("app.py"),
+            "from .missing_mod import thing\nimport app.nope\nimport os\nfrom .real import x\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("real.py"), "x = 1\n").unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = unresolved(&g);
+        // Relative `.missing_mod` → certain; absolute `app.nope` → likely.
+        let rel = f
+            .iter()
+            .find(|x| x.reason.contains("missing_mod"))
+            .expect("relative unresolved");
+        assert_eq!(rel.confidence, Confidence::Certain);
+        assert!(f
+            .iter()
+            .any(|x| x.reason.contains("app.nope") && x.confidence == Confidence::Likely));
+        // `os` (stdlib) and the resolvable `.real` must not be flagged.
+        assert!(!f.iter().any(|x| x.reason.contains("`os`")));
+        assert!(!f.iter().any(|x| x.reason.contains(".real")));
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -397,11 +694,21 @@ mod tests {
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&d, &g);
+        // black is *declared* (legacy dev-deps), so never `missing`/`unused`.
         assert!(
-            !f.iter().any(|x| x.reason.contains("black")),
-            "black is declared (legacy dev-deps) + used → no finding, got {f:?}"
+            !f.iter().any(|x| matches!(
+                x.rule.as_str(),
+                "missing-dependency" | "unused-dependency"
+            ) && x.reason.contains("black")),
+            "black is declared (legacy dev-deps) → not missing/unused, got {f:?}"
         );
-        // requests is also declared + used → clean too.
+        // But it IS a dev-only dep imported by production code (DEP004).
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "misplaced-dev-dependency" && x.reason.contains("black")),
+            "black (dev-only) imported in prod → misplaced, got {f:?}"
+        );
+        // requests is a runtime dep, declared + used → clean.
         assert!(!f.iter().any(|x| x.reason.contains("requests")));
         std::fs::remove_dir_all(&d).ok();
     }

@@ -15,6 +15,10 @@ pub struct Installed {
     pub import_to_dist: FxHashMap<String, String>,
     /// All installed (normalized) distribution names.
     pub dists: FxHashSet<String>,
+    /// normalized distribution name → installed version (from dist-info METADATA).
+    /// Lets supply-chain resolve a declared *range* to the concrete version that
+    /// is actually installed, for precise advisory matching.
+    pub versions: FxHashMap<String, String>,
 }
 
 /// Discover and parse the project's virtualenv `site-packages`, if any.
@@ -29,8 +33,9 @@ pub fn discover(root: &Utf8Path) -> Option<Installed> {
         }
         let dir = entry.path();
         // Distribution name from METADATA `Name:`, else the dir prefix.
-        let dist = std::fs::read_to_string(dir.join("METADATA"))
-            .ok()
+        let meta = std::fs::read_to_string(dir.join("METADATA")).ok();
+        let dist = meta
+            .as_ref()
             .and_then(|m| {
                 m.lines()
                     .find_map(|l| l.strip_prefix("Name:").map(|n| n.trim().to_string()))
@@ -38,6 +43,12 @@ pub fn discover(root: &Utf8Path) -> Option<Installed> {
             .unwrap_or_else(|| name.split('-').next().unwrap_or(&name).to_string());
         let dist = normalize_dist(&dist);
         inst.dists.insert(dist.clone());
+        if let Some(ver) = meta.as_ref().and_then(|m| {
+            m.lines()
+                .find_map(|l| l.strip_prefix("Version:").map(|v| v.trim().to_string()))
+        }) {
+            inst.versions.insert(dist.clone(), ver);
+        }
 
         // Import names from top_level.txt; fall back to the dist name.
         let tops = std::fs::read_to_string(dir.join("top_level.txt"))

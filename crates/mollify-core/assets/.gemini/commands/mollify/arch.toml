@@ -9,7 +9,7 @@ Here is the current architecture output:
 Using ONLY this output (do not grep, do not guess, do not invent findings):
 
 1. Group findings by `rule` (`circular-dependency`, `layer-violation`,
-   `forbidden-import`, `independence-violation`) and by `confidence`, with counts.
+   `forbidden-import`, `independence-violation`, `private-import`) and by `confidence`, with counts.
 2. List each finding with `location.path:location.line`, its `reason`, and the
    `fingerprint`. For circular dependencies, describe the cycle.
 3. Layer and policy rules come from `.mollifyrc.json` (`architecture` and

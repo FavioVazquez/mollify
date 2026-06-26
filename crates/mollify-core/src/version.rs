@@ -151,6 +151,53 @@ fn split_op(c: &str) -> (&str, &str) {
     ("==", c)
 }
 
+/// Do two PEP 440 specifier sets have a **non-empty intersection** — i.e. does
+/// any version satisfy both `a` and `b`? Used to decide whether a declared
+/// *range* (e.g. `>=2.0`) permits a version that an advisory marks vulnerable
+/// (e.g. `<2.11.3`), without needing a concrete pin.
+///
+/// Sound finite sweep: every constraint's truth value only changes at one of
+/// the boundary versions named in `a`/`b`. We test each boundary, a point just
+/// above each boundary, and a point below all of them; if any candidate
+/// satisfies both specifier sets, they intersect.
+pub fn specs_intersect(a: &str, b: &str) -> bool {
+    let mut bounds: Vec<String> = Vec::new();
+    for spec in [a, b] {
+        for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            let (_, rhs) = split_op(part);
+            let rhs = rhs.trim_end_matches(".*").trim();
+            if Version::parse(rhs).is_some() {
+                bounds.push(rhs.to_string());
+            }
+        }
+    }
+    let mut candidates: Vec<String> = vec!["0".to_string()];
+    for bnd in &bounds {
+        candidates.push(bnd.clone());
+        candidates.push(format!("{bnd}.1")); // strictly just above this boundary
+        if let Some(inc) = incr_last(bnd) {
+            candidates.push(inc);
+        }
+    }
+    candidates
+        .iter()
+        .any(|c| matches_spec(c, a) && matches_spec(c, b))
+}
+
+/// Increment the last release component of a version string (`1.4` -> `1.5`).
+fn incr_last(v: &str) -> Option<String> {
+    let parsed = Version::parse(v)?;
+    let mut rel = parsed.release;
+    let last = rel.last_mut()?;
+    *last += 1;
+    Some(
+        rel.iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join("."),
+    )
+}
+
 /// Does `version` satisfy a comma-separated AND of constraints
 /// (e.g. `>=1.0,<2.0`)? An empty spec matches everything.
 pub fn matches_spec(version: &str, spec: &str) -> bool {
@@ -207,5 +254,21 @@ mod tests {
     fn unparseable_is_no_match() {
         assert!(!matches_spec("not-a-version", "<2.0"));
         assert!(!matches_spec("1.0", "≤2.0")); // unknown operator
+    }
+
+    #[test]
+    fn specifier_set_intersection() {
+        // A declared range that permits a vulnerable version intersects.
+        assert!(specs_intersect(">=2.0", "<2.11.3"));
+        assert!(specs_intersect(">=1.0,<3.0", ">=2.0,<2.5"));
+        assert!(specs_intersect("", "<2.0")); // empty (any) intersects anything satisfiable
+                                              // A declared range entirely above the vulnerable range does NOT intersect.
+        assert!(!specs_intersect(">=2.11.3", "<2.11.3"));
+        assert!(!specs_intersect(">=3.0", "<2.0"));
+        assert!(!specs_intersect(">=1.0,<2.0", ">=2.0"));
+        // Wildcards and compatible-release.
+        assert!(specs_intersect("~=1.4", "==1.4.7"));
+        assert!(!specs_intersect("~=1.4", "==2.0.0"));
+        assert!(specs_intersect(">=1.0", "==1.5.*"));
     }
 }

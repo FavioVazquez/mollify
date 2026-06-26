@@ -52,14 +52,17 @@ The envelope has a discriminating top-level `kind` (`audit` / `dead-code` /
 `deps`), a `summary`, and `findings[]`. `audit` also has `quality_score` (0–100).
 Each finding:
 - `rule` — one of `unused-file`, `unused-export`, `unused-import`,
-  `unused-variable`, `unused-parameter`,
+  `unused-variable`, `unused-parameter`, `unused-method`, `unused-attribute`,
+  `unused-enum-member`, `unreachable-code`,
   `commented-code`, `unused-dependency`, `missing-dependency`, `transitive-dependency`,
+  `misplaced-dev-dependency`, `unresolved-import`, `duplicate-export`, `private-import`,
   `circular-dependency`, `layer-violation`, `forbidden-import`,
   `independence-violation`, `high-complexity`, `duplication`, `untyped-function`,
-  `cold-code`, `hotspot`, `low-cohesion`, `dangerous-eval`, `subprocess-shell-true`,
+  `private-type-leak`, `cold-code`, `hotspot`, `low-cohesion`, `dangerous-eval`, `subprocess-shell-true`,
   `sql-injection`, `unsafe-yaml-load`, `unsafe-deserialization`,
   `tls-verify-disabled`, `hardcoded-secret`, `weak-hash`, `weak-cipher`,
-  `insecure-random`, `request-without-timeout`, `vulnerable-dependency`, plus
+  `insecure-random`, `request-without-timeout`, `flask-debug-true`,
+  `jinja2-autoescape-false`, `try-except-pass`, `vulnerable-dependency`, plus
   custom policy ids
 - `category` — `dead-code` | `dependency-hygiene` | `circular-dependency` |
   `complexity` | `architecture` | `duplication` | `type-health` | `security`
