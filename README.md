@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo/tangle_harper.png" alt="Mollify" width="250">
+<img src="https://raw.githubusercontent.com/FavioVazquez/mollify/main/assets/logo/tangle_harper.png" alt="Mollify" width="250">
 
 **Deterministic codebase intelligence for Python.**
 
@@ -8,7 +8,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/mollify.svg?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/mollify/)
 [![crates.io](https://img.shields.io/crates/v/mollify-cli.svg?logo=rust&logoColor=white&label=crates.io)](https://crates.io/crates/mollify-cli)
-[![Python](https://img.shields.io/pypi/pyversions/mollify.svg?logo=python&logoColor=white&label=Python)](https://pypi.org/project/mollify/)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)](https://pypi.org/project/mollify/)
 [![CI](https://github.com/FavioVazquez/mollify/actions/workflows/ci.yml/badge.svg)](https://github.com/FavioVazquez/mollify/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/FavioVazquez/mollify/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/FavioVazquez/mollify/security/code-scanning)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -39,7 +39,7 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 ## Why Mollify
 
 <p align="center">
-  <img src="assets/finals/why-mollify.png" alt="Why Mollify" width="700">
+  <img src="https://raw.githubusercontent.com/FavioVazquez/mollify/main/assets/finals/why-mollify.png" alt="Why Mollify" width="700">
 </p>
 
 - **One tool, eight signals.** Most Python shops bolt together vulture + ruff +
@@ -58,7 +58,7 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 ## What it detects
 
 <p align="center">
-  <img src="assets/finals/what-it-detects.png" alt="What it detects" width="700">
+  <img src="https://raw.githubusercontent.com/FavioVazquez/mollify/main/assets/finals/what-it-detects.png" alt="What it detects" width="700">
 </p>
 
 | Area | Command | Rules |
@@ -91,7 +91,7 @@ to gate CI on *new* issues without git.
 ## Install
 
 <p align="center">
-  <img src="assets/finals/install.png" alt="Install" width="700">
+  <img src="https://raw.githubusercontent.com/FavioVazquez/mollify/main/assets/finals/install.png" alt="Install" width="700">
 </p>
 
 **Python users (recommended) — via [uv](https://docs.astral.sh/uv/):**
@@ -140,7 +140,7 @@ mollify init --all --force     # overwrite existing files
 ## Quick start
 
 <p align="center">
-  <img src="assets/finals/quick-start.png" alt="Quick start" width="700">
+  <img src="https://raw.githubusercontent.com/FavioVazquez/mollify/main/assets/finals/quick-start.png" alt="Quick start" width="700">
 </p>
 
 ```bash
@@ -225,7 +225,7 @@ reference: [docs/configuration.md](docs/configuration.md).
 ## Agent integrations
 
 <p align="center">
-  <img src="assets/finals/agent-integrations.png" alt="Agent integrations" width="700">
+  <img src="https://raw.githubusercontent.com/FavioVazquez/mollify/main/assets/finals/agent-integrations.png" alt="Agent integrations" width="700">
 </p>
 
 One MCP server (`mollify mcp`), many front-ends. Shipped, ready-to-commit artifacts:
@@ -243,7 +243,7 @@ Scaffold any of these into a repo with `mollify init --agent <name>` (or `--all`
 ## Architecture
 
 <p align="center">
-  <img src="assets/finals/architecture.png" alt="Architecture" width="700">
+  <img src="https://raw.githubusercontent.com/FavioVazquez/mollify/main/assets/finals/architecture.png" alt="Architecture" width="700">
 </p>
 
 A Cargo workspace; data flows parse → graph → engines → report:
@@ -258,7 +258,7 @@ See [docs/architecture.md](docs/architecture.md).
 ## How it compares
 
 <p align="center">
-  <img src="assets/finals/how-it-compares.png" alt="How it compares" width="700">
+  <img src="https://raw.githubusercontent.com/FavioVazquez/mollify/main/assets/finals/how-it-compares.png" alt="How it compares" width="700">
 </p>
 
 | | vulture | ruff | deptry | tach | radon | jscpd | bandit | **Mollify** |
@@ -285,7 +285,7 @@ into a single evidence stream.
 ## Engineering notes
 
 <div align="center">
-  <img src="assets/finals/banner.png" alt="Mollify banner" width="100%">
+  <img src="https://raw.githubusercontent.com/FavioVazquez/mollify/main/assets/finals/banner.png" alt="Mollify banner" width="100%">
 </div>
 
 Mollify is built to be precise and dependency-light:
@@ -313,7 +313,7 @@ performance optimizations (e.g. Salsa keystroke-incremental reparse for the LSP)
 ## Contributing
 
 <p align="center">
-  <img src="assets/finals/contributing.png" alt="Contributing" width="700">
+  <img src="https://raw.githubusercontent.com/FavioVazquez/mollify/main/assets/finals/contributing.png" alt="Contributing" width="700">
 </p>
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The bar: every change compiles, is tested,
