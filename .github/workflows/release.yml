@@ -111,8 +111,10 @@ jobs:
           pattern: wheels-*
           merge-multiple: true
           path: dist
-      - name: Publish
-        uses: PyO3/maturin-action@v1
+      - name: Publish to PyPI
+        # `maturin upload`/`maturin publish` are deprecated (PyO3/maturin#2334),
+        # so publish with PyPA's official action. Still token-less Trusted
+        # Publishing via the `id-token: write` OIDC permission above.
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          command: upload
-          args: --non-interactive --skip-existing dist/*
+          skip-existing: true

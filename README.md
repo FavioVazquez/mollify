@@ -6,6 +6,13 @@
 
 *Dead code · duplication · circular dependencies · complexity & hotspots · architecture · dependency hygiene · type health · security — as evidence, not guesses.*
 
+[![PyPI](https://img.shields.io/pypi/v/mollify.svg?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/mollify/)
+[![crates.io](https://img.shields.io/crates/v/mollify-cli.svg?logo=rust&logoColor=white&label=crates.io)](https://crates.io/crates/mollify-cli)
+[![Python](https://img.shields.io/pypi/pyversions/mollify.svg?logo=python&logoColor=white&label=Python)](https://pypi.org/project/mollify/)
+[![CI](https://github.com/FavioVazquez/mollify/actions/workflows/ci.yml/badge.svg)](https://github.com/FavioVazquez/mollify/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/FavioVazquez/mollify/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/FavioVazquez/mollify/security/code-scanning)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 [Usage](docs/usage.md) · [Cookbook](cookbook/) · [Configuration](docs/configuration.md) · [Architecture](docs/architecture.md) · [CI integration](docs/ci-integration.md) · [Agent integrations](#agent-integrations)
 
 </div>
@@ -22,9 +29,12 @@ Its one rule: **no AI invents findings.** Every result is a piece of determinist
 evidence with a stable fingerprint, a confidence tier, and a human-readable reason.
 Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
-> **Project status:** early but real. The core analysis phases are implemented,
-> tested (100+ tests), and dogfooded; CI is green. See [`docs/adr/`](docs/adr)
-> for design decisions and *Engineering notes* below for how it works.
+> **Project status:** early but real — **`v0.1.0` is published on
+> [PyPI](https://pypi.org/project/mollify/) and
+> [crates.io](https://crates.io/crates/mollify-cli)**. The core analysis phases
+> are implemented, tested (120+ tests), and dogfooded; CI + CodeQL are green. See
+> [`docs/adr/`](docs/adr) for design decisions and *Engineering notes* below for
+> how it works.
 
 ## Why Mollify
 
