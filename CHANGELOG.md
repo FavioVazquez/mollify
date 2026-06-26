@@ -7,6 +7,13 @@ versioned by `schema_version` (currently `0.1`).
 ## Unreleased
 
 ### Fixed
+- **PyPI sdist upload failed with a 400** (`License-File LICENSE does not
+  exist in distribution file`). `[tool.maturin] manifest-path` points at the
+  CLI crate, not the workspace root where `LICENSE` lives, so maturin wrote a
+  `License-File: LICENSE` metadata pointer into the sdist without actually
+  including the file — reproduced across maturin 1.7.8–1.14.1. Fixed with
+  `[tool.maturin] include = ["LICENSE"]`. (0.1.1's wheels published fine and
+  are unaffected; only its sdist is missing from PyPI.)
 - **Discovery no longer descends into virtualenvs, VCS metadata, or build/cache
   directories by default.** Previously `discover_python_files` walked every
   directory in a project, so an un-gitignored `.venv`/`venv` (or `.git`,
