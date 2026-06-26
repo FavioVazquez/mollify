@@ -31,6 +31,7 @@ pub mod git;
 pub mod hotspots;
 pub mod installed;
 pub mod known;
+pub mod members;
 pub mod metrics;
 pub mod plugins;
 pub mod policy;
@@ -94,6 +95,7 @@ pub fn apply_suppressions(graph: &ModuleGraph, findings: &mut Vec<Finding>) {
 pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
     let mut findings = deadcode::analyze(&graph);
+    findings.extend(members::analyze(&graph));
     findings.extend(commented::analyze(&graph));
     finalize(&config::load(root), &graph, findings)
 }
@@ -379,6 +381,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     let cfg = config::load(root);
     let mut findings: Vec<Finding> = Vec::new();
     findings.extend(deadcode::analyze(&graph));
+    findings.extend(members::analyze(&graph));
     findings.extend(commented::analyze(&graph));
     findings.extend(deps::analyze(root, &graph));
     findings.extend(arch::analyze(&graph));

@@ -31,6 +31,30 @@ pub fn text(rule: &str) -> Option<&'static str> {
             module and not listed in `__all__`. Confidence: likely (dynamic access via \
             getattr downgrades it). Action: remove it or make it private."
         }
+        "unused-method" => {
+            "A class method never referenced anywhere as an attribute \
+            (`obj.m`/`self.m`/`Class.m`). Confidence: likely for private (`_m`), \
+            uncertain for public (may be an override/duck-typed/external API). \
+            Skips dunders, properties, static/class/abstract methods, and \
+            framework-registered methods. Action: remove it, or confirm the API use."
+        }
+        "unused-attribute" => {
+            "A class-level attribute/constant never referenced as an attribute \
+            and never read as a bare name. Confidence: likely for private, uncertain \
+            for public. Skips dataclass/Pydantic/NamedTuple/TypedDict fields. \
+            Action: remove it, or confirm dynamic use."
+        }
+        "unused-enum-member" => {
+            "An `enum.Enum` member never referenced. Confidence: uncertain — enums \
+            are often accessed dynamically (`Color[name]`, `Color(value)`, iteration, \
+            serialization). Action: remove it, or confirm dynamic/serialized use."
+        }
+        "unreachable-code" => {
+            "A statement that can never execute because it follows an \
+            unconditional terminator (`return`/`raise`/`break`/`continue`/`sys.exit()`) \
+            in the same block. Confidence: certain — provable syntactically. \
+            Action: remove the dead statement."
+        }
         "unused-dependency" => {
             "A distribution declared in pyproject/requirements but never \
             imported. Confidence: likely. Action: remove it from your dependency list."
@@ -158,6 +182,10 @@ pub const RULES: &[&str] = &[
     "unused-import",
     "unused-variable",
     "unused-parameter",
+    "unused-method",
+    "unused-attribute",
+    "unused-enum-member",
+    "unreachable-code",
     "unused-dependency",
     "missing-dependency",
     "transitive-dependency",

@@ -119,13 +119,49 @@ pub struct ScopeFinding {
 }
 
 /// A class and, per method, the set of `self.<attr>` it touches — the input to
-/// the LCOM* cohesion metric.
+/// the LCOM* cohesion metric. Also carries member + base metadata for unused
+/// class-member / unused enum-member detection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassInfo {
     pub name: String,
     pub line: u32,
+    pub end_line: u32,
+    /// True if this is private by convention (`_Name`).
+    pub is_private: bool,
+    /// Decorator paths on the class (`dataclass`, `runtime_checkable`, …).
+    pub decorators: Vec<String>,
+    /// Base-class paths as written (`Enum`, `enum.IntEnum`, `BaseModel`, …).
+    pub bases: Vec<String>,
+    /// True if a base resolves to an `enum`-family class (Enum/IntEnum/…).
+    pub is_enum: bool,
     /// `(method_name, set-of-instance-attributes-it-references)`.
     pub methods: Vec<(String, Vec<String>)>,
+    /// Declared members: methods and class-level attribute/constant assignments.
+    pub members: Vec<ClassMember>,
+}
+
+/// One member declared directly in a class body (a method or a class-level
+/// attribute / enum value).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassMember {
+    pub name: String,
+    pub line: u32,
+    pub end_line: u32,
+    /// True for a `def`, false for a class-level assignment (attribute/constant).
+    pub is_method: bool,
+    pub is_private: bool,
+    /// Decorator paths (`property`, `staticmethod`, `abstractmethod`, …).
+    pub decorators: Vec<String>,
+}
+
+/// A statement that can never execute because it follows an unconditional
+/// terminator (`return`/`raise`/`break`/`continue`/`sys.exit()`) in the same
+/// block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreachableCode {
+    pub line: u32,
+    /// The terminator that makes it unreachable, e.g. `return`, `raise`.
+    pub after: &'static str,
 }
 
 /// The parsed view of one Python module that the graph builds on.
@@ -140,6 +176,11 @@ pub struct ParsedModule {
     pub dunder_all: Option<Vec<String>>,
     pub used_names: Vec<String>,
     pub local_uses: Vec<String>,
+    /// Names accessed as an attribute (`obj.attr`, `self.attr`, `Class.attr`) —
+    /// the precise "member used" signal for unused class / enum members (sorted,
+    /// deduped). Distinct from `local_uses`, which also mixes in bare/store names
+    /// that would otherwise mask an unused attribute via its own definition.
+    pub attr_accessed: Vec<String>,
     /// Module-level names referenced by a **resolved** free load — i.e. a
     /// `Name` in load context whose scope resolution reaches module/global scope
     /// (not shadowed by a function-local binding, and not an attribute access).
@@ -149,6 +190,8 @@ pub struct ParsedModule {
     pub ignores: Vec<(u32, String)>,
     pub scope_findings: Vec<ScopeFinding>,
     pub classes: Vec<ClassInfo>,
+    /// Statements that can never execute (follow a terminator in their block).
+    pub unreachable: Vec<UnreachableCode>,
     pub name_counts: HashMap<String, u32>,
     pub has_dynamic_sink: bool,
     pub halstead_volume: f64,
@@ -185,10 +228,12 @@ impl PyParser {
             dunder_all: None,
             used_names: Vec::new(),
             local_uses: Vec::new(),
+            attr_accessed: Vec::new(),
             module_used: Vec::new(),
             ignores: Vec::new(),
             scope_findings: Vec::new(),
             classes: Vec::new(),
+            unreachable: Vec::new(),
             name_counts: HashMap::new(),
             has_dynamic_sink: false,
             halstead_volume: 0.0,
@@ -266,14 +311,21 @@ impl PyParser {
             main.visit_stmt(stmt);
         }
 
-        // Identifiers used outside import statements (for unused-import).
-        let mut lu = LocalUseVisitor { uses: Vec::new() };
+        // Identifiers used outside import statements (for unused-import), plus
+        // the set of attribute-accessed names (for unused class/enum members).
+        let mut lu = LocalUseVisitor {
+            uses: Vec::new(),
+            attrs: Vec::new(),
+        };
         for stmt in &module.body {
             lu.visit_stmt(stmt);
         }
         lu.uses.sort();
         lu.uses.dedup();
         m.local_uses = lu.uses;
+        lu.attrs.sort();
+        lu.attrs.dedup();
+        m.attr_accessed = lu.attrs;
 
         // Scope/binding resolution: which module-level names are referenced by a
         // free load that resolves to module scope (not a shadowing local).
@@ -306,6 +358,20 @@ impl PyParser {
             m.classes.push(class_info(c, &li));
         }
         m.classes.sort_by_key(|c| c.line);
+
+        // Unreachable code: statements following an unconditional terminator in
+        // any block (whole-tree walk over suites).
+        let mut ur = UnreachableVisitor {
+            li: &li,
+            out: Vec::new(),
+        };
+        ur.scan(&module.body);
+        for stmt in &module.body {
+            ur.visit_stmt(stmt);
+        }
+        ur.out.sort_by_key(|u| u.line);
+        ur.out.dedup();
+        m.unreachable = ur.out;
 
         // Import-based weak-cipher candidates (needs the parsed import list).
         security_imports(&mut m);
@@ -864,16 +930,165 @@ fn is_stub_body(body: &[Stmt]) -> bool {
 
 fn class_info(c: &StmtClassDef, li: &LineIndex) -> ClassInfo {
     let mut methods = Vec::new();
+    let mut members: Vec<ClassMember> = Vec::new();
     for stmt in &c.body {
-        if let Stmt::FunctionDef(f) = stmt {
-            methods.push((f.name.to_string(), self_attrs(f)));
+        match stmt {
+            Stmt::FunctionDef(f) => {
+                methods.push((f.name.to_string(), self_attrs(f)));
+                members.push(ClassMember {
+                    name: f.name.to_string(),
+                    line: line1(li, f.range().start()),
+                    end_line: end_line1(li, f.range()),
+                    is_method: true,
+                    is_private: is_private(f.name.as_str()),
+                    decorators: f
+                        .decorator_list
+                        .iter()
+                        .filter_map(|d| decorator_path(&d.expression))
+                        .collect(),
+                });
+            }
+            Stmt::Assign(a) => {
+                if let [Expr::Name(t)] = a.targets.as_slice() {
+                    members.push(class_attr_member(t.id.as_str(), a.range(), li));
+                }
+            }
+            Stmt::AnnAssign(a) => {
+                if let Expr::Name(t) = &*a.target {
+                    members.push(class_attr_member(t.id.as_str(), a.range(), li));
+                }
+            }
+            _ => {}
         }
     }
+    let bases: Vec<String> = c
+        .arguments
+        .as_ref()
+        .map(|args| args.args.iter().filter_map(expr_path).collect())
+        .unwrap_or_default();
+    let is_enum = bases.iter().any(|b| {
+        let last = b.rsplit('.').next().unwrap_or(b);
+        matches!(
+            last,
+            "Enum" | "IntEnum" | "StrEnum" | "Flag" | "IntFlag" | "ReprEnum" | "EnumMeta"
+        )
+    });
     ClassInfo {
         name: c.name.to_string(),
         line: line1(li, c.range().start()),
+        end_line: end_line1(li, c.range()),
+        is_private: is_private(c.name.as_str()),
+        decorators: c
+            .decorator_list
+            .iter()
+            .filter_map(|d| decorator_path(&d.expression))
+            .collect(),
+        bases,
+        is_enum,
         methods,
+        members,
     }
+}
+
+fn class_attr_member(name: &str, range: TextRange, li: &LineIndex) -> ClassMember {
+    ClassMember {
+        name: name.to_string(),
+        line: line1(li, range.start()),
+        end_line: end_line1(li, range),
+        is_method: false,
+        is_private: is_private(name),
+        decorators: Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unreachable code: statements after an unconditional terminator in a block.
+// ---------------------------------------------------------------------------
+
+struct UnreachableVisitor<'li> {
+    li: &'li LineIndex,
+    out: Vec<UnreachableCode>,
+}
+impl<'li> UnreachableVisitor<'li> {
+    /// Inspect one suite (block) for a terminator followed by more statements.
+    fn scan(&mut self, body: &[Stmt]) {
+        for (i, stmt) in body.iter().enumerate() {
+            if let Some(term) = terminator_kind(stmt) {
+                if let Some(next) = body.get(i + 1) {
+                    // Ignore a lone trailing string (rare) — still report code.
+                    self.out.push(UnreachableCode {
+                        line: line1(self.li, next.range().start()),
+                        after: term,
+                    });
+                }
+                break; // first terminator in the block is enough
+            }
+        }
+    }
+}
+impl<'a, 'li> Visitor<'a> for UnreachableVisitor<'li> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        // Scan every nested suite, then recurse.
+        match stmt {
+            Stmt::FunctionDef(f) => self.scan(&f.body),
+            Stmt::ClassDef(c) => self.scan(&c.body),
+            Stmt::If(i) => {
+                self.scan(&i.body);
+                for c in &i.elif_else_clauses {
+                    self.scan(&c.body);
+                }
+            }
+            Stmt::For(f) => {
+                self.scan(&f.body);
+                self.scan(&f.orelse);
+            }
+            Stmt::While(w) => {
+                self.scan(&w.body);
+                self.scan(&w.orelse);
+            }
+            Stmt::With(w) => self.scan(&w.body),
+            Stmt::Try(t) => {
+                self.scan(&t.body);
+                for h in &t.handlers {
+                    let ruff_python_ast::ExceptHandler::ExceptHandler(eh) = h;
+                    self.scan(&eh.body);
+                }
+                self.scan(&t.orelse);
+                self.scan(&t.finalbody);
+            }
+            Stmt::Match(mt) => {
+                for case in &mt.cases {
+                    self.scan(&case.body);
+                }
+            }
+            _ => {}
+        }
+        walk_stmt(self, stmt);
+    }
+}
+
+/// If `stmt` unconditionally exits its block, return the terminator label.
+fn terminator_kind(stmt: &Stmt) -> Option<&'static str> {
+    match stmt {
+        Stmt::Return(_) => Some("return"),
+        Stmt::Raise(_) => Some("raise"),
+        Stmt::Break(_) => Some("break"),
+        Stmt::Continue(_) => Some("continue"),
+        Stmt::Expr(e) if is_noreturn_call(&e.value) => Some("exit call"),
+        _ => None,
+    }
+}
+
+/// `sys.exit(...)`, `os._exit(...)`, `exit(...)`, `quit(...)` — process-ending.
+fn is_noreturn_call(e: &Expr) -> bool {
+    if let Expr::Call(c) = e {
+        if let Some(p) = expr_path(&c.func) {
+            // Exact paths only — avoids treating a user method `self.exit()` as
+            // process-ending.
+            return matches!(p.as_str(), "sys.exit" | "os._exit" | "exit" | "quit");
+        }
+    }
+    false
 }
 
 fn self_attrs(f: &StmtFunctionDef) -> Vec<String> {
@@ -927,6 +1142,8 @@ impl<'a> Visitor<'a> for DefVisitor<'a> {
 
 struct LocalUseVisitor {
     uses: Vec<String>,
+    /// Attribute names accessed (`obj.attr`) — the "member used" signal.
+    attrs: Vec<String>,
 }
 impl<'a> Visitor<'a> for LocalUseVisitor {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
@@ -959,7 +1176,10 @@ impl<'a> Visitor<'a> for LocalUseVisitor {
     fn visit_expr(&mut self, expr: &'a Expr) {
         match expr {
             Expr::Name(n) => self.uses.push(n.id.as_str().to_string()),
-            Expr::Attribute(a) => self.uses.push(a.attr.as_str().to_string()),
+            Expr::Attribute(a) => {
+                self.uses.push(a.attr.as_str().to_string());
+                self.attrs.push(a.attr.as_str().to_string());
+            }
             _ => {}
         }
         walk_expr(self, expr);
