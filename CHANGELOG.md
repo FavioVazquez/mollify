@@ -4,7 +4,7 @@ All notable changes to Mollify. This project follows the spirit of
 [Keep a Changelog](https://keepachangelog.com/) and the JSON contract is
 versioned by `schema_version` (currently `0.1`).
 
-## 0.1.2 - 2026-06-26
+## Unreleased
 
 ### Fixed
 - **PyPI sdist upload failed with a 400** (`License-File LICENSE does not
@@ -14,10 +14,6 @@ versioned by `schema_version` (currently `0.1`).
   including the file — reproduced across maturin 1.7.8–1.14.1. Fixed with
   `[tool.maturin] include = ["LICENSE"]`. (0.1.1's wheels published fine and
   are unaffected; only its sdist is missing from PyPI.)
-
-## Unreleased
-
-### Fixed
 - **Discovery no longer descends into virtualenvs, VCS metadata, or build/cache
   directories by default.** Previously `discover_python_files` walked every
   directory in a project, so an un-gitignored `.venv`/`venv` (or `.git`,
