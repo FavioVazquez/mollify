@@ -12,6 +12,10 @@ pub struct Config {
     pub severity: FxHashMap<String, Severity>,
     /// Path substrings to ignore (simple contains-match; globs later).
     pub ignore: Vec<String>,
+    /// Extra directory names pruned from discovery, in addition to the
+    /// builtin denylist (VCS metadata, virtualenvs, build/cache output —
+    /// see `mollify_graph::discover_python_files`).
+    pub exclude_dirs: Vec<String>,
     pub max_cyclomatic: u32,
     pub max_cognitive: u32,
     /// Minimum normalized-token window for a duplication clone (default 40).
@@ -66,6 +70,7 @@ impl Default for Config {
         Config {
             severity: FxHashMap::default(),
             ignore: Vec::new(),
+            exclude_dirs: Vec::new(),
             max_cyclomatic: crate::complexity::DEFAULT_CYCLOMATIC,
             max_cognitive: crate::complexity::DEFAULT_COGNITIVE,
             dup_min_tokens: crate::dupes::MIN_TOKENS,
@@ -97,6 +102,12 @@ pub fn load(root: &Utf8Path) -> Config {
     }
     if let Some(ig) = v.get("ignore").and_then(|i| i.as_array()) {
         cfg.ignore = ig
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect();
+    }
+    if let Some(ex) = v.get("exclude_dirs").and_then(|i| i.as_array()) {
+        cfg.exclude_dirs = ex
             .iter()
             .filter_map(|x| x.as_str().map(String::from))
             .collect();
@@ -326,5 +337,24 @@ mod tests {
         let mut f = vec![finding("unused-export", "a.py")];
         apply(&cfg, &mut f);
         assert!(f.is_empty());
+    }
+
+    #[test]
+    fn load_parses_exclude_dirs() {
+        let base = std::env::temp_dir().join(format!(
+            "mollify-config-test-{}-exclude-dirs",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(base.clone()).unwrap();
+        std::fs::write(
+            root.join(".mollifyrc.json"),
+            r#"{"exclude_dirs": ["vendor", "third_party"]}"#,
+        )
+        .unwrap();
+        let cfg = load(&root);
+        assert_eq!(cfg.exclude_dirs, vec!["vendor", "third_party"]);
+        std::fs::remove_dir_all(&base).ok();
     }
 }

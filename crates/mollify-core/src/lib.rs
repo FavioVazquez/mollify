@@ -7,7 +7,7 @@
 //! commented-code, coverage, and supply-chain — all folded into `audit`.
 
 use camino::Utf8Path;
-use mollify_graph::{discover_python_files, ModuleGraph};
+use mollify_graph::{discover_python_files_excluding, ModuleGraph};
 use mollify_types::{
     sort_findings, AuditReport, Category, Finding, FindingsReport, Report, Severity, Summary,
     SCHEMA_VERSION,
@@ -45,8 +45,11 @@ pub mod typehealth;
 pub mod version;
 
 /// Build the graph for a project root once, to be shared across engines.
+/// Honors `.mollifyrc.json`'s `exclude_dirs` in addition to the builtin
+/// discovery denylist (VCS metadata, virtualenvs, build/cache output).
 pub fn build_graph(root: &Utf8Path) -> ModuleGraph {
-    let files = discover_python_files(root);
+    let cfg = config::load(root);
+    let files = discover_python_files_excluding(root, &cfg.exclude_dirs);
     ModuleGraph::build(root, &files)
 }
 
