@@ -6,6 +6,17 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+### Fixed
+- **Discovery no longer descends into virtualenvs, VCS metadata, or build/cache
+  directories by default.** Previously `discover_python_files` walked every
+  directory in a project, so an un-gitignored `.venv`/`venv` (or `.git`,
+  `__pycache__`, `node_modules`, `build`, `dist`, etc.) had its contents parsed
+  and flagged like first-party source — every installed package became a
+  potential source of findings. Discovery now always prunes a builtin denylist
+  (mirroring `ruff`'s defaults) plus any directory directly containing a
+  `pyvenv.cfg` (catches custom-named virtualenvs). New `.mollifyrc.json`
+  `exclude_dirs` extends this list for project-specific cases.
+
 ## 0.1.1 - 2026-06-26
 
 Packaging/metadata release — no analysis or CLI behavior changes.
