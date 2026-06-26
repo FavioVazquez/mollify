@@ -6,7 +6,7 @@
 //! `.windsurf/`, plus a few root marker files). This module embeds them into
 //! the binary via [`include_dir`] so `mollify init --agent <name>` can scaffold
 //! the right set into any project — regardless of whether mollify was installed
-//! through `uv`, `pip`, `cargo`, or `npm`. The embedded copy is version-matched
+//! through `uv`, `pip`, or `cargo`. The embedded copy is version-matched
 //! to the CLI by construction (it is compiled from the same tree).
 //!
 //! Existing files are never overwritten unless `force` is set; the installer
@@ -19,7 +19,7 @@ use include_dir::{include_dir, Dir, File};
 ///
 /// Embedding from *inside* the crate (rather than reaching out to `../../`)
 /// keeps the published crate self-contained, so `cargo install mollify-cli`
-/// (crates.io) builds identically to the maturin/npm/source builds. Each path
+/// (crates.io) builds identically to the maturin/source builds. Each path
 /// within this tree already equals its install-relative destination (e.g.
 /// `.claude/skills/mollify/SKILL.md`). The `assets_match_repo_root_sources`
 /// test guards against the mirror drifting from the canonical sources.

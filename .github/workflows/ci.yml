@@ -28,7 +28,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --all
-      - name: Version consistency (workspace / crate deps / npm)
+      - name: Version consistency (workspace / crate deps)
         run: ./scripts/check-versions.sh
 
   self-audit:

@@ -3,7 +3,7 @@
 #
 # Why: `mollify init --agent ...` embeds these files into the binary via
 # `include_dir!`. To keep the published crate self-contained (so `cargo install
-# mollify-cli` / crates.io and the maturin/npm builds all work identically),
+# mollify-cli` / crates.io and the maturin build all work identically),
 # the embedded copy must live INSIDE the crate, not at `../../`. This script
 # regenerates that in-crate copy from the repo-root canonical sources.
 #

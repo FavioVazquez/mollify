@@ -14,7 +14,7 @@ if command -v mollify >/dev/null 2>&1; then
 elif [[ -x "$REPO_ROOT/target/release/mollify" ]]; then
   MOLLIFY="$REPO_ROOT/target/release/mollify"
 else
-  echo "Could not find 'mollify'. Install it (uvx/pipx/npx mollify) or run" >&2
+  echo "Could not find 'mollify'. Install it (uvx/pipx mollify, or cargo install mollify-cli) or run" >&2
   echo "'cargo build --release' from the repo root, then re-run this script." >&2
   exit 1
 fi

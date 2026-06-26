@@ -1,7 +1,7 @@
 # Publish the mollify crates to crates.io on a version tag, in dependency order.
 #
 # After release: `cargo install mollify-cli` builds the same self-contained
-# binary as the uv/pip/npm channels (the agent artifacts are embedded from the
+# binary as the uv/pip channels (the agent artifacts are embedded from the
 # in-crate `assets/`, mirrored by scripts/sync-agent-assets.sh).
 #
 # Requires a CARGO_REGISTRY_TOKEN secret (crates.io API token) in the `crates-io`

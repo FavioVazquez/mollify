@@ -18,7 +18,6 @@ Pick whichever you have. Every channel ships the *same* binary.
 ```bash
 uvx mollify --version            # Python users — no install (recommended)
 pipx run mollify --version       # or pipx
-npx mollify --version            # Node users
 cargo install mollify-cli        # Rust users (binary: mollify)
 ```
 
