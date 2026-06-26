@@ -92,12 +92,10 @@ uv tool install mollify        # persistent, puts `mollify` on your PATH
 uvx mollify@latest audit       # pin/refresh to a specific version
 ```
 
-**Or pip / npm / cargo:**
+**Or pip / cargo:**
 
 ```bash
 pip install mollify
-npm install --save-dev mollify   # also: pnpm add -D / yarn add -D / bun add -d
-# one-off: npx mollify audit ; MCP: npx mollify-mcp ; LSP: npx mollify-lsp
 cargo install mollify-cli        # builds from crates.io (binary: mollify)
 ```
 
@@ -111,9 +109,8 @@ cargo build --release          # binary at ./target/release/mollify
 
 Every channel ships the **same self-contained binary** with the agent
 integrations embedded: the PyPI wheel bundles the compiled binary (built with
-[maturin](https://www.maturin.rs/)); the npm package pulls a prebuilt
-`@mollify-cli/<platform>` binary; the crates.io build embeds the artifacts from
-the in-crate `assets/`. Interactive
+[maturin](https://www.maturin.rs/)); the crates.io build embeds the artifacts
+from the in-crate `assets/`. Interactive
 human runs print a one-line upgrade hint when a newer version is published;
 machine formats, pipes, CI, and non-TTY agent paths never do. Set
 `MOLLIFY_UPDATE_CHECK=off` (or `DO_NOT_TRACK=1`) to disable it.

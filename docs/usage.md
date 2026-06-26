@@ -10,7 +10,6 @@ a reason, and a stable fingerprint.
 ```bash
 uvx mollify audit                 # one-off via uv (no install)
 uv tool install mollify           # or: pip install mollify
-npm install --save-dev mollify    # Node projects (npx mollify audit)
 cargo install mollify-cli         # from crates.io (binary: mollify)
 
 # from source:

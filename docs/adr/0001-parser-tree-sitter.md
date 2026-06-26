@@ -15,7 +15,7 @@
     enabling real **scope/binding resolution** (LEGB) for precise dead-code, not
     coarse token counting.
   - ✅ Published on crates.io, so **every** distribution channel — crates.io
-    publish, PyPI (maturin), npm, and source — builds the identical binary. No
+    publish, PyPI (maturin), and source — builds the identical binary. No
     git dependency, fully reproducible (pinned `=0.0.3`).
   - ✅ The rest of the engine depends only on `mollify-parse`'s types, so the
     backend swap was localized to one crate (all downstream tests passed

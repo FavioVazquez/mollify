@@ -2,8 +2,6 @@
 # Set the release version everywhere it must agree, in one shot:
 #   - the workspace version           (Cargo.toml -> [workspace.package].version)
 #   - internal crate dep constraints  (crates/*/Cargo.toml -> path+version deps)
-#   - the npm meta package            (npm/mollify/package.json: version + each
-#                                       optionalDependencies entry)
 # `pyproject.toml` reads the version from Cargo automatically (maturin), so it
 # needs no edit.
 #
@@ -27,17 +25,6 @@ sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?\"/version =
 find "$ROOT/crates" -name Cargo.toml -print0 | while IFS= read -r -d '' f; do
   sed -i -E "s|(path = \"\.\./mollify-[a-z]+\", version = \")[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?(\")|\1$VERSION\3|g" "$f"
 done
-
-# 3. npm meta package (version + every optionalDependencies value).
-VERSION="$VERSION" node - "$ROOT/npm/mollify/package.json" <<'NODE'
-const fs = require("fs");
-const p = process.argv[2];
-const v = process.env.VERSION;
-const j = JSON.parse(fs.readFileSync(p, "utf8"));
-j.version = v;
-for (const k of Object.keys(j.optionalDependencies || {})) j.optionalDependencies[k] = v;
-fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
-NODE
 
 echo "Bumped all version references to $VERSION"
 echo "Verify with: scripts/check-versions.sh"
