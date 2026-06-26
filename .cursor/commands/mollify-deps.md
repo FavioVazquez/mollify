@@ -2,7 +2,7 @@ Check dependency hygiene in this repository with Mollify and summarize the findi
 
 Steps:
 1. Run `mollify deps --format json` (or call the mollify MCP `mollify_deps` tool). Add `--path <dir>` if a subproject was specified.
-2. Group findings by `rule` (`unused-dependency`, `missing-dependency`) and by `confidence`, with counts.
+2. Group findings by `rule` (`unused-dependency`, `missing-dependency`, `transitive-dependency`, `misplaced-dev-dependency`, `unresolved-import`) and by `confidence`, with counts.
 3. List each finding with its file:line, its `reason`, and the `fingerprint`.
 4. Do NOT edit `pyproject.toml` or lockfiles. Present a plan and ask for approval first.
 

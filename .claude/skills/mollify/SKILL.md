@@ -14,12 +14,14 @@ code on a guess.
 ## Commands (21)
 Analysis engines (each takes the global flags below):
 - `mollify audit` — unified report across all engines + `quality_score` (0–100).
-- `mollify dead-code` (alias `check`) — unused files/exports/imports.
-- `mollify deps` — dependency hygiene (unused / missing distributions).
-- `mollify arch` — circular deps, layer/boundary/policy violations.
+- `mollify dead-code` (alias `check`) — unused files/exports/imports, unused
+  class members (methods/attributes), enum members, unreachable code, duplicate re-exports.
+- `mollify deps` — dependency hygiene (unused / missing / transitive / misplaced-dev
+  distributions) + unresolved/broken internal imports.
+- `mollify arch` — circular deps, layer/boundary/policy violations, cross-package private-import (interface) violations.
 - `mollify complexity` (alias `health`) — complexity + churn×complexity hotspots.
 - `mollify dupes` — duplication / clone families.
-- `mollify types` — type-annotation health (untyped public functions).
+- `mollify types` — type-annotation health (untyped public functions) + private-type leaks in public signatures.
 - `mollify security` — security candidates (eval/exec, shell=True, secrets, …).
 - `mollify coverage --coverage-file <f>` — cold-path analysis from a coverage.py report.
 - `mollify supply-chain [--offline] [--refresh] [--advisory-db <f>]` — versions vs
@@ -60,14 +62,17 @@ files_analyzed}`, and `findings[]`. `audit` also has `quality_score` (0–100).
 Each finding:
 - `fingerprint` — stable id (e.g. `unused-export:931a82e6`).
 - `rule` — one of: `unused-file`, `unused-export`, `unused-import`,
-  `unused-variable`, `unused-parameter`,
+  `unused-variable`, `unused-parameter`, `unused-method`, `unused-attribute`,
+  `unused-enum-member`, `unreachable-code`,
   `commented-code`, `unused-dependency`, `missing-dependency`, `transitive-dependency`,
+  `misplaced-dev-dependency`, `unresolved-import`, `duplicate-export`, `private-import`,
   `circular-dependency`, `layer-violation`, `forbidden-import`,
   `independence-violation`, `high-complexity`, `duplication`, `untyped-function`,
-  `cold-code`, `hotspot`, `low-cohesion`, `dangerous-eval`, `subprocess-shell-true`,
+  `private-type-leak`, `cold-code`, `hotspot`, `low-cohesion`, `dangerous-eval`, `subprocess-shell-true`,
   `sql-injection`, `unsafe-yaml-load`, `unsafe-deserialization`,
   `tls-verify-disabled`, `hardcoded-secret`, `weak-hash`, `weak-cipher`,
-  `insecure-random`, `request-without-timeout`, `vulnerable-dependency`, plus any
+  `insecure-random`, `request-without-timeout`, `flask-debug-true`,
+  `jinja2-autoescape-false`, `try-except-pass`, `vulnerable-dependency`, plus any
   custom policy ids from `.mollifyrc.json` `policies`.
 - `category` — `dead-code` | `dependency-hygiene` | `circular-dependency` |
   `complexity` | `architecture` | `duplication` | `type-health` | `security`.

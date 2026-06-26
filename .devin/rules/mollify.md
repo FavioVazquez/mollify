@@ -20,6 +20,6 @@ globs: **/*.py
   `list`, `watch`, `init`, `mcp`, `lsp`). Analysis commands accept
   `--format human|json|sarif|github|junit` and
   `--min-confidence certain|likely|uncertain`; `graph` accepts `--mermaid`. See
-  the `mollify` skill for the full surface, rule list, and the 15 MCP tools.
+  the `mollify` skill for the full surface, rule list, and the 16 MCP tools.
 - `mollify lsp` runs a stdio Language Server publishing real-time diagnostics on
   open/save — register it as the Python language server in Cascade/your editor.

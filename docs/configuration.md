@@ -30,15 +30,18 @@ Map of **rule id** or **category** → `error` | `warn` | `off`.
 - `off` drops the finding entirely.
 
 Rule ids: `unused-file`, `unused-export`, `unused-import`, `unused-variable`,
-`unused-parameter`, `commented-code`,
+`unused-parameter`, `unused-method`, `unused-attribute`, `unused-enum-member`,
+`unreachable-code`, `commented-code`,
 `unused-dependency`, `missing-dependency`, `transitive-dependency`,
+`misplaced-dev-dependency`, `unresolved-import`, `duplicate-export`, `private-import`,
 `circular-dependency`, `low-cohesion`,
 `layer-violation`, `forbidden-import`, `independence-violation`,
-`high-complexity`, `duplication`, `untyped-function`, `cold-code`, `hotspot`,
+`high-complexity`, `duplication`, `untyped-function`, `private-type-leak`, `cold-code`, `hotspot`,
 `vulnerable-dependency`, the security rules (`dangerous-eval`,
 `subprocess-shell-true`, `sql-injection`, `unsafe-yaml-load`,
 `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`,
-`weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`), and
+`weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`,
+`flask-debug-true`, `jinja2-autoescape-false`, `try-except-pass`), and
 `policy-violation` and any custom policy ids. Run `mollify explain` for the full list.
 
 Categories: `dead-code`, `dependency-hygiene`, `circular-dependency`,

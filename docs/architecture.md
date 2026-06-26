@@ -30,7 +30,7 @@ files ──▶ mollify-parse ──▶ mollify-graph ──▶ mollify-core ─
 | **mollify-types** | The serde **contract**: `Report` (kind-discriminated), `Finding`, `Confidence`, `Severity`, `Category`, `Attribution`, `Summary`, deterministic `sort_findings`. The public API surface — clients depend on the JSON shape, not on internals. |
 | **mollify-parse** | Python parsing via Astral's `ruff_python_parser` / `ruff_python_ast` (crates.io, pinned) behind parser-agnostic types (`ParsedModule`, `Definition`, `Import`, `FunctionComplexity`). Extracts defs, imports, `__all__`, decorators, used-name counts, dynamic sinks, per-function complexity, and **scope/binding resolution** (`module_used`). See [ADR-0001](adr/0001-parser-tree-sitter.md). |
 | **mollify-graph** | Discovery (`.gitignore`-aware), **path-sorted stable FileIds**, dotted-name + relative-import resolution, internal import edges, **BFS reachability** from entry points, symbol-usage queries, and **Tarjan cycle detection**. |
-| **mollify-core** | The engines (`deadcode`, `deps`, `arch`, `complexity`, `hotspots`, `dupes`, `security`, `typehealth`, `coverage`, `supply-chain`), framework `plugins`, `config`, `git` gate, `sarif`, `fix`, and `fingerprint`. Assembles `Report` envelopes. |
+| **mollify-core** | The engines (`deadcode` + `members` for class/enum members, `deps`, `arch`, `complexity`, `hotspots`, `dupes`, `security`, `typehealth` + `apihygiene` for private-type leaks, `commented`, `cohesion`, `coverage`, `supply-chain`, `policy`), framework `plugins`, `config`, `git` gate, `sarif`, `fix`, and `fingerprint`. Assembles `Report` envelopes. |
 | **mollify-cli** | The `mollify` binary (clap). |
 | **mollify-mcp** | The MCP stdio server (`mollify mcp`) — one server, many agent front-ends. |
 | **mollify-lsp** | The Language Server (`mollify lsp`, stdio) — publishes mollify diagnostics on open/save, reusing the deterministic audit so editor results match CI. |
@@ -61,6 +61,12 @@ files ──▶ mollify-parse ──▶ mollify-graph ──▶ mollify-core ─
    registered by a framework decorator (`plugins`). Otherwise it's
    `unused-export`, tiered by confidence. (Modules with a dynamic sink fall back
    to a conservative token-frequency check.)
+6. Beyond reachability, the `members` engine flags **`unused-method`** /
+   **`unused-attribute`** (class internals, with framework/property/dunder/
+   dataclass/ABC awareness) and **`unused-enum-member`**; the parser flags
+   **`unreachable-code`** (statements after an unconditional terminator); and
+   `deadcode` flags **`duplicate-export`** (a barrel `__init__.py` re-exporting
+   the same name from two modules).
 
 Python dead-code detection is undecidable in general, which is why every verdict
 is tiered, never boolean.
