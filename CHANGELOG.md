@@ -6,6 +6,12 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+## 0.1.0 - 2026-06-26
+
+First public release. Distributed via PyPI (`uvx`/`pip install mollify`) and
+crates.io (`cargo install mollify-cli`) — every channel ships the same
+self-contained binary with agent integrations embedded.
+
 ### Engines & rules
 - **Dead code:** `unused-file`, `unused-export`, `unused-import` (whole-statement
   and partial-name), `unused-variable` (F841), `unused-parameter`,
