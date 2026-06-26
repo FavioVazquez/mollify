@@ -55,6 +55,12 @@ pub fn text(rule: &str) -> Option<&'static str> {
             in the same block. Confidence: certain — provable syntactically. \
             Action: remove the dead statement."
         }
+        "private-type-leak" => {
+            "A public function/method whose signature references a private \
+            (`_Name`) type a caller cannot name (intentional `TypeVar`s are \
+            excluded). Confidence: likely. Action: make the type public, or stop \
+            exposing it in the public signature."
+        }
         "unused-dependency" => {
             "A distribution declared in pyproject/requirements but never \
             imported. Confidence: likely. Action: remove it from your dependency list."
@@ -67,6 +73,18 @@ pub fn text(rule: &str) -> Option<&'static str> {
         "missing-dependency" => {
             "A third-party module imported but absent from your declared \
             dependencies (not stdlib, not first-party). Action: add it to your project metadata."
+        }
+        "misplaced-dev-dependency" => {
+            "A distribution declared only in a dev/test group (PEP 735 \
+            `dependency-groups`, Poetry/uv/pdm dev deps) but imported from \
+            production (non-test) code (deptry DEP004). Confidence: likely. \
+            Action: move it to your runtime dependencies."
+        }
+        "unresolved-import" => {
+            "An import that looks internal — relative (`from . import x`) or under \
+            a first-party top-level package — but resolves to no module in the \
+            project. Confidence: certain for relative imports, likely for absolute \
+            (path hacks exist). Action: fix the module path or remove the broken import."
         }
         "circular-dependency" => {
             "A cycle of modules that import one another (Tarjan SCC). \
@@ -189,6 +207,8 @@ pub const RULES: &[&str] = &[
     "unused-dependency",
     "missing-dependency",
     "transitive-dependency",
+    "misplaced-dev-dependency",
+    "unresolved-import",
     "circular-dependency",
     "layer-violation",
     "forbidden-import",
@@ -200,6 +220,7 @@ pub const RULES: &[&str] = &[
     "hotspot",
     "low-cohesion",
     "untyped-function",
+    "private-type-leak",
     "policy-violation",
     "dangerous-eval",
     "subprocess-shell-true",

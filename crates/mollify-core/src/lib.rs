@@ -14,6 +14,7 @@ use mollify_types::{
 };
 
 pub mod agents;
+pub mod apihygiene;
 pub mod arch;
 pub mod baseline;
 pub mod cohesion;
@@ -103,7 +104,9 @@ pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
 /// `mollify deps` — dependency hygiene.
 pub fn deps_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(&config::load(root), &graph, deps::analyze(root, &graph))
+    let mut findings = deps::analyze(root, &graph);
+    findings.extend(deps::unresolved(&graph));
+    finalize(&config::load(root), &graph, findings)
 }
 
 /// `mollify arch` — circular dependencies (boundary presets later).
@@ -135,10 +138,12 @@ pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
     finalize(&cfg, &graph, findings)
 }
 
-/// `mollify types` — type-annotation health.
+/// `mollify types` — type-annotation health + API-hygiene (private-type leaks).
 pub fn types_report(root: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
-    finalize(&config::load(root), &graph, typehealth::analyze(&graph))
+    let mut findings = typehealth::analyze(&graph);
+    findings.extend(apihygiene::analyze(&graph));
+    finalize(&config::load(root), &graph, findings)
 }
 
 /// `mollify security` — security candidates (deterministic; review before acting).
@@ -384,6 +389,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
     findings.extend(members::analyze(&graph));
     findings.extend(commented::analyze(&graph));
     findings.extend(deps::analyze(root, &graph));
+    findings.extend(deps::unresolved(&graph));
     findings.extend(arch::analyze(&graph));
     findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
     findings.extend(arch::analyze_contracts(&graph, &cfg.contracts));
@@ -399,6 +405,7 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
         cfg.dup_min_lines,
     ));
     findings.extend(typehealth::analyze(&graph));
+    findings.extend(apihygiene::analyze(&graph));
     findings.extend(security::analyze(&graph));
     findings.extend(hotspots::analyze(root, &graph));
     findings.extend(cohesion::analyze(&graph));

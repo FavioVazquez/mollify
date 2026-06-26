@@ -164,6 +164,19 @@ pub struct UnreachableCode {
     pub after: &'static str,
 }
 
+/// A **private type** (`_Name`) referenced in the signature of a *public*
+/// function/method — an API-hygiene leak (callers can't name the type).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeLeak {
+    /// `func` or `Class.method`.
+    pub function: String,
+    /// The private type name referenced (`_Internal`).
+    pub type_name: String,
+    pub line: u32,
+    /// True if the leak is in the return annotation (else a parameter).
+    pub is_return: bool,
+}
+
 /// The parsed view of one Python module that the graph builds on.
 #[derive(Debug, Clone)]
 pub struct ParsedModule {
@@ -192,6 +205,8 @@ pub struct ParsedModule {
     pub classes: Vec<ClassInfo>,
     /// Statements that can never execute (follow a terminator in their block).
     pub unreachable: Vec<UnreachableCode>,
+    /// Private types leaked through public function/method signatures.
+    pub type_leaks: Vec<TypeLeak>,
     pub name_counts: HashMap<String, u32>,
     pub has_dynamic_sink: bool,
     pub halstead_volume: f64,
@@ -234,6 +249,7 @@ impl PyParser {
             scope_findings: Vec::new(),
             classes: Vec::new(),
             unreachable: Vec::new(),
+            type_leaks: Vec::new(),
             name_counts: HashMap::new(),
             has_dynamic_sink: false,
             halstead_volume: 0.0,
@@ -372,6 +388,12 @@ impl PyParser {
         ur.out.sort_by_key(|u| u.line);
         ur.out.dedup();
         m.unreachable = ur.out;
+
+        // Private-type leaks through public function/method signatures.
+        scan_type_leaks(&module.body, &li, &mut m.type_leaks);
+        m.type_leaks
+            .sort_by(|a, b| a.line.cmp(&b.line).then(a.type_name.cmp(&b.type_name)));
+        m.type_leaks.dedup();
 
         // Import-based weak-cipher candidates (needs the parsed import list).
         security_imports(&mut m);
@@ -1089,6 +1111,126 @@ fn is_noreturn_call(e: &Expr) -> bool {
         }
     }
     false
+}
+
+// ---------------------------------------------------------------------------
+// Private-type leaks: a public function/method exposing a `_Private` type.
+// ---------------------------------------------------------------------------
+
+/// A type name is "private by convention" if it starts with a single underscore
+/// (but is not a dunder like `__init__`).
+fn is_private_type(name: &str) -> bool {
+    name.starts_with('_') && !(name.starts_with("__") && name.ends_with("__"))
+}
+
+fn scan_type_leaks(body: &[Stmt], li: &LineIndex, out: &mut Vec<TypeLeak>) {
+    // `_T = TypeVar(...)` and friends are *intentionally* private type params,
+    // not API leaks — collect and exclude them.
+    let mut typevars: HashSet<String> = HashSet::new();
+    collect_typevars(body, &mut typevars);
+    for stmt in body {
+        match stmt {
+            Stmt::FunctionDef(f) if !is_private(f.name.as_str()) => {
+                collect_fn_leaks(None, f, li, &typevars, out);
+            }
+            Stmt::ClassDef(c) if !is_private(c.name.as_str()) => {
+                for s in &c.body {
+                    if let Stmt::FunctionDef(f) = s {
+                        if !is_private(f.name.as_str()) {
+                            collect_fn_leaks(Some(c.name.as_str()), f, li, &typevars, out);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collect names bound to `TypeVar`/`ParamSpec`/`TypeVarTuple` (anywhere).
+fn collect_typevars(body: &[Stmt], out: &mut HashSet<String>) {
+    for stmt in body {
+        if let Stmt::Assign(a) = stmt {
+            if let (Some(Expr::Name(t)), Expr::Call(c)) = (a.targets.first(), &*a.value) {
+                if let Some(p) = expr_path(&c.func) {
+                    let last = p.rsplit('.').next().unwrap_or(&p);
+                    if matches!(last, "TypeVar" | "ParamSpec" | "TypeVarTuple") {
+                        out.insert(t.id.as_str().to_string());
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collect_fn_leaks(
+    class: Option<&str>,
+    f: &StmtFunctionDef,
+    li: &LineIndex,
+    typevars: &HashSet<String>,
+    out: &mut Vec<TypeLeak>,
+) {
+    let qualified = match class {
+        Some(c) => format!("{c}.{}", f.name),
+        None => f.name.to_string(),
+    };
+    let push_leaks = |ann: &Expr, line: u32, is_return: bool, out: &mut Vec<TypeLeak>| {
+        let mut idents = Vec::new();
+        annotation_idents(ann, &mut idents);
+        for id in idents {
+            if is_private_type(&id) && !typevars.contains(&id) {
+                out.push(TypeLeak {
+                    function: qualified.clone(),
+                    type_name: id,
+                    line,
+                    is_return,
+                });
+            }
+        }
+    };
+    for p in f
+        .parameters
+        .posonlyargs
+        .iter()
+        .chain(f.parameters.args.iter())
+        .chain(f.parameters.kwonlyargs.iter())
+    {
+        if let Some(ann) = &p.parameter.annotation {
+            push_leaks(ann, line1(li, p.parameter.range().start()), false, out);
+        }
+    }
+    if let Some(r) = &f.returns {
+        push_leaks(r, line1(li, f.range().start()), true, out);
+    }
+}
+
+/// Collect type-name identifiers referenced in an annotation expression,
+/// descending through subscripts/unions/strings (`Optional[_Foo]`, `_A | _B`,
+/// `"_Forward"`, `mod._Priv`).
+fn annotation_idents(e: &Expr, out: &mut Vec<String>) {
+    match e {
+        Expr::Name(n) => out.push(n.id.as_str().to_string()),
+        Expr::Attribute(a) => {
+            annotation_idents(&a.value, out);
+            out.push(a.attr.as_str().to_string());
+        }
+        Expr::Subscript(s) => {
+            annotation_idents(&s.value, out);
+            annotation_idents(&s.slice, out);
+        }
+        Expr::Tuple(t) => t.elts.iter().for_each(|el| annotation_idents(el, out)),
+        Expr::List(l) => l.elts.iter().for_each(|el| annotation_idents(el, out)),
+        Expr::BinOp(b) => {
+            annotation_idents(&b.left, out);
+            annotation_idents(&b.right, out);
+        }
+        Expr::StringLiteral(s) => {
+            for tok in identifier_tokens(s.value.to_str()) {
+                out.push(tok);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn self_attrs(f: &StmtFunctionDef) -> Vec<String> {
