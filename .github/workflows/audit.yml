@@ -1,0 +1,38 @@
+name: Security audit
+
+# Scans the Cargo dependency tree against the RUSTSEC advisory database.
+# Runs when dependencies change (so a new/updated crate is checked before merge)
+# and on a weekly schedule (so advisories disclosed *without* a code change here
+# still surface). Dogfooding: a supply-chain-aware tool should watch its own.
+on:
+  push:
+    branches: [main, research-and-plan]
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
+  schedule:
+    # Weekly, Monday ~06:37 UTC (off the :00 mark to avoid the cron stampede).
+    - cron: "37 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: cargo audit (RUSTSEC)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write # surface advisories as check annotations
+      issues: write # scheduled runs open an issue when a new advisory lands
+    steps:
+      - uses: actions/checkout@v5
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
