@@ -6,6 +6,8 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+## 0.1.2 - 2026-06-26
+
 ### Fixed
 - **PyPI sdist upload failed with a 400** (`License-File LICENSE does not
   exist in distribution file`). `[tool.maturin] manifest-path` points at the

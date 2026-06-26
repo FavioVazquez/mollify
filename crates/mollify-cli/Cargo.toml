@@ -12,10 +12,10 @@ name = "mollify"
 path = "src/main.rs"
 
 [dependencies]
-mollify-types = { path = "../mollify-types", version = "0.1.1" }
-mollify-core = { path = "../mollify-core", version = "0.1.1" }
-mollify-mcp = { path = "../mollify-mcp", version = "0.1.1" }
-mollify-lsp = { path = "../mollify-lsp", version = "0.1.1" }
+mollify-types = { path = "../mollify-types", version = "0.1.2" }
+mollify-core = { path = "../mollify-core", version = "0.1.2" }
+mollify-mcp = { path = "../mollify-mcp", version = "0.1.2" }
+mollify-lsp = { path = "../mollify-lsp", version = "0.1.2" }
 clap.workspace = true
 serde_json.workspace = true
 camino.workspace = true
