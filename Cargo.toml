@@ -8,7 +8,9 @@ edition = "2021"
 license = "MIT"
 authors = ["Favio Vázquez <favio.vazquezp@gmail.com>"]
 repository = "https://github.com/FavioVazquez/mollify"
-rust-version = "1.85"
+# MSRV is driven by the ruff parser crates (edition 2024, rustc 1.94). The
+# `rust-toolchain.toml` pins `stable`, which satisfies this on CI and locally.
+rust-version = "1.94"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

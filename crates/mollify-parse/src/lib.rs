@@ -162,8 +162,8 @@ impl ParsedModule {
     }
 }
 
-/// A reusable parser handle. With ruff there is no per-thread grammar state, but
-/// the handle is kept for API stability (and to mirror `tree-sitter`'s shape).
+/// A reusable parser handle. The ruff parser is stateless (a free function), so
+/// this is a zero-sized handle kept for API stability and ergonomic call sites.
 #[derive(Default)]
 pub struct PyParser;
 

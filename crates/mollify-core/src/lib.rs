@@ -1,9 +1,10 @@
 //! # mollify-core
 //!
 //! Analysis orchestration. Builds the graph, runs the engines, and assembles the
-//! kind-discriminated [`mollify_types::Report`] envelopes. Engines implemented:
-//! dead-code and dependency hygiene (Phase 1). Duplication, complexity, and
-//! architecture engines land in Phase 2 (see `docs/STATUS.md`).
+//! kind-discriminated [`mollify_types::Report`] envelopes. Engines: dead-code,
+//! dependency hygiene, architecture (cycles/layers/contracts/policies),
+//! complexity + hotspots, duplication, type-health, security, cohesion,
+//! commented-code, coverage, and supply-chain — all folded into `audit`.
 
 use camino::Utf8Path;
 use mollify_graph::{discover_python_files, ModuleGraph};

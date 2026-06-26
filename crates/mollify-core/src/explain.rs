@@ -69,8 +69,8 @@ pub fn text(rule: &str) -> Option<&'static str> {
             configured threshold. Action: decompose it; extract helpers and flatten branches."
         }
         "duplication" => {
-            "A token sequence repeated across locations (Rabin-Karp clone). \
-            Action: extract the shared logic into one definition."
+            "A token sequence repeated across locations (exact clone found via a \
+            suffix array + LCP). Action: extract the shared logic into one definition."
         }
         "cold-code" => {
             "A statically reachable function with zero executed lines in the \
