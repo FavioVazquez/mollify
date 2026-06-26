@@ -6,6 +6,24 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+## 0.1.1 - 2026-06-26
+
+Packaging/metadata release — no analysis or CLI behavior changes.
+
+### Fixed
+- **PyPI project page:** README images used repo-relative paths that don't
+  resolve on PyPI; rewritten to absolute `raw.githubusercontent.com` URLs so they
+  render on both GitHub and PyPI.
+- **Python version badge** rendered as "missing" (no per-version trove
+  classifiers); replaced with a static `Python 3.8+` badge.
+
+### Changed
+- **PyPI publishing** now uses PyPA's `pypa/gh-action-pypi-publish` instead of the
+  deprecated `maturin upload` (PyO3/maturin#2334); still token-less OIDC Trusted
+  Publishing.
+- Added `Programming Language :: Python :: 3.8`–`3.13` classifiers so PyPI
+  advertises supported versions.
+
 ## 0.1.0 - 2026-06-26
 
 First public release. Distributed via PyPI (`uvx`/`pip install mollify`) and

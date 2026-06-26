@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Mollify Language Server — real-time diagnostics over stdio (LSP)."
 
 [dependencies]
-mollify-types = { path = "../mollify-types", version = "0.1.0" }
-mollify-core = { path = "../mollify-core", version = "0.1.0" }
+mollify-types = { path = "../mollify-types", version = "0.1.1" }
+mollify-core = { path = "../mollify-core", version = "0.1.1" }
 camino.workspace = true
 serde_json.workspace = true
