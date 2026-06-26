@@ -1,6 +1,6 @@
 <div align="center">
 
-# Mollify
+<img src="assets/logo/tangle_harper.png" alt="Mollify" width="250">
 
 **Deterministic codebase intelligence for Python.**
 
@@ -28,6 +28,10 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 ## Why Mollify
 
+<p align="center">
+  <img src="assets/finals/why-mollify.png" alt="Why Mollify" width="700">
+</p>
+
 - **One tool, eight signals.** Most Python shops bolt together vulture + ruff +
   deptry + tach + radon + jscpd + bandit. Mollify runs the equivalent set in a
   single deterministic pass with one config and one output contract.
@@ -42,6 +46,10 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
   JSON, exit codes, and a PR-scoped `--gate new-only`.
 
 ## What it detects
+
+<p align="center">
+  <img src="assets/finals/what-it-detects.png" alt="What it detects" width="700">
+</p>
 
 | Area | Command | Rules |
 |---|---|---|
@@ -71,6 +79,10 @@ remove `certain` unused symbols; `mollify explain <rule>` for rule semantics; an
 to gate CI on *new* issues without git.
 
 ## Install
+
+<p align="center">
+  <img src="assets/finals/install.png" alt="Install" width="700">
+</p>
 
 **Python users (recommended) — via [uv](https://docs.astral.sh/uv/):**
 
@@ -119,6 +131,10 @@ mollify init --all --force     # overwrite existing files
 ```
 
 ## Quick start
+
+<p align="center">
+  <img src="assets/finals/quick-start.png" alt="Quick start" width="700">
+</p>
 
 ```bash
 mollify audit --path /your/python/project
@@ -201,6 +217,10 @@ reference: [docs/configuration.md](docs/configuration.md).
 
 ## Agent integrations
 
+<p align="center">
+  <img src="assets/finals/agent-integrations.png" alt="Agent integrations" width="700">
+</p>
+
 One MCP server (`mollify mcp`), many front-ends. Shipped, ready-to-commit artifacts:
 
 | Agent | Artifacts |
@@ -215,6 +235,10 @@ Scaffold any of these into a repo with `mollify init --agent <name>` (or `--all`
 
 ## Architecture
 
+<p align="center">
+  <img src="assets/finals/architecture.png" alt="Architecture" width="700">
+</p>
+
 A Cargo workspace; data flows parse → graph → engines → report:
 
 `mollify-types` (JSON contract) · `mollify-parse` (Python parsing, ruff AST) ·
@@ -225,6 +249,10 @@ A Cargo workspace; data flows parse → graph → engines → report:
 See [docs/architecture.md](docs/architecture.md).
 
 ## How it compares
+
+<p align="center">
+  <img src="assets/finals/how-it-compares.png" alt="How it compares" width="700">
+</p>
 
 | | vulture | ruff | deptry | tach | radon | jscpd | bandit | **Mollify** |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -249,6 +277,10 @@ into a single evidence stream.
 
 ## Engineering notes
 
+<div align="center">
+  <img src="assets/finals/banner.png" alt="Mollify banner" width="100%">
+</div>
+
 Mollify is built to be precise and dependency-light:
 
 - **Full-fidelity parsing.** Built on Astral's `ruff_python_parser` / `ruff_python_ast`
@@ -272,6 +304,10 @@ There are no known correctness limitations; remaining roadmap items are
 performance optimizations (e.g. Salsa keystroke-incremental reparse for the LSP).
 
 ## Contributing
+
+<p align="center">
+  <img src="assets/finals/contributing.png" alt="Contributing" width="700">
+</p>
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The bar: every change compiles, is tested,
 and is documented; the tree stays `fmt` + `clippy -D warnings` clean.
