@@ -21,11 +21,17 @@ permissions:
 jobs:
   linux:
     name: wheels · linux-${{ matrix.target }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, aarch64]
+        # Build each arch on its NATIVE runner (no cross-compilation). Cross-
+        # building aarch64 in a manylinux container fails for C/asm deps like
+        # `ring` (the OSV/TLS client) — "ARM assembler must define __ARM_ARCH".
+        # GitHub's free `ubuntu-24.04-arm` runner builds aarch64 natively.
+        include:
+          - { target: x86_64, runner: ubuntu-latest }
+          - { target: aarch64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@v5
       - name: Build wheels (glibc)
