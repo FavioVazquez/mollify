@@ -6,6 +6,14 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+### Added
+- **`--include <DIR>`** flag on all 8 analysis commands (`audit`, `dead-code`,
+  `deps`, `arch`, `complexity`, `dupes`, `types`, `security`). Repeatable;
+  overrides both the builtin discovery denylist (`.venv`, `.git`,
+  `__pycache__`, `node_modules`, `build`, `dist`, etc.) and `.mollifyrc.json`'s
+  `exclude_dirs` for the named directory, letting users opt a directory back
+  into scanning on a per-invocation basis.
+
 ## 0.1.2 - 2026-06-26
 
 ### Fixed

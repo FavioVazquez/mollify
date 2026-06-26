@@ -7,7 +7,7 @@
 //! commented-code, coverage, and supply-chain — all folded into `audit`.
 
 use camino::Utf8Path;
-use mollify_graph::{discover_python_files_excluding, ModuleGraph};
+use mollify_graph::{discover_python_files_with, ModuleGraph};
 use mollify_types::{
     sort_findings, AuditReport, Category, Finding, FindingsReport, Report, Severity, Summary,
     SCHEMA_VERSION,
@@ -48,8 +48,15 @@ pub mod version;
 /// Honors `.mollifyrc.json`'s `exclude_dirs` in addition to the builtin
 /// discovery denylist (VCS metadata, virtualenvs, build/cache output).
 pub fn build_graph(root: &Utf8Path) -> ModuleGraph {
+    build_graph_with_includes(root, &[])
+}
+
+/// Like [`build_graph`], but `includes` directory names bypass both the
+/// builtin denylist and `.mollifyrc.json`'s `exclude_dirs` — the CLI's
+/// `--include` override, for one-off scans of normally-excluded directories.
+pub fn build_graph_with_includes(root: &Utf8Path, includes: &[String]) -> ModuleGraph {
     let cfg = config::load(root);
-    let files = discover_python_files_excluding(root, &cfg.exclude_dirs);
+    let files = discover_python_files_with(root, &cfg.exclude_dirs, includes);
     ModuleGraph::build(root, &files)
 }
 
@@ -97,7 +104,12 @@ pub fn apply_suppressions(graph: &ModuleGraph, findings: &mut Vec<Finding>) {
 
 /// `mollify dead-code` — reachability-based unused files/symbols.
 pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
-    let graph = build_graph(root);
+    dead_code_report_with_includes(root, &[])
+}
+
+/// Like [`dead_code_report`], honoring the CLI's `--include` override.
+pub fn dead_code_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
+    let graph = build_graph_with_includes(root, includes);
     let mut findings = deadcode::analyze(&graph);
     findings.extend(members::analyze(&graph));
     findings.extend(commented::analyze(&graph));
@@ -106,7 +118,12 @@ pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
 
 /// `mollify deps` — dependency hygiene.
 pub fn deps_report(root: &Utf8Path) -> FindingsReport {
-    let graph = build_graph(root);
+    deps_report_with_includes(root, &[])
+}
+
+/// Like [`deps_report`], honoring the CLI's `--include` override.
+pub fn deps_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
+    let graph = build_graph_with_includes(root, includes);
     let mut findings = deps::analyze(root, &graph);
     findings.extend(deps::unresolved(&graph));
     finalize(&config::load(root), &graph, findings)
@@ -114,7 +131,12 @@ pub fn deps_report(root: &Utf8Path) -> FindingsReport {
 
 /// `mollify arch` — circular dependencies (boundary presets later).
 pub fn arch_report(root: &Utf8Path) -> FindingsReport {
-    let graph = build_graph(root);
+    arch_report_with_includes(root, &[])
+}
+
+/// Like [`arch_report`], honoring the CLI's `--include` override.
+pub fn arch_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
+    let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
     let mut findings = arch::analyze(&graph);
     findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
@@ -126,7 +148,12 @@ pub fn arch_report(root: &Utf8Path) -> FindingsReport {
 
 /// `mollify complexity` / `mollify health` — complexity hotspots.
 pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
-    let graph = build_graph(root);
+    complexity_report_with_includes(root, &[])
+}
+
+/// Like [`complexity_report`], honoring the CLI's `--include` override.
+pub fn complexity_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
+    let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
     let mut findings = complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive);
     findings.extend(hotspots::analyze(root, &graph));
@@ -136,7 +163,12 @@ pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
 
 /// `mollify dupes` — duplication / clone families.
 pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
-    let graph = build_graph(root);
+    dupes_report_with_includes(root, &[])
+}
+
+/// Like [`dupes_report`], honoring the CLI's `--include` override.
+pub fn dupes_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
+    let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
     let findings = dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines);
     finalize(&cfg, &graph, findings)
@@ -144,7 +176,12 @@ pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
 
 /// `mollify types` — type-annotation health + API-hygiene (private-type leaks).
 pub fn types_report(root: &Utf8Path) -> FindingsReport {
-    let graph = build_graph(root);
+    types_report_with_includes(root, &[])
+}
+
+/// Like [`types_report`], honoring the CLI's `--include` override.
+pub fn types_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
+    let graph = build_graph_with_includes(root, includes);
     let mut findings = typehealth::analyze(&graph);
     findings.extend(apihygiene::analyze(&graph));
     finalize(&config::load(root), &graph, findings)
@@ -152,7 +189,12 @@ pub fn types_report(root: &Utf8Path) -> FindingsReport {
 
 /// `mollify security` — security candidates (deterministic; review before acting).
 pub fn security_report(root: &Utf8Path) -> FindingsReport {
-    let graph = build_graph(root);
+    security_report_with_includes(root, &[])
+}
+
+/// Like [`security_report`], honoring the CLI's `--include` override.
+pub fn security_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
+    let graph = build_graph_with_includes(root, includes);
     finalize(&config::load(root), &graph, security::analyze(&graph))
 }
 
@@ -386,7 +428,12 @@ pub fn list_topology(root: &Utf8Path, kind: &str) -> Vec<String> {
 /// `mollify audit` — the unified pass across all engines. Produces a quality
 /// score over the combined findings.
 pub fn audit_report(root: &Utf8Path) -> AuditReport {
-    let graph = build_graph(root);
+    audit_report_with_includes(root, &[])
+}
+
+/// Like [`audit_report`], honoring the CLI's `--include` override.
+pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> AuditReport {
+    let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
     let mut findings: Vec<Finding> = Vec::new();
     findings.extend(deadcode::analyze(&graph));

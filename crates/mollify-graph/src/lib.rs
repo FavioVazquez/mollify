@@ -87,14 +87,23 @@ const DEFAULT_EXCLUDE_DIRS: &[&str] = &[
 /// True if `entry` is a directory that should be pruned from discovery: a
 /// builtin/extra denylisted name, or any directory directly containing a
 /// `pyvenv.cfg` (a virtualenv marker that catches custom-named venvs the name
-/// denylist can't anticipate).
-fn is_excluded_dir(entry: &ignore::DirEntry, extra_excludes: &[String]) -> bool {
+/// denylist can't anticipate). `includes` overrides both the builtin and
+/// extra denylists (but not the `pyvenv.cfg` check, since a directory the user
+/// explicitly asked to include is never an accidental virtualenv).
+fn is_excluded_dir(
+    entry: &ignore::DirEntry,
+    extra_excludes: &[String],
+    includes: &[String],
+) -> bool {
     if !entry.file_type().is_some_and(|t| t.is_dir()) {
         return false;
     }
     let Some(name) = entry.file_name().to_str() else {
         return false;
     };
+    if includes.iter().any(|i| i == name) {
+        return false;
+    }
     if DEFAULT_EXCLUDE_DIRS.contains(&name) || extra_excludes.iter().any(|e| e == name) {
         return true;
     }
@@ -105,7 +114,7 @@ fn is_excluded_dir(entry: &ignore::DirEntry, extra_excludes: &[String]) -> bool 
 /// pruning [`DEFAULT_EXCLUDE_DIRS`] (plus any virtualenv detected via
 /// `pyvenv.cfg`). Deterministic order.
 pub fn discover_python_files(root: &Utf8Path) -> Vec<Utf8PathBuf> {
-    discover_python_files_excluding(root, &[])
+    discover_python_files_with(root, &[], &[])
 }
 
 /// Like [`discover_python_files`], but also prunes `extra_excludes` directory
@@ -115,11 +124,23 @@ pub fn discover_python_files_excluding(
     root: &Utf8Path,
     extra_excludes: &[String],
 ) -> Vec<Utf8PathBuf> {
+    discover_python_files_with(root, extra_excludes, &[])
+}
+
+/// Like [`discover_python_files_excluding`], but `includes` directory names
+/// bypass both the builtin denylist and `extra_excludes` — used to honor a
+/// user's `--include` override of the default/configured exclusions.
+pub fn discover_python_files_with(
+    root: &Utf8Path,
+    extra_excludes: &[String],
+    includes: &[String],
+) -> Vec<Utf8PathBuf> {
     let extra = extra_excludes.to_vec();
+    let inc = includes.to_vec();
     let mut out = Vec::new();
     for entry in ignore::WalkBuilder::new(root)
         .hidden(false)
-        .filter_entry(move |e| !is_excluded_dir(e, &extra))
+        .filter_entry(move |e| !is_excluded_dir(e, &extra, &inc))
         .build()
         .flatten()
     {
@@ -713,6 +734,35 @@ import b
             .map(|f| f.strip_prefix(&d).unwrap().to_string())
             .collect();
         assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn discovery_include_overrides_default_and_extra_excludes() {
+        let d = temp("include-overrides");
+        write(&d, "src/app.py", "def main():\n    return 1\n");
+        write(&d, "node_modules/foo/bar.py", "bar = 1\n");
+        write(&d, "vendor/thirdparty.py", "x = 1\n");
+
+        let files = discover_python_files_with(
+            &d,
+            &["vendor".to_string()],
+            &["node_modules".to_string(), "vendor".to_string()],
+        );
+        let mut rel: Vec<String> = files
+            .iter()
+            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            .collect();
+        rel.sort();
+        assert_eq!(
+            rel,
+            vec![
+                "node_modules/foo/bar.py".to_string(),
+                "src/app.py".to_string(),
+                "vendor/thirdparty.py".to_string(),
+            ],
+            "got {rel:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 }
