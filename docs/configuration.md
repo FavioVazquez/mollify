@@ -116,7 +116,32 @@ schema. It is an *input*, not a network call — regenerate it out-of-band with
 ## `ignore`
 
 A list of path substrings. Any finding whose file path contains one is dropped.
-(Glob support is planned.)
+(Glob support is planned.) This is a post-analysis filter on findings, not a
+discovery-time exclusion — see `exclude_dirs` below for the latter.
+
+## `exclude_dirs`
+
+A list of extra directory **names** pruned from discovery entirely (the
+parser never touches files inside them), in addition to a builtin denylist
+that's always active — no configuration needed for the common case:
+
+```
+.bzr .direnv .eggs .git .hg .svn .ipynb_checkpoints .mypy_cache .nox .pyenv
+.pytest_cache .pytype .ruff_cache .tox .venv __pycache__ __pypackages__
+_build buck-out build dist env node_modules site-packages venv
+```
+
+This mirrors `ruff`'s own default exclude list. In addition, **any** directory
+that directly contains a `pyvenv.cfg` file is pruned regardless of its name —
+this catches custom-named virtualenvs (e.g. from `mkvirtualenv` or a
+non-standard Poetry/conda env name) that the name list can't anticipate.
+
+`exclude_dirs` *adds to* this builtin list; it can't be used to un-exclude a
+builtin name.
+
+```json
+"exclude_dirs": ["vendor", "third_party"]
+```
 
 ## `duplication`
 

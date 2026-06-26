@@ -52,12 +52,74 @@ pub struct ModuleGraph {
     pub global_dynamic: bool,
 }
 
-/// Walk `root` for `*.py` and `*.ipynb` files, honoring `.gitignore`.
-/// Deterministic order.
+/// Directory names never descended into, regardless of `.gitignore` — VCS
+/// metadata, virtualenvs, and build/cache output. Mirrors `ruff`'s default
+/// exclude list, since projects in this ecosystem already expect these names
+/// to be skipped without configuration.
+const DEFAULT_EXCLUDE_DIRS: &[&str] = &[
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".hg",
+    ".svn",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "env",
+    "node_modules",
+    "site-packages",
+    "venv",
+];
+
+/// True if `entry` is a directory that should be pruned from discovery: a
+/// builtin/extra denylisted name, or any directory directly containing a
+/// `pyvenv.cfg` (a virtualenv marker that catches custom-named venvs the name
+/// denylist can't anticipate).
+fn is_excluded_dir(entry: &ignore::DirEntry, extra_excludes: &[String]) -> bool {
+    if !entry.file_type().is_some_and(|t| t.is_dir()) {
+        return false;
+    }
+    let Some(name) = entry.file_name().to_str() else {
+        return false;
+    };
+    if DEFAULT_EXCLUDE_DIRS.contains(&name) || extra_excludes.iter().any(|e| e == name) {
+        return true;
+    }
+    entry.path().join("pyvenv.cfg").is_file()
+}
+
+/// Walk `root` for `*.py` and `*.ipynb` files, honoring `.gitignore` and
+/// pruning [`DEFAULT_EXCLUDE_DIRS`] (plus any virtualenv detected via
+/// `pyvenv.cfg`). Deterministic order.
 pub fn discover_python_files(root: &Utf8Path) -> Vec<Utf8PathBuf> {
+    discover_python_files_excluding(root, &[])
+}
+
+/// Like [`discover_python_files`], but also prunes `extra_excludes` directory
+/// names (in addition to the builtin denylist) — used to honor a project's
+/// `.mollifyrc.json` `exclude_dirs`.
+pub fn discover_python_files_excluding(
+    root: &Utf8Path,
+    extra_excludes: &[String],
+) -> Vec<Utf8PathBuf> {
+    let extra = extra_excludes.to_vec();
     let mut out = Vec::new();
     for entry in ignore::WalkBuilder::new(root)
         .hidden(false)
+        .filter_entry(move |e| !is_excluded_dir(e, &extra))
         .build()
         .flatten()
     {
@@ -611,6 +673,46 @@ import b
         let lib = g.modules.iter().find(|m| m.dotted == "lib").unwrap().id;
         assert!(g.symbol_used(lib, "used_fn", 1));
         assert!(!g.symbol_used(lib, "dead_fn", 1));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn discovery_skips_venvs_vcs_and_caches() {
+        let d = temp("excluded-dirs");
+        write(&d, "src/app.py", "def main():\n    return 1\n");
+        write(
+            &d,
+            ".venv/lib/python3.12/site-packages/somepkg/__init__.py",
+            "def pkg_fn():\n    return 1\n",
+        );
+        write(&d, ".git/hooks/pre-commit.py", "raise SystemExit(0)\n");
+        write(&d, "__pycache__/app.cpython-312.py", "stale_cache = 1\n");
+        write(&d, "node_modules/foo/bar.py", "bar = 1\n");
+        // A custom-named virtualenv: only `pyvenv.cfg` marks it, not its name.
+        write(&d, "myenv/pyvenv.cfg", "home = /usr/bin\n");
+        write(&d, "myenv/lib/site.py", "site_fn = 1\n");
+
+        let files = discover_python_files(&d);
+        let rel: Vec<String> = files
+            .iter()
+            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            .collect();
+        assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn discovery_honors_extra_excludes() {
+        let d = temp("extra-excludes");
+        write(&d, "src/app.py", "def main():\n    return 1\n");
+        write(&d, "vendor/thirdparty.py", "x = 1\n");
+
+        let files = discover_python_files_excluding(&d, &["vendor".to_string()]);
+        let rel: Vec<String> = files
+            .iter()
+            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            .collect();
+        assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
         std::fs::remove_dir_all(&d).ok();
     }
 }
