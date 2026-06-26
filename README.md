@@ -45,13 +45,13 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
 | Area | Command | Rules |
 |---|---|---|
-| **Dead code** | `mollify dead-code` | `unused-file`, `unused-export`, `unused-import`, `unused-variable`, `unused-parameter`, `commented-code` |
-| **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency`, `transitive-dependency` (pyproject + requirements/uv/pdm; venv-aware) |
-| **Architecture** | `mollify arch` | `circular-dependency`, `layer-violation`, `forbidden-import`, `independence-violation`, custom policies |
+| **Dead code** | `mollify dead-code` | `unused-file`, `unused-export`, `unused-import`, `unused-variable`, `unused-parameter`, `unused-method`, `unused-attribute`, `unused-enum-member`, `unreachable-code`, `duplicate-export`, `commented-code` |
+| **Dependency hygiene** | `mollify deps` | `unused-dependency`, `missing-dependency`, `transitive-dependency`, `misplaced-dev-dependency`, `unresolved-import` (pyproject + requirements/uv/pdm; venv-aware) |
+| **Architecture** | `mollify arch` | `circular-dependency`, `layer-violation`, `forbidden-import`, `independence-violation`, `private-import`, custom policies |
 | **Complexity & cohesion** | `mollify complexity` | `high-complexity`, `hotspot` (churn × complexity), `low-cohesion` (LCOM*) |
 | **Duplication** | `mollify dupes` | `duplication` (clone families) |
-| **Type health** | `mollify types` | `untyped-function` |
-| **Security** | `mollify security` | eval/exec, shell, `sql-injection`, weak hash/cipher, insecure-random, unsafe deserialization, TLS, secrets, missing-timeout — each with a CWE id |
+| **Type health** | `mollify types` | `untyped-function`, `private-type-leak` |
+| **Security** | `mollify security` | eval/exec, shell, `sql-injection`, weak hash/cipher, insecure-random, unsafe deserialization, TLS, secrets, missing-timeout, Flask debug, Jinja2 autoescape, broad `except: pass` — each with a CWE id |
 | **Cold paths** | `mollify coverage --coverage-file` | `cold-code` (reachable but never executed) |
 | **Supply chain** | `mollify supply-chain` | `vulnerable-dependency` (live OSV; offline DB fallback) |
 | **Metrics** | `mollify metrics` | Maintainability Index, Halstead, raw LOC, per-file complexity |
@@ -228,7 +228,7 @@ See [docs/architecture.md](docs/architecture.md).
 
 | | vulture | ruff | deptry | tach | radon | jscpd | bandit | **Mollify** |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| Whole-project dead code | ~ | – | – | – | – | – | – | ✅ (reachability + tiers) |
+| Whole-project dead code | ✅ | – | – | – | – | – | – | ✅ (reachability + tiers) |
 | Unused class members / enum members | ✅ | – | – | – | – | – | – | ✅ |
 | Unreachable code | ✅ | ~ | – | – | – | – | – | ✅ |
 | Dependency hygiene (unused/missing/transitive) | – | – | ✅ | – | – | – | – | ✅ |
@@ -239,7 +239,7 @@ See [docs/architecture.md](docs/architecture.md).
 | Complexity | – | ~ | – | – | ✅ | – | – | ✅ |
 | Churn × complexity | – | – | – | – | – | – | – | ✅ |
 | Duplication | – | – | – | – | – | ✅ | – | ✅ |
-| Type health + private-type leaks | – | – | – | – | – | – | – | ✅ |
+| Type health + private-type leaks | – | ~ | – | – | – | – | – | ✅ |
 | Security candidates (+CWE) | – | ~ | – | – | – | – | ✅ | ✅ |
 | One deterministic pass + agent/MCP contract | – | – | – | – | – | – | – | ✅ |
 
