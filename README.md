@@ -229,13 +229,18 @@ See [docs/architecture.md](docs/architecture.md).
 | | vulture | ruff | deptry | tach | radon | jscpd | bandit | **Mollify** |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | Whole-project dead code | ~ | – | – | – | – | – | – | ✅ (reachability + tiers) |
-| Dependency hygiene | – | – | ✅ | – | – | – | – | ✅ |
+| Unused class members / enum members | ✅ | – | – | – | – | – | – | ✅ |
+| Unreachable code | ✅ | ~ | – | – | – | – | – | ✅ |
+| Dependency hygiene (unused/missing/transitive) | – | – | ✅ | – | – | – | – | ✅ |
+| Misplaced dev dependency | – | – | ✅ | – | – | – | – | ✅ |
+| Unresolved / broken imports | – | ~ | – | – | – | – | – | ✅ |
 | Circular deps | – | – | – | ✅ | – | – | – | ✅ |
+| Boundaries / interface (private-import) | – | – | – | ✅ | – | – | – | ✅ |
 | Complexity | – | ~ | – | – | ✅ | – | – | ✅ |
 | Churn × complexity | – | – | – | – | – | – | – | ✅ |
 | Duplication | – | – | – | – | – | ✅ | – | ✅ |
-| Type health | – | – | – | – | – | – | – | ✅ |
-| Security candidates | – | ~ | – | – | – | – | ✅ | ✅ |
+| Type health + private-type leaks | – | – | – | – | – | – | – | ✅ |
+| Security candidates (+CWE) | – | ~ | – | – | – | – | ✅ | ✅ |
 | One deterministic pass + agent/MCP contract | – | – | – | – | – | – | – | ✅ |
 
 `~` = partial. Mollify's wedge is the **unified deterministic pass** with one

@@ -26,13 +26,13 @@ See the [README](../README.md#install) for the full matrix and the
 | Command | What it reports |
 |---|---|
 | `mollify audit` | Everything, plus a 0–100 quality score. Start here. |
-| `mollify dead-code` (`check`) | Unused files and unused top-level functions/classes/variables. |
-| `mollify deps` | Declared-but-unused and imported-but-undeclared distributions. |
-| `mollify arch` | Import cycles, layer-boundary violations, and custom policy violations. |
+| `mollify dead-code` (`check`) | Unused files, top-level functions/classes/variables, **class members (methods/attributes), enum members**, imports, locals/parameters, **unreachable code**, and duplicate re-exports. |
+| `mollify deps` | Declared-but-unused, imported-but-undeclared (missing/transitive), **misplaced dev dependencies**, and **unresolved/broken internal imports**. |
+| `mollify arch` | Import cycles, layer-boundary violations, contracts, **cross-package private-import (interface) violations**, and custom policy violations. |
 | `mollify complexity` (`health`) | Functions over the cyclomatic/cognitive thresholds + churn×complexity hotspots. |
 | `mollify dupes` | Duplicated code blocks (clone families). |
-| `mollify types` | Fully-untyped public functions (annotation health). |
-| `mollify security` | Bandit-style security candidates. |
+| `mollify types` | Fully-untyped public functions (annotation health) + **private-type leaks** in public signatures. |
+| `mollify security` | Bandit-style security candidates with CWE ids (eval, shell, deserialization, weak crypto, SQLi, TLS, secrets, **flask debug, jinja2 autoescape, broad except: pass**, …). |
 | `mollify coverage --coverage-file <f>` | Reachable-but-never-executed functions (cold paths) from a coverage.py JSON report. |
 | `mollify supply-chain [--offline]` | Pinned/locked versions **and declared ranges** matched against vulnerability advisories (ranges resolve via the installed venv, else flagged when they permit a vulnerable version). Live OSV by default; `--offline` uses the local DB. |
 | `mollify fix [--apply]` | Remove safe (certain) unused symbols. Dry-run unless `--apply`. |
