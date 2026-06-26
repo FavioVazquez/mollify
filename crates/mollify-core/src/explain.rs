@@ -86,6 +86,18 @@ pub fn text(rule: &str) -> Option<&'static str> {
             project. Confidence: certain for relative imports, likely for absolute \
             (path hacks exist). Action: fix the module path or remove the broken import."
         }
+        "duplicate-export" => {
+            "An `__init__.py` re-exports the same name from two different \
+            modules; the later import silently shadows the earlier, so one \
+            re-export is dead and the public API is ambiguous. Confidence: likely. \
+            Action: keep a single source for the name."
+        }
+        "private-import" => {
+            "A module imports another *package*'s private (`_name`) symbol, \
+            reaching past its public API (tach/knip interface enforcement). \
+            Intra-package and relative imports are not flagged. Confidence: likely. \
+            Action: import via the package's public API, or make the name public."
+        }
         "circular-dependency" => {
             "A cycle of modules that import one another (Tarjan SCC). \
             Confidence: certain — provable from static imports. Action: extract shared code \
@@ -188,6 +200,20 @@ pub fn text(rule: &str) -> Option<&'static str> {
             "An HTTP request without a timeout can block indefinitely \
             (CWE-400). Action: pass timeout=."
         }
+        "flask-debug-true" => {
+            "A web app run with debug=True ships the interactive debugger — \
+            remote code execution in production (CWE-94). Action: drive debug \
+            from config/env and never enable it in production."
+        }
+        "jinja2-autoescape-false" => {
+            "A Jinja2 Environment created with autoescape=False risks XSS \
+            (CWE-79). Action: enable autoescaping (or use select_autoescape)."
+        }
+        "try-except-pass" => {
+            "A broad `except: pass` (bare or Exception/BaseException) silently \
+            swallows all errors (CWE-703). Confidence: uncertain. Action: log or \
+            handle the error, or narrow the exception type."
+        }
         _ => return None,
     };
     Some(t)
@@ -209,6 +235,8 @@ pub const RULES: &[&str] = &[
     "transitive-dependency",
     "misplaced-dev-dependency",
     "unresolved-import",
+    "duplicate-export",
+    "private-import",
     "circular-dependency",
     "layer-violation",
     "forbidden-import",
@@ -233,6 +261,9 @@ pub const RULES: &[&str] = &[
     "insecure-random",
     "sql-injection",
     "request-without-timeout",
+    "flask-debug-true",
+    "jinja2-autoescape-false",
+    "try-except-pass",
     "vulnerable-dependency",
 ];
 

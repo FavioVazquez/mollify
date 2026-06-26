@@ -14,11 +14,13 @@ fn confidence_for(rule: &str) -> Confidence {
         | "tls-verify-disabled"
         | "unsafe-yaml-load"
         | "weak-hash"
-        | "weak-cipher" => Confidence::Likely,
+        | "weak-cipher"
+        | "flask-debug-true"
+        | "jinja2-autoescape-false" => Confidence::Likely,
         // Depends on whether input is trusted / context.
         "dangerous-eval" | "unsafe-deserialization" | "sql-injection" => Confidence::Uncertain,
         // Noisy without context: stdlib random is fine for non-security use.
-        "insecure-random" | "request-without-timeout" => Confidence::Uncertain,
+        "insecure-random" | "request-without-timeout" | "try-except-pass" => Confidence::Uncertain,
         // Could be a placeholder / test fixture.
         "hardcoded-secret" => Confidence::Likely,
         _ => Confidence::Likely,
@@ -38,6 +40,9 @@ fn cwe_for(rule: &str) -> Option<&'static str> {
         "weak-hash" | "weak-cipher" => "CWE-327",
         "insecure-random" => "CWE-330",
         "request-without-timeout" => "CWE-400",
+        "flask-debug-true" => "CWE-94",
+        "jinja2-autoescape-false" => "CWE-79",
+        "try-except-pass" => "CWE-703",
         _ => return None,
     })
 }

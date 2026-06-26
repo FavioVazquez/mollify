@@ -15,7 +15,66 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     unused_imports(graph, &mut findings);
     unused_locals(graph, &mut findings);
     unreachable_code(graph, &mut findings);
+    duplicate_exports(graph, &mut findings);
     findings
+}
+
+/// Flag a re-export surface (`__init__.py`) that binds the **same name** from
+/// two different modules — the later import silently shadows the earlier, so one
+/// re-export is dead and the public API is ambiguous (fallow's "duplicate
+/// export"). Confidence `likely`; skipped under a dynamic sink.
+fn duplicate_exports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
+    for m in &graph.modules {
+        if m.path.file_name() != Some("__init__.py") || m.parsed.has_dynamic_sink {
+            continue;
+        }
+        // binding name -> (first source module, first line)
+        let mut first: FxHashMap<&str, (&str, u32)> = FxHashMap::default();
+        for imp in &m.parsed.imports {
+            if imp.is_star {
+                continue;
+            }
+            for b in &imp.bindings {
+                match first.get(b.as_str()) {
+                    None => {
+                        first.insert(b.as_str(), (imp.module.as_str(), imp.line));
+                    }
+                    Some(&(src, _)) if src == imp.module => {} // same source: not a conflict
+                    Some(_) => {
+                        let rule = "duplicate-export";
+                        out.push(Finding {
+                            fingerprint: fingerprint(
+                                rule,
+                                &[m.path.as_str(), b, &imp.line.to_string()],
+                            ),
+                            rule: rule.into(),
+                            category: Category::Architecture,
+                            severity: Severity::Warn,
+                            confidence: Confidence::Likely,
+                            attribution: None,
+                            reason: format!(
+                                "`{b}` is re-exported from multiple modules here; the later import shadows the earlier"
+                            ),
+                            location: Location {
+                                path: m.path.clone(),
+                                line: imp.line,
+                                column: 0,
+                                end_line: None,
+                            },
+                            actions: vec![Action {
+                                kind: "dedupe-export".into(),
+                                description: format!(
+                                    "Keep a single source for `{b}` in this package's public API"
+                                ),
+                                auto_fixable: false,
+                                suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+                            }],
+                        });
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Flag statements that can never execute because they follow an unconditional
@@ -542,6 +601,26 @@ def view():
             .iter()
             .any(|x| x.reason.contains("raise") && x.location.line == 8));
         assert!(ur.iter().all(|x| x.confidence == Confidence::Certain));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn flags_duplicate_reexport_in_init() {
+        let d = temp("dupexport");
+        write(
+            &d,
+            "pkg/__init__.py",
+            "from .a import Thing\nfrom .b import Thing\nfrom .a import Other\n",
+        );
+        write(&d, "pkg/a.py", "class Thing:\n    pass\n\nOther = 1\n");
+        write(&d, "pkg/b.py", "class Thing:\n    pass\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let dup: Vec<_> = f.iter().filter(|x| x.rule == "duplicate-export").collect();
+        // `Thing` is re-exported from .a and .b → one duplicate at line 2.
+        assert_eq!(dup.len(), 1, "got {dup:?}");
+        assert!(dup[0].reason.contains("Thing") && dup[0].location.line == 2);
         std::fs::remove_dir_all(&d).ok();
     }
 

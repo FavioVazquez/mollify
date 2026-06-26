@@ -199,6 +199,82 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     findings
 }
 
+/// Public-API / interface enforcement (tach/knip parity): flag a module that
+/// reaches **across a top-level package boundary** to import another package's
+/// **private** (`_name`) symbol. Intra-package private imports are a package's
+/// own business and are not flagged; relative imports (always intra-package) are
+/// skipped. Confidence `likely`.
+pub fn private_imports(graph: &ModuleGraph) -> Vec<Finding> {
+    use rustc_hash::FxHashSet;
+    let internal_tops: FxHashSet<&str> = graph
+        .modules
+        .iter()
+        .filter_map(|m| m.dotted.split('.').next())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut findings = Vec::new();
+    for m in &graph.modules {
+        let importer_top = m.dotted.split('.').next().unwrap_or("");
+        for imp in &m.parsed.imports {
+            if imp.relative_dots > 0 {
+                continue; // relative imports are intra-package by construction
+            }
+            let Some(src_top) = imp.module.split('.').next() else {
+                continue;
+            };
+            // Must cross into a *different* first-party package.
+            if src_top.is_empty() || src_top == importer_top || !internal_tops.contains(src_top) {
+                continue;
+            }
+            for name in &imp.names {
+                if !(name.starts_with('_') && !(name.starts_with("__") && name.ends_with("__"))) {
+                    continue;
+                }
+                let rule = "private-import";
+                findings.push(Finding {
+                    fingerprint: fingerprint(
+                        rule,
+                        &[m.path.as_str(), &imp.module, name, &imp.line.to_string()],
+                    ),
+                    rule: rule.into(),
+                    category: Category::Architecture,
+                    severity: Severity::Warn,
+                    confidence: Confidence::Likely,
+                    attribution: None,
+                    reason: format!(
+                        "imports private name `{name}` from another package `{}` — reaching past its public API",
+                        imp.module
+                    ),
+                    location: Location {
+                        path: m.path.clone(),
+                        line: imp.line,
+                        column: 0,
+                        end_line: None,
+                    },
+                    actions: vec![Action {
+                        kind: "respect-interface".into(),
+                        description: format!(
+                            "Import `{name}` only via `{}`'s public API, or make it public",
+                            src_top
+                        ),
+                        auto_fixable: false,
+                        suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+                    }],
+                });
+            }
+        }
+    }
+    findings.sort_by(|a, b| {
+        a.location
+            .path
+            .cmp(&b.location.path)
+            .then(a.location.line.cmp(&b.location.line))
+            .then(a.reason.cmp(&b.reason))
+    });
+    findings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +291,34 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, src).unwrap();
+    }
+
+    #[test]
+    fn flags_cross_package_private_import_only() {
+        let d = temp("privimport");
+        // Package `core` exposes `_secret`; package `app` reaches across to it.
+        write(&d, "core/__init__.py", "");
+        write(
+            &d,
+            "core/util.py",
+            "def _secret():\n    return 1\n\ndef public():\n    return 2\n",
+        );
+        write(&d, "app/__init__.py", "");
+        write(&d, "app/main.py", "from core.util import _secret, public\n");
+        // Intra-package private import inside `core` must NOT be flagged.
+        write(&d, "core/other.py", "from core.util import _secret\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = private_imports(&g);
+        assert_eq!(
+            f.len(),
+            1,
+            "only the cross-package private import, got {f:?}"
+        );
+        assert!(
+            f[0].reason.contains("_secret") && f[0].location.path.as_str().contains("app/main.py")
+        );
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

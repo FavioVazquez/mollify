@@ -1583,6 +1583,33 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
                     security_secret(t.id.as_str(), v, a.range(), self.li, self.m);
                 }
             }
+            Stmt::Try(t) => {
+                // try/except/pass (B110): a broad handler that silently swallows
+                // errors. Only flag bare `except:` or `except Exception/BaseException`.
+                for h in &t.handlers {
+                    let ruff_python_ast::ExceptHandler::ExceptHandler(eh) = h;
+                    let broad = match &eh.type_ {
+                        None => true,
+                        Some(ty) => expr_path(ty)
+                            .map(|p| {
+                                matches!(
+                                    p.rsplit('.').next().unwrap_or(&p),
+                                    "Exception" | "BaseException"
+                                )
+                            })
+                            .unwrap_or(false),
+                    };
+                    if broad && eh.body.iter().all(|s| matches!(s, Stmt::Pass(_))) {
+                        self.m.security_hits.push(SecurityHit {
+                            rule: "try-except-pass",
+                            line: line1(self.li, eh.range().start()),
+                            detail:
+                                "broad `except: pass` silently swallows errors; log or handle them"
+                                    .into(),
+                        });
+                    }
+                }
+            }
             _ => {}
         }
         walk_stmt(self, stmt);
@@ -1817,6 +1844,22 @@ fn security_call(c: &ruff_python_ast::ExprCall, f: &str, line: u32, m: &mut Pars
             format!("`{f}` without a timeout= can block indefinitely"),
         );
     }
+    // Flask/Bottle debug server (B201): `app.run(debug=True)` ships the
+    // interactive debugger (RCE) in production.
+    if last == "run" && kwarg_bool(c, "debug", true) {
+        hit(
+            "flask-debug-true",
+            "running a web app with debug=True exposes the interactive debugger".into(),
+        );
+    }
+    // Jinja2 without autoescaping (B701): `Environment(autoescape=False)` (or the
+    // implicit default) risks XSS.
+    if last == "Environment" && kwarg_bool(c, "autoescape", false) {
+        hit(
+            "jinja2-autoescape-false",
+            "Jinja2 Environment with autoescape=False risks XSS; enable autoescaping".into(),
+        );
+    }
 }
 
 fn security_imports(m: &mut ParsedModule) {
@@ -1900,6 +1943,23 @@ mod tests {
     fn private_convention_detected() {
         let m = parse("def _helper():\n    pass\n");
         assert!(m.definitions[0].private_by_convention);
+    }
+
+    #[test]
+    fn detects_expanded_security_rules() {
+        let m = parse(
+            "app.run(debug=True)\nenv = Environment(autoescape=False)\ntry:\n    risky()\nexcept Exception:\n    pass\n",
+        );
+        let rules: Vec<_> = m.security_hits.iter().map(|h| h.rule).collect();
+        assert!(rules.contains(&"flask-debug-true"), "got {rules:?}");
+        assert!(rules.contains(&"jinja2-autoescape-false"), "got {rules:?}");
+        assert!(rules.contains(&"try-except-pass"), "got {rules:?}");
+        // A narrow `except ValueError: pass` must NOT be flagged.
+        let narrow = parse("try:\n    x()\nexcept ValueError:\n    pass\n");
+        assert!(!narrow
+            .security_hits
+            .iter()
+            .any(|h| h.rule == "try-except-pass"));
     }
 
     #[test]
