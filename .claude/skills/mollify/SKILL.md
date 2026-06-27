@@ -51,7 +51,7 @@ Actions / utilities:
 - `--brief` (advisory: print but exit 0),
   `--min-confidence certain|likely|uncertain`.
 - `--include <dir>` (repeatable) — scan a directory despite the builtin
-  exclude list or `.mollifyrc.json`'s `exclude_dirs`.
+  exclude list, `.mollifyrc.json`'s `exclude_dirs`, or `.gitignore`.
 
 Both `--gate new-only` and `--format sarif` are fully implemented. Drop `--format
 json` for a readable human summary.

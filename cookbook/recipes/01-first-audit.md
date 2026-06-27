@@ -91,7 +91,8 @@ Quality score: 71/100
 
 Need to scan one anyway — auditing a vendored fork before deleting it, or a
 `node_modules` package you suspect is stale? `--include <DIR>` (repeatable)
-overrides *both* the builtin denylist and `exclude_dirs` for that directory name,
+overrides the builtin denylist, `exclude_dirs`, *and* `.gitignore` for that
+directory name (this sample project's own `.gitignore` lists `node_modules/`),
 one invocation at a time:
 
 ```bash
@@ -110,5 +111,7 @@ Quality score: 73/100
 
 `--include` is a per-invocation override, not a config setting — it doesn't
 touch `.mollifyrc.json`, so your team's defaults stay intact for everyone else.
+It does not override the `pyvenv.cfg` virtualenv guard, so an `--include`'d
+directory that's itself a virtualenv stays excluded.
 
 **Next:** [Recipe 02 — Anatomy of a finding »](02-anatomy-of-a-finding.md)

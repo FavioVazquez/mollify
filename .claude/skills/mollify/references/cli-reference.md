@@ -37,8 +37,9 @@
 - `--baseline <f>` — keep only findings new since that baseline.
 - `--fail-on-regression` — with `--baseline`, exit non-zero if any new findings appeared.
 - `--brief` — advisory mode: print the report but always exit 0.
-- `--include <dir>` — scan this directory name despite the builtin exclude list
-  or `.mollifyrc.json`'s `exclude_dirs`. Repeatable.
+- `--include <dir>` — scan this directory name despite the builtin exclude list,
+  `.mollifyrc.json`'s `exclude_dirs`, or `.gitignore`. Does not override the
+  `pyvenv.cfg` virtualenv guard. Repeatable.
 
 ## Command-specific flags
 - `mollify supply-chain` — `--offline`, `--refresh`, `--advisory-db <f>`.

@@ -8,11 +8,14 @@ versioned by `schema_version` (currently `0.1`).
 
 ### Added
 - **`--include <DIR>`** flag on all 8 analysis commands (`audit`, `dead-code`,
-  `deps`, `arch`, `complexity`, `dupes`, `types`, `security`). Repeatable;
-  overrides both the builtin discovery denylist (`.venv`, `.git`,
-  `__pycache__`, `node_modules`, `build`, `dist`, etc.) and `.mollifyrc.json`'s
-  `exclude_dirs` for the named directory, letting users opt a directory back
-  into scanning on a per-invocation basis.
+  `deps`, `arch`, `complexity`, `dupes`, `types`, `security`; not
+  `coverage`/`supply-chain`, which aren't path-scoped). Repeatable; overrides
+  the builtin discovery denylist (`.venv`, `.git`, `__pycache__`,
+  `node_modules`, `build`, `dist`, etc.), `.mollifyrc.json`'s `exclude_dirs`,
+  and `.gitignore` for the named directory, letting users opt a directory
+  back into scanning on a per-invocation basis. Does not override the
+  `pyvenv.cfg` virtualenv guard — an included directory that is itself a
+  virtualenv stays excluded.
 
 ## 0.1.2 - 2026-06-26
 

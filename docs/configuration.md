@@ -143,10 +143,12 @@ builtin name from `.mollifyrc.json` itself.
 "exclude_dirs": ["vendor", "third_party"]
 ```
 
-To scan a directory despite either list — the builtin denylist or your own
-`exclude_dirs` — pass `--include <DIR>` on the command line (repeatable). It's a
-per-invocation override, not a config setting, and works on every analysis
-command:
+To scan a directory despite any of these — the builtin denylist, your own
+`exclude_dirs`, or `.gitignore` — pass `--include <DIR>` on the command line
+(repeatable). It's a per-invocation override, not a config setting, and works
+on every analysis command except `coverage`/`supply-chain` (which aren't
+path-scoped). It does not override the `pyvenv.cfg` virtualenv guard — an
+included directory that is itself a virtualenv stays excluded.
 
 ```bash
 mollify audit --include node_modules --include vendor

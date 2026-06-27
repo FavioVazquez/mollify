@@ -26,8 +26,8 @@ delete, or whether dependencies are unused/missing.
     annotations, `junit` = JUnit XML), `--gate all|new-only`, `--base <ref>`,
     `--save-baseline <f>`, `--baseline <f>`, `--fail-on-regression`, `--brief`,
     `--min-confidence certain|likely|uncertain`, and `--include <dir>`
-    (repeatable) to scan a directory despite the builtin exclude list or
-    `.mollifyrc.json`'s `exclude_dirs`. `mollify graph` accepts
+    (repeatable) to scan a directory despite the builtin exclude list,
+    `.mollifyrc.json`'s `exclude_dirs`, or `.gitignore`. `mollify graph` accepts
     `--mermaid`. Use `--format json` to consume structured output. `--gate
     new-only` and `--format sarif` are fully implemented.
 - Trust the deterministic findings. Each finding carries a `confidence` tier

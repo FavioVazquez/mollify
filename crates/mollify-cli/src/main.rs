@@ -243,8 +243,9 @@ struct Scope {
     /// Only show findings at least this confident (certain > likely > uncertain).
     #[arg(long, value_enum)]
     min_confidence: Option<ConfidenceArg>,
-    /// Scan this directory name despite the builtin exclude list or
-    /// .mollifyrc.json's exclude_dirs (e.g. --include .venv). Repeatable.
+    /// Scan this directory name despite the builtin exclude list,
+    /// .mollifyrc.json's exclude_dirs, or .gitignore (e.g. --include
+    /// node_modules). Repeatable.
     #[arg(long, value_name = "DIR")]
     include: Vec<String>,
 }

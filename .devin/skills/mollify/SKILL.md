@@ -44,8 +44,8 @@ Global flags (analysis commands): `--path <dir>` (default `.`),
 `junit` = JUnit XML), `--gate all|new-only`, `--base <ref>`,
 `--save-baseline <f>`, `--baseline <f>`, `--fail-on-regression`, `--brief`,
 `--min-confidence certain|likely|uncertain`, `--include <dir>` (repeatable; scan
-a directory despite the builtin exclude list or `.mollifyrc.json`'s
-`exclude_dirs`). `--gate new-only` and `--format
+a directory despite the builtin exclude list, `.mollifyrc.json`'s
+`exclude_dirs`, or `.gitignore`). `--gate new-only` and `--format
 sarif` are fully implemented. Drop `--format json` for a human summary; add
 `--path <dir>` to target a subproject. See `references/cli-reference.md`.
 
