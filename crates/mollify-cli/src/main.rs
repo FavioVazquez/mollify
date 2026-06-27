@@ -243,6 +243,11 @@ struct Scope {
     /// Only show findings at least this confident (certain > likely > uncertain).
     #[arg(long, value_enum)]
     min_confidence: Option<ConfidenceArg>,
+    /// Scan this directory name despite the builtin exclude list,
+    /// .mollifyrc.json's exclude_dirs, or .gitignore (e.g. --include
+    /// node_modules). Repeatable.
+    #[arg(long, value_name = "DIR")]
+    include: Vec<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -367,23 +372,43 @@ fn main() {
         Command::Audit(s) => run_audit(&s),
         Command::DeadCode(s) => run_findings(
             &s,
-            mollify_core::dead_code_report,
+            mollify_core::dead_code_report_with_includes,
             Report::DeadCode,
             "dead-code",
         ),
-        Command::Deps(s) => run_findings(&s, mollify_core::deps_report, Report::Deps, "deps"),
-        Command::Arch(s) => run_findings(&s, mollify_core::arch_report, Report::Arch, "arch"),
+        Command::Deps(s) => run_findings(
+            &s,
+            mollify_core::deps_report_with_includes,
+            Report::Deps,
+            "deps",
+        ),
+        Command::Arch(s) => run_findings(
+            &s,
+            mollify_core::arch_report_with_includes,
+            Report::Arch,
+            "arch",
+        ),
         Command::Complexity(s) => run_findings(
             &s,
-            mollify_core::complexity_report,
+            mollify_core::complexity_report_with_includes,
             Report::Complexity,
             "complexity",
         ),
-        Command::Dupes(s) => run_findings(&s, mollify_core::dupes_report, Report::Dupes, "dupes"),
-        Command::Types(s) => run_findings(&s, mollify_core::types_report, Report::Types, "types"),
+        Command::Dupes(s) => run_findings(
+            &s,
+            mollify_core::dupes_report_with_includes,
+            Report::Dupes,
+            "dupes",
+        ),
+        Command::Types(s) => run_findings(
+            &s,
+            mollify_core::types_report_with_includes,
+            Report::Types,
+            "types",
+        ),
         Command::Security(s) => run_findings(
             &s,
-            mollify_core::security_report,
+            mollify_core::security_report_with_includes,
             Report::Security,
             "security",
         ),
@@ -473,7 +498,7 @@ fn gated_exit(s: &Scope, errors: usize, outcome: &BaselineOutcome) -> i32 {
 }
 
 fn run_audit(s: &Scope) -> i32 {
-    let mut report = mollify_core::audit_report(&s.path);
+    let mut report = mollify_core::audit_report_with_includes(&s.path, &s.include);
     apply_gate(s, &mut report.findings);
     apply_min_confidence(s, &mut report.findings);
     let outcome = handle_baseline(s, &mut report.findings);
@@ -515,11 +540,11 @@ fn run_audit(s: &Scope) -> i32 {
 
 fn run_findings(
     s: &Scope,
-    f: fn(&camino::Utf8Path) -> mollify_types::FindingsReport,
+    f: fn(&camino::Utf8Path, &[String]) -> mollify_types::FindingsReport,
     wrap: fn(mollify_types::FindingsReport) -> Report,
     label: &str,
 ) -> i32 {
-    let mut report = f(&s.path);
+    let mut report = f(&s.path, &s.include);
     apply_gate(s, &mut report.findings);
     apply_min_confidence(s, &mut report.findings);
     let outcome = handle_baseline(s, &mut report.findings);
@@ -781,6 +806,7 @@ fn run_watch(a: &WatchArgs) -> i32 {
         fail_on_regression: false,
         brief: false,
         min_confidence: None,
+        include: Vec::new(),
     };
     println!(
         "Watching {} (every {}ms) — Ctrl-C to stop.\n",

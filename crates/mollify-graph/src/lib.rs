@@ -87,25 +87,36 @@ const DEFAULT_EXCLUDE_DIRS: &[&str] = &[
 /// True if `entry` is a directory that should be pruned from discovery: a
 /// builtin/extra denylisted name, or any directory directly containing a
 /// `pyvenv.cfg` (a virtualenv marker that catches custom-named venvs the name
-/// denylist can't anticipate).
-fn is_excluded_dir(entry: &ignore::DirEntry, extra_excludes: &[String]) -> bool {
+/// denylist can't anticipate). `includes` overrides both the builtin and
+/// extra denylists (but not the `pyvenv.cfg` check, since a directory the user
+/// explicitly asked to include is never an accidental virtualenv).
+fn is_excluded_dir(
+    entry: &ignore::DirEntry,
+    extra_excludes: &[String],
+    includes: &[String],
+) -> bool {
     if !entry.file_type().is_some_and(|t| t.is_dir()) {
         return false;
     }
     let Some(name) = entry.file_name().to_str() else {
         return false;
     };
-    if DEFAULT_EXCLUDE_DIRS.contains(&name) || extra_excludes.iter().any(|e| e == name) {
+    // Check the pyvenv.cfg guard first: it always wins, even for a
+    // directory the user explicitly --include'd.
+    if entry.path().join("pyvenv.cfg").is_file() {
         return true;
     }
-    entry.path().join("pyvenv.cfg").is_file()
+    if includes.iter().any(|i| i == name) {
+        return false;
+    }
+    DEFAULT_EXCLUDE_DIRS.contains(&name) || extra_excludes.iter().any(|e| e == name)
 }
 
 /// Walk `root` for `*.py` and `*.ipynb` files, honoring `.gitignore` and
 /// pruning [`DEFAULT_EXCLUDE_DIRS`] (plus any virtualenv detected via
 /// `pyvenv.cfg`). Deterministic order.
 pub fn discover_python_files(root: &Utf8Path) -> Vec<Utf8PathBuf> {
-    discover_python_files_excluding(root, &[])
+    discover_python_files_with(root, &[], &[])
 }
 
 /// Like [`discover_python_files`], but also prunes `extra_excludes` directory
@@ -115,14 +126,66 @@ pub fn discover_python_files_excluding(
     root: &Utf8Path,
     extra_excludes: &[String],
 ) -> Vec<Utf8PathBuf> {
-    let extra = extra_excludes.to_vec();
+    discover_python_files_with(root, extra_excludes, &[])
+}
+
+/// Like [`discover_python_files_excluding`], but `includes` directory names
+/// bypass both the builtin denylist and `extra_excludes`, *and* override
+/// `.gitignore` for that directory — used to honor a user's `--include`
+/// override of the default/configured/VCS exclusions.
+///
+/// `ignore::WalkBuilder`'s own override mechanism can't express "un-ignore
+/// just this one directory, leave `.gitignore` in force everywhere else":
+/// once any non-negated override glob is registered, every file that fails
+/// to match it is force-excluded (see `ignore::overrides::Override::matched`),
+/// which would silently drop the rest of the project. So instead this runs a
+/// second, separate walk per included directory with `.gitignore` checking
+/// turned off entirely (scoped to that directory's subtree only); the
+/// [`is_excluded_dir`] builtin-denylist/`pyvenv.cfg` guard still applies
+/// inside it. Results from both walks are merged and deduplicated.
+pub fn discover_python_files_with(
+    root: &Utf8Path,
+    extra_excludes: &[String],
+    includes: &[String],
+) -> Vec<Utf8PathBuf> {
     let mut out = Vec::new();
-    for entry in ignore::WalkBuilder::new(root)
-        .hidden(false)
-        .filter_entry(move |e| !is_excluded_dir(e, &extra))
-        .build()
-        .flatten()
-    {
+    collect_py_files(
+        &mut out,
+        walk_builder(root, extra_excludes, includes, true).build(),
+    );
+    for dir in find_dirs_named(root, includes, extra_excludes) {
+        collect_py_files(
+            &mut out,
+            walk_builder(&dir, extra_excludes, includes, false).build(),
+        );
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn walk_builder(
+    root: &Utf8Path,
+    extra_excludes: &[String],
+    includes: &[String],
+    honor_gitignore: bool,
+) -> ignore::WalkBuilder {
+    let extra = extra_excludes.to_vec();
+    let inc = includes.to_vec();
+    let mut wb = ignore::WalkBuilder::new(root);
+    wb.hidden(false);
+    if !honor_gitignore {
+        wb.git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .ignore(false);
+    }
+    wb.filter_entry(move |e| !is_excluded_dir(e, &extra, &inc));
+    wb
+}
+
+fn collect_py_files(out: &mut Vec<Utf8PathBuf>, walk: ignore::Walk) {
+    for entry in walk.flatten() {
         let p = entry.path();
         if p.extension().is_some_and(|e| e == "py" || e == "ipynb") {
             if let Ok(u) = Utf8PathBuf::from_path_buf(p.to_path_buf()) {
@@ -130,8 +193,37 @@ pub fn discover_python_files_excluding(
             }
         }
     }
-    out.sort();
-    out
+}
+
+/// Find every directory under `root` whose name is in `names`, walking with
+/// `.gitignore` disabled (so a gitignored match is still found) but the
+/// builtin denylist/`pyvenv.cfg` guard still pruning everything else.
+fn find_dirs_named(
+    root: &Utf8Path,
+    names: &[String],
+    extra_excludes: &[String],
+) -> Vec<Utf8PathBuf> {
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    for entry in walk_builder(root, extra_excludes, names, false)
+        .build()
+        .flatten()
+    {
+        if entry.depth() == 0 || !entry.file_type().is_some_and(|t| t.is_dir()) {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str() else {
+            continue;
+        };
+        if names.iter().any(|n| n == name) {
+            if let Ok(u) = Utf8PathBuf::from_path_buf(entry.path().to_path_buf()) {
+                found.push(u);
+            }
+        }
+    }
+    found
 }
 
 /// Read a module's source. For `.ipynb`, extract and concatenate code cells into
@@ -708,6 +800,90 @@ import b
         write(&d, "vendor/thirdparty.py", "x = 1\n");
 
         let files = discover_python_files_excluding(&d, &["vendor".to_string()]);
+        let rel: Vec<String> = files
+            .iter()
+            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            .collect();
+        assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn discovery_include_overrides_default_and_extra_excludes() {
+        let d = temp("include-overrides");
+        write(&d, "src/app.py", "def main():\n    return 1\n");
+        write(&d, "node_modules/foo/bar.py", "bar = 1\n");
+        write(&d, "vendor/thirdparty.py", "x = 1\n");
+
+        let files = discover_python_files_with(
+            &d,
+            &["vendor".to_string()],
+            &["node_modules".to_string(), "vendor".to_string()],
+        );
+        let mut rel: Vec<String> = files
+            .iter()
+            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            .collect();
+        rel.sort();
+        assert_eq!(
+            rel,
+            vec![
+                "node_modules/foo/bar.py".to_string(),
+                "src/app.py".to_string(),
+                "vendor/thirdparty.py".to_string(),
+            ],
+            "got {rel:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn discovery_include_overrides_gitignore() {
+        let d = temp("include-overrides-gitignore");
+        write(&d, ".gitignore", "node_modules/\n");
+        write(&d, "src/app.py", "def main():\n    return 1\n");
+        write(&d, "node_modules/foo/bar.py", "bar = 1\n");
+
+        // Without --include, .gitignore prunes node_modules/ entirely.
+        let plain = discover_python_files(&d);
+        let plain_rel: Vec<String> = plain
+            .iter()
+            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            .collect();
+        assert_eq!(
+            plain_rel,
+            vec!["src/app.py".to_string()],
+            "got {plain_rel:?}"
+        );
+
+        // With --include node_modules, the override wins over .gitignore.
+        let files = discover_python_files_with(&d, &[], &["node_modules".to_string()]);
+        let mut rel: Vec<String> = files
+            .iter()
+            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            .collect();
+        rel.sort();
+        assert_eq!(
+            rel,
+            vec![
+                "node_modules/foo/bar.py".to_string(),
+                "src/app.py".to_string(),
+            ],
+            "got {rel:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn discovery_include_does_not_override_pyvenv_guard() {
+        let d = temp("include-pyvenv-guard");
+        write(&d, "src/app.py", "def main():\n    return 1\n");
+        // A directory the user explicitly --include's, but which is itself a
+        // virtualenv (has pyvenv.cfg) — the guard must still win.
+        write(&d, "vendor/pyvenv.cfg", "home = /usr/bin\n");
+        write(&d, "vendor/lib/site.py", "site_fn = 1\n");
+
+        let files = discover_python_files_with(&d, &[], &["vendor".to_string()]);
         let rel: Vec<String> = files
             .iter()
             .map(|f| f.strip_prefix(&d).unwrap().to_string())

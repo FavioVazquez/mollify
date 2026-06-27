@@ -61,7 +61,10 @@ mollify audit --baseline .mollify/baseline.json --fail-on-regression   # in CI
 
 Common flags: `--path <dir>`, `--format human|json|sarif|github|junit`,
 `--gate all|new-only`, `--base <ref>`, `--min-confidence certain|likely|uncertain`,
-and the regression-baseline flags (`--save-baseline`/`--baseline`/`--fail-on-regression`/`--brief`).
+the regression-baseline flags (`--save-baseline`/`--baseline`/`--fail-on-regression`/`--brief`),
+and `--include <dir>` (repeatable) to scan a directory despite the builtin
+exclude list, `.mollifyrc.json`'s `exclude_dirs`, or `.gitignore` — see
+[configuration.md](configuration.md#exclude_dirs).
 
 ## Editor integration (LSP)
 
@@ -81,6 +84,9 @@ mollify dead-code --format json
 
 # CI: only fail on issues this PR introduced, vs the main branch
 mollify audit --gate new-only --base origin/main
+
+# Scan a directory normally excluded by default, by .mollifyrc.json, or by .gitignore
+mollify audit --include node_modules --include vendor
 
 # Code scanning (GitHub/GitLab)
 mollify audit --format sarif > mollify.sarif
