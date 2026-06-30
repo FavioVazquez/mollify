@@ -14,6 +14,7 @@ pub fn text(rule: &str) -> Option<&'static str> {
             "An imported name that is never referenced outside its own import in \
             the module. Confidence: certain in a regular module with no dynamic \
             sink (auto-fixable); uncertain in `__init__.py` (likely a re-export). \
+            `__future__` imports are never flagged (they have a compiler effect). \
             Action: remove the import."
         }
         "unused-variable" => {
@@ -29,7 +30,10 @@ pub fn text(rule: &str) -> Option<&'static str> {
         "unused-export" => {
             "A top-level function/class never referenced outside its own \
             module and not listed in `__all__`. Confidence: likely (dynamic access via \
-            getattr downgrades it). Action: remove it or make it private."
+            getattr downgrades it). Reachability roots are exempt: framework-registered \
+            symbols, pytest `test_*`/`Test*` in test paths (honoring \
+            `[tool.pytest.ini_options].testpaths`), and functions named by a \
+            `[project.scripts]` entry point. Action: remove it or make it private."
         }
         "unused-method" => {
             "A class method never referenced anywhere as an attribute \
@@ -63,7 +67,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "unused-dependency" => {
             "A distribution declared in pyproject/requirements but never \
-            imported. Confidence: likely. Action: remove it from your dependency list."
+            imported. Lazy imports inside function bodies and modules referenced by \
+            `[project.scripts]` entry points count as usage. Confidence: likely. \
+            Action: remove it from your dependency list."
         }
         "transitive-dependency" => {
             "A package imported and installed, but only because another dependency \
@@ -72,7 +78,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "missing-dependency" => {
             "A third-party module imported but absent from your declared \
-            dependencies (not stdlib, not first-party). Action: add it to your project metadata."
+            dependencies (not stdlib, not first-party). First-party test helpers \
+            imported by bare leaf name (`conftest`, sibling modules on a test path) \
+            are treated as internal, not missing. Action: add it to your project metadata."
         }
         "misplaced-dev-dependency" => {
             "A distribution declared only in a dev/test group (PEP 735 \
@@ -132,8 +140,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "commented-code" => {
             "A comment whose text parses as Python code (dead code left in a \
-            comment). Confidence: likely. Action: delete it — version control \
-            remembers it."
+            comment). Prose is excluded — a trailing period or a long, wordy line \
+            is treated as English even when it opens with a keyword like `from`/`for`. \
+            Confidence: likely. Action: delete it — version control remembers it."
         }
         "low-cohesion" => {
             "A class whose methods share few instance attributes (high LCOM*) — \
@@ -154,8 +163,10 @@ pub fn text(rule: &str) -> Option<&'static str> {
             or relocate the forbidden construct."
         }
         "dangerous-eval" => {
-            "A call to `eval`/`exec` on a non-literal argument. Action: replace \
-            with an explicit, safe parser or dispatch table."
+            "A call to the `eval`/`exec`/`compile` builtins on a non-literal \
+            argument. Only the bare builtins match — methods named `.exec()`/`.eval()` \
+            (ORM/driver APIs such as SQLModel's `session.exec`) are not flagged. \
+            Action: replace with an explicit, safe parser or dispatch table."
         }
         "subprocess-shell-true" => {
             "A subprocess call with `shell=True`. Action: pass an argv \

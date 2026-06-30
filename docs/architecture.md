@@ -52,15 +52,20 @@ files ──▶ mollify-parse ──▶ mollify-graph ──▶ mollify-core ─
 ## How dead-code reachability works
 
 1. Discover `*.py`; assign path-sorted FileIds.
-2. Resolve imports to internal modules → directed edges.
-3. Seed entry points (`__main__`/`__init__`/`conftest`/`test_*`/`setup.py`).
+2. Resolve imports to internal modules → directed edges. Resolution is
+   package-aware (a package `__init__.py`'s relative re-exports resolve against
+   the package itself), and lazy imports inside function/class bodies also create
+   edges.
+3. Seed entry points (`__main__`/`__init__`/`conftest`/`test_*`/`setup.py`, plus
+   the module half of each `[project.scripts]` console-script entry point).
 4. BFS mark-reachable → unreachable non-entry modules are `unused-file`.
 5. A top-level symbol is **used** if a resolved free `Name` load binds to it
    (scope/binding resolution — ignoring shadowing locals and attribute accesses),
-   imported by name, referenced by an importer, listed in `__all__`, or
-   registered by a framework decorator (`plugins`). Otherwise it's
-   `unused-export`, tiered by confidence. (Modules with a dynamic sink fall back
-   to a conservative token-frequency check.)
+   imported by name, referenced by an importer, listed in `__all__`, registered
+   by a framework decorator (`plugins`), a pytest `test_*`/`Test*` collection
+   root in a test path, or the function named by a `[project.scripts]` entry
+   point. Otherwise it's `unused-export`, tiered by confidence. (Modules with a
+   dynamic sink fall back to a conservative token-frequency check.)
 6. Beyond reachability, the `members` engine flags **`unused-method`** /
    **`unused-attribute`** (class internals, with framework/property/dunder/
    dataclass/ABC awareness) and **`unused-enum-member`**; the parser flags

@@ -11,8 +11,8 @@ switch on `kind` and iterate `findings[]`:
 
 ```json
 {
-  "kind": "audit", "schema_version": "0.1", "quality_score": 71,
-  "summary": { "total": 20, "errors": 0, "warnings": 20, "files_analyzed": 7 },
+  "kind": "audit", "schema_version": "0.1", "quality_score": 80,
+  "summary": { "total": 21, "errors": 0, "warnings": 21, "files_analyzed": 7 },
   "findings": [{
     "fingerprint": "unused-export:93948eee", "rule": "unused-export",
     "category": "dead-code", "severity": "warn", "confidence": "certain",
