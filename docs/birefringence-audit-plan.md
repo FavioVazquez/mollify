@@ -1,5 +1,16 @@
 # Birefringence audit → Mollify precision plan
 
+> **Status: implemented.** All P1–P3 items below have landed with tests
+> (`cargo test`: 143 passing; `cargo clippy --all-targets`: clean). On a fixture
+> reproducing Birefringence's patterns (package `__init__` re-exports, lazy
+> import, `session.exec`, `from __future__`, pytest tests, prose comments,
+> `[project.scripts]`), `mollify audit` moved from the audited **20/100** to
+> **95/100**, with every remaining finding a genuine true positive (a truly
+> unimported module, an undeclared `pytest`, untyped functions) or a defensible
+> `uncertain` re-export note (matching ruff F401 semantics). See the
+> per-item "Fix" sections for what changed; tests live beside each engine.
+
+
 This plan turns the findings in `docs/birefringenceaudit.md` (real-world run of
 `mollify audit` v0.1.2 on the *Birefringence* package — scored 20/100 with 384
 findings, ~95% false positives) into concrete, code-grounded changes. Every root

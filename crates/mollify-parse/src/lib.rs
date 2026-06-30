@@ -183,6 +183,10 @@ pub struct ParsedModule {
     pub path: camino::Utf8PathBuf,
     pub definitions: Vec<Definition>,
     pub imports: Vec<Import>,
+    /// Imports nested inside function/class bodies (lazy/deferred imports). Kept
+    /// separate from `imports` so module-scope unused-import analysis is
+    /// unaffected, while dependency-usage and reachability can still see them.
+    pub nested_imports: Vec<Import>,
     pub calls: Vec<CallSite>,
     pub functions: Vec<FunctionComplexity>,
     pub security_hits: Vec<SecurityHit>,
@@ -237,6 +241,7 @@ impl PyParser {
             path: path.to_owned(),
             definitions: Vec::new(),
             imports: Vec::new(),
+            nested_imports: Vec::new(),
             calls: Vec::new(),
             functions: Vec::new(),
             security_hits: Vec::new(),
@@ -320,6 +325,18 @@ impl PyParser {
 
         // Top-level definitions / imports / __all__ / module vars.
         scan_top_level(&module.body, &li, false, &mut m);
+
+        // Lazy/deferred imports inside function & class bodies (collected
+        // separately — see `nested_imports`).
+        let mut nested = NestedImportVisitor {
+            li: &li,
+            depth: 0,
+            out: Vec::new(),
+        };
+        for stmt in &module.body {
+            nested.visit_stmt(stmt);
+        }
+        m.nested_imports = nested.out;
 
         // Calls, dynamic sinks, security candidates (whole-tree walk).
         let mut main = MainVisitor { li: &li, m: &mut m };
@@ -497,7 +514,7 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                     .filter_map(|d| decorator_path(&d.expression))
                     .collect(),
             }),
-            Stmt::Import(i) => parse_import(i, li, m),
+            Stmt::Import(i) => parse_import(i, li, &mut m.imports),
             Stmt::ImportFrom(i) => {
                 let mut imp = parse_import_from(i, li);
                 imp.type_checking_only = type_checking;
@@ -571,6 +588,35 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
     }
 }
 
+/// Collects imports nested inside function/class bodies. `depth` tracks how many
+/// function/class scopes deep we are; `depth > 0` means the import is lazy.
+struct NestedImportVisitor<'a> {
+    li: &'a LineIndex,
+    depth: u32,
+    out: Vec<Import>,
+}
+
+impl<'a> Visitor<'a> for NestedImportVisitor<'a> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {
+                self.depth += 1;
+                walk_stmt(self, stmt);
+                self.depth -= 1;
+            }
+            Stmt::Import(i) if self.depth > 0 => {
+                parse_import(i, self.li, &mut self.out);
+                walk_stmt(self, stmt);
+            }
+            Stmt::ImportFrom(i) if self.depth > 0 => {
+                self.out.push(parse_import_from(i, self.li));
+                walk_stmt(self, stmt);
+            }
+            _ => walk_stmt(self, stmt),
+        }
+    }
+}
+
 /// `if TYPE_CHECKING:` / `if typing.TYPE_CHECKING:` / `if False:` guard.
 fn is_type_checking_guard(test: &Expr) -> bool {
     if let Expr::BooleanLiteral(b) = test {
@@ -581,7 +627,7 @@ fn is_type_checking_guard(test: &Expr) -> bool {
         .unwrap_or(false)
 }
 
-fn parse_import(i: &StmtImport, li: &LineIndex, m: &mut ParsedModule) {
+fn parse_import(i: &StmtImport, li: &LineIndex, out: &mut Vec<Import>) {
     let line = line1(li, i.range().start());
     for alias in &i.names {
         let module = alias.name.as_str().to_string();
@@ -590,7 +636,7 @@ fn parse_import(i: &StmtImport, li: &LineIndex, m: &mut ParsedModule) {
             None => module.split('.').next().unwrap_or(&module).to_string(),
         };
         if !module.is_empty() {
-            m.imports.push(Import {
+            out.push(Import {
                 module,
                 relative_dots: 0,
                 names: vec![],
@@ -1724,7 +1770,14 @@ fn security_call(c: &ruff_python_ast::ExprCall, f: &str, line: u32, m: &mut Pars
         m.security_hits.push(SecurityHit { rule, line, detail });
     };
 
-    if (last == "eval" || last == "exec") && !first_positional_is_string(c) {
+    // Only the *builtins* eval/exec/compile — bare names, or explicitly via
+    // `builtins.`. Matching any trailing `.exec`/`.eval` segment falsely flagged
+    // ORM/driver methods like SQLModel's `session.exec(select(...))` (CWE-95 FP).
+    if matches!(
+        f,
+        "eval" | "exec" | "compile" | "builtins.eval" | "builtins.exec" | "builtins.compile"
+    ) && !first_positional_is_string(c)
+    {
         hit(
             "dangerous-eval",
             format!("`{f}` on a non-literal expression executes dynamic code"),
@@ -1987,6 +2040,32 @@ mod tests {
         assert!(rules.contains(&"dangerous-eval"), "got {rules:?}");
         let ok = parse("eval(\"1+1\")\n");
         assert!(!ok.security_hits.iter().any(|h| h.rule == "dangerous-eval"));
+    }
+
+    #[test]
+    fn dangerous_eval_only_matches_builtins_not_methods() {
+        // Methods named exec/eval on ORMs/drivers (SQLModel session.exec, etc.)
+        // must NOT be flagged — that was the v0.1.2 CWE-95 false positive.
+        for src in [
+            "session.exec(select(Item))\n",
+            "conn.exec(query)\n",
+            "obj.eval(expr)\n",
+            "db.compile(stmt)\n",
+        ] {
+            let m = parse(src);
+            assert!(
+                !m.security_hits.iter().any(|h| h.rule == "dangerous-eval"),
+                "method call wrongly flagged: {src}"
+            );
+        }
+        // Bare builtins on a non-literal are still flagged.
+        for src in ["exec(code)\n", "eval(user_input)\n", "compile(src, '<s>', 'exec')\n"] {
+            let m = parse(src);
+            assert!(
+                m.security_hits.iter().any(|h| h.rule == "dangerous-eval"),
+                "builtin not flagged: {src}"
+            );
+        }
     }
 
     #[test]

@@ -5,13 +5,25 @@ use crate::fingerprint::fingerprint;
 use mollify_graph::ModuleGraph;
 use mollify_parse::DefKind;
 use mollify_types::{Action, Category, Confidence, Finding, Location, Severity};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
-/// Run dead-code analysis over the graph.
+/// Run dead-code analysis over the graph (convention-only test detection).
 pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
+    analyze_with(graph, &[], &[])
+}
+
+/// Like [`analyze`], honoring extra `test_dirs` (a project's pytest
+/// `testpaths`) so `test_*`/`Test*` collection roots in those dirs are treated
+/// as reachable, and `entry_symbols` (`(module, function)` pairs named by
+/// `[project.scripts]`) which are roots invoked by the installed console script.
+pub fn analyze_with(
+    graph: &ModuleGraph,
+    test_dirs: &[String],
+    entry_symbols: &[(String, String)],
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     unused_files(graph, &mut findings);
-    unused_symbols(graph, &mut findings);
+    unused_symbols(graph, test_dirs, entry_symbols, &mut findings);
     unused_imports(graph, &mut findings);
     unused_locals(graph, &mut findings);
     unreachable_code(graph, &mut findings);
@@ -155,7 +167,6 @@ fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
 /// (not auto-fixed — rewriting the line precisely is left to the human). Skips
 /// `import *`, `__init__.py` re-exports (downgraded), and dynamic-sink modules.
 fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
-    use rustc_hash::FxHashSet;
     for m in &graph.modules {
         let local: FxHashSet<&str> = m.parsed.local_uses.iter().map(|s| s.as_str()).collect();
         let dunder_all: Option<&Vec<String>> = m.parsed.dunder_all.as_ref();
@@ -163,6 +174,9 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
         for imp in &m.parsed.imports {
             if imp.is_star || imp.bindings.is_empty() || imp.type_checking_only {
                 continue; // star imports / unparsed bindings / type-only: skip
+            }
+            if imp.module == "__future__" {
+                continue; // future imports have a compiler effect; never "unused"
             }
             let is_used = |b: &String| {
                 local.contains(b.as_str()) || dunder_all.is_some_and(|all| all.contains(b))
@@ -281,7 +295,12 @@ fn unused_files(graph: &ModuleGraph, out: &mut Vec<Finding>) {
     }
 }
 
-fn unused_symbols(graph: &ModuleGraph, out: &mut Vec<Finding>) {
+fn unused_symbols(
+    graph: &ModuleGraph,
+    test_dirs: &[String],
+    entry_symbols: &[(String, String)],
+    out: &mut Vec<Finding>,
+) {
     for m in &graph.modules {
         // Count how many top-level defs share each name (to discount def sites).
         let mut def_counts: FxHashMap<&str, u32> = FxHashMap::default();
@@ -289,8 +308,23 @@ fn unused_symbols(graph: &ModuleGraph, out: &mut Vec<Finding>) {
             *def_counts.entry(d.name.as_str()).or_insert(0) += 1;
         }
         let dunder_all: Option<&Vec<String>> = m.parsed.dunder_all.as_ref();
+        // pytest collects `test_*`/`Test*` in test modules; the runner is the
+        // caller, so these have no in-repo references but are not dead.
+        let is_test = crate::paths::is_test_module(&m.path, test_dirs);
+        // Functions named by a console-script entry point in this module.
+        let entry_here: FxHashSet<&str> = entry_symbols
+            .iter()
+            .filter(|(module, _)| module == m.dotted.as_str())
+            .map(|(_, func)| func.as_str())
+            .collect();
 
         for d in &m.parsed.definitions {
+            if is_test && crate::paths::is_pytest_entity(&d.name) {
+                continue;
+            }
+            if entry_here.contains(d.name.as_str()) {
+                continue; // invoked by the installed console script
+            }
             // Skip dunder/special names and explicit public API (`__all__`).
             if d.name.starts_with("__") && d.name.ends_with("__") {
                 continue;
@@ -395,6 +429,86 @@ mod tests {
     }
 
     #[test]
+    fn pytest_tests_are_not_unused_exports() {
+        let d = temp("pytest");
+        write(&d, "lib.py", "def helper():\n    return 1\n");
+        write(
+            &d,
+            "tests/test_lib.py",
+            "from lib import helper\n\n\
+             def test_helper():\n    assert helper() == 1\n\n\
+             class TestThing:\n    def test_method(self):\n        assert True\n\n\
+             def real_dead():\n    return 9\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let dead: Vec<_> = f
+            .iter()
+            .filter(|x| x.rule == "unused-export")
+            .map(|x| x.reason.clone())
+            .collect();
+        // test_* function and Test* class are reachable via the runner.
+        assert!(
+            !dead.iter().any(|r| r.contains("test_helper") || r.contains("TestThing")),
+            "pytest entities wrongly flagged: {dead:?}"
+        );
+        // A genuinely dead non-test helper in the same file is still flagged.
+        assert!(
+            dead.iter().any(|r| r.contains("real_dead")),
+            "real dead code missed: {dead:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn entry_point_function_not_unused_export() {
+        let d = temp("entrysym");
+        // `main` has no in-repo caller but is the console-script target.
+        write(&d, "cli.py", "def main():\n    return 0\n\ndef helper():\n    return 1\n");
+        let files = discover_python_files(&d);
+        let mut g = ModuleGraph::build(&d, &files);
+        g.mark_entry_points(&["cli".to_string()]);
+        let entry_syms = vec![("cli".to_string(), "main".to_string())];
+        let f = analyze_with(&g, &[], &entry_syms);
+        let dead: Vec<_> = f
+            .iter()
+            .filter(|x| x.rule == "unused-export")
+            .map(|x| x.reason.clone())
+            .collect();
+        assert!(
+            !dead.iter().any(|r| r.contains("main")),
+            "entry-point function wrongly flagged: {dead:?}"
+        );
+        // A sibling non-entry function is still flagged.
+        assert!(
+            dead.iter().any(|r| r.contains("helper")),
+            "real dead code missed: {dead:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn testpaths_widen_pytest_detection() {
+        let d = temp("testpaths");
+        // Non-conventional dir name; only recognized via testpaths.
+        write(
+            &d,
+            "suite/check_a.py",
+            "def test_alpha():\n    assert True\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        // Without testpaths, `suite/` isn't a test dir → flagged.
+        let plain = analyze(&g);
+        assert!(plain.iter().any(|x| x.rule == "unused-export"));
+        // With testpaths = ["suite"], the test fn is a reachable root.
+        let widened = analyze_with(&g, &["suite".to_string()], &[]);
+        assert!(!widened.iter().any(|x| x.rule == "unused-export"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
     fn private_unused_is_certain_and_autofixable() {
         let d = temp("priv");
         write(&d, "__main__.py", "print('hi')\n");
@@ -469,6 +583,31 @@ def view():
                 .unwrap()
                 .actions[0]
                 .auto_fixable
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn future_imports_never_flagged_unused() {
+        let d = temp("future");
+        write(&d, "__main__.py", "print('hi')\n");
+        write(
+            &d,
+            "lib.py",
+            "from __future__ import annotations\nimport os\n\ndef f() -> int:\n    return 1\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let imps: Vec<_> = f.iter().filter(|x| x.rule == "unused-import").collect();
+        // The __future__ import is whitelisted; the genuinely unused `os` isn't.
+        assert!(
+            !imps.iter().any(|x| x.reason.contains("annotations")),
+            "future import wrongly flagged: {imps:?}"
+        );
+        assert!(
+            imps.iter().any(|x| x.reason.contains("`os`")),
+            "real unused import missed: {imps:?}"
         );
         std::fs::remove_dir_all(&d).ok();
     }

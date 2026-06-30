@@ -404,8 +404,92 @@ fn internal_top_levels(graph: &ModuleGraph) -> FxHashSet<String> {
                 set.insert(first.to_string());
             }
         }
+        // pytest puts test dirs on sys.path, so sibling helpers (conftest.py,
+        // reference.py, …) are imported by bare leaf name. Register those leaves
+        // as first-party so they aren't mistaken for external distributions.
+        if is_test_module(&m.path) {
+            if let Some(leaf) = m.dotted.rsplit('.').next() {
+                if !leaf.is_empty() {
+                    set.insert(leaf.to_string());
+                }
+            }
+        }
     }
     set
+}
+
+/// Module names referenced by `[project.scripts]` / `[project.gui-scripts]` /
+/// `[tool.poetry.scripts]` console-script entry points (the `pkg.mod` half of a
+/// `pkg.mod:func` target). These are reachability roots even with no in-repo
+/// caller. Returns dotted module names.
+pub fn entry_point_modules(root: &Utf8Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(root.join("pyproject.toml")) else {
+        return Vec::new();
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let val = toml::Value::Table(table);
+    let mut modules = FxHashSet::default();
+    let mut harvest = |tbl: Option<&toml::Value>| {
+        if let Some(t) = tbl.and_then(|t| t.as_table()) {
+            for target in t.values().filter_map(|v| v.as_str()) {
+                // `pkg.mod:func` → `pkg.mod`; a bare `pkg.mod` counts too.
+                let module = target.split(':').next().unwrap_or(target).trim();
+                if !module.is_empty() {
+                    modules.insert(module.to_string());
+                }
+            }
+        }
+    };
+    harvest(val.get("project").and_then(|p| p.get("scripts")));
+    harvest(val.get("project").and_then(|p| p.get("gui-scripts")));
+    harvest(
+        val.get("tool")
+            .and_then(|t| t.get("poetry"))
+            .and_then(|p| p.get("scripts")),
+    );
+    let mut out: Vec<String> = modules.into_iter().collect();
+    out.sort();
+    out
+}
+
+/// The `(module, function)` pairs named by console-script entry points
+/// (`pkg.mod:func`). The function is invoked by the installed script, so it is a
+/// reachability root and must not be reported `unused-export`.
+pub fn entry_point_symbols(root: &Utf8Path) -> Vec<(String, String)> {
+    let Ok(text) = std::fs::read_to_string(root.join("pyproject.toml")) else {
+        return Vec::new();
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let val = toml::Value::Table(table);
+    let mut pairs = FxHashSet::default();
+    let mut harvest = |tbl: Option<&toml::Value>| {
+        if let Some(t) = tbl.and_then(|t| t.as_table()) {
+            for target in t.values().filter_map(|v| v.as_str()) {
+                if let Some((module, func)) = target.split_once(':') {
+                    let module = module.trim();
+                    // `pkg.mod:obj.method` → take the first attribute as the root.
+                    let func = func.trim().split('.').next().unwrap_or("").trim();
+                    if !module.is_empty() && !func.is_empty() {
+                        pairs.insert((module.to_string(), func.to_string()));
+                    }
+                }
+            }
+        }
+    };
+    harvest(val.get("project").and_then(|p| p.get("scripts")));
+    harvest(val.get("project").and_then(|p| p.get("gui-scripts")));
+    harvest(
+        val.get("tool")
+            .and_then(|t| t.get("poetry"))
+            .and_then(|p| p.get("scripts")),
+    );
+    let mut out: Vec<(String, String)> = pairs.into_iter().collect();
+    out.sort();
+    out
 }
 
 /// Distributions imported by the project (external, non-stdlib, non-internal).
@@ -418,7 +502,9 @@ fn used_distributions(
 ) -> FxHashSet<String> {
     let mut set = FxHashSet::default();
     for m in &graph.modules {
-        for imp in &m.parsed.imports {
+        // Lazy/deferred imports inside functions count as usage too (a dep
+        // imported only inside `main()` is not unused).
+        for imp in m.parsed.imports.iter().chain(&m.parsed.nested_imports) {
             if imp.relative_dots > 0 {
                 continue; // relative = internal
             }
@@ -542,7 +628,7 @@ fn module_imported_dists(
     installed: Option<&crate::installed::Installed>,
 ) -> FxHashSet<String> {
     let mut set = FxHashSet::default();
-    for imp in &m.parsed.imports {
+    for imp in m.parsed.imports.iter().chain(&m.parsed.nested_imports) {
         if imp.relative_dots > 0 {
             continue;
         }
@@ -562,15 +648,7 @@ fn module_imported_dists(
 
 /// True if a module path is test/dev code (so importing dev deps there is fine).
 fn is_test_module(path: &Utf8Path) -> bool {
-    let p = path.as_str();
-    let name = path.file_name().unwrap_or("");
-    p.contains("/tests/")
-        || p.contains("/test/")
-        || p.starts_with("tests/")
-        || p.starts_with("test/")
-        || name.starts_with("test_")
-        || name.ends_with("_test.py")
-        || name == "conftest.py"
+    crate::paths::is_test_module(path, &[])
 }
 
 #[cfg(test)]
@@ -671,6 +749,75 @@ mod tests {
         // requests is declared and used → no finding; os is stdlib → ignored.
         assert!(!f.iter().any(|x| x.reason.contains("requests")));
         assert!(!f.iter().any(|x| x.reason.contains("`os`")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn lazy_in_function_import_counts_as_used() {
+        // A dependency imported only inside a function body (deferred/lazy) must
+        // not be reported `unused-dependency`.
+        let d = temp("lazy");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\"uvicorn\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("app.py"),
+            "def main():\n    import uvicorn\n    uvicorn.run()\n",
+        )
+        .unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        assert!(
+            !f.iter().any(|x| x.rule == "unused-dependency" && x.reason.contains("uvicorn")),
+            "lazy import wrongly flagged unused: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn firstparty_test_helpers_not_missing_dependency() {
+        // pytest sibling imports by bare leaf name (conftest, reference) are
+        // first-party, not external `missing-dependency`.
+        let d = temp("helpers");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = []\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(d.join("tests")).unwrap();
+        std::fs::write(d.join("tests/conftest.py"), "import pytest\n").unwrap();
+        std::fs::write(d.join("tests/reference.py"), "VALUE = 1\n").unwrap();
+        std::fs::write(
+            d.join("tests/test_it.py"),
+            "import conftest\nfrom reference import VALUE\n\ndef test_x():\n    assert VALUE == 1\n",
+        )
+        .unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        assert!(
+            !f.iter().any(|x| x.rule == "missing-dependency"
+                && (x.reason.contains("conftest") || x.reason.contains("reference"))),
+            "first-party helper wrongly flagged missing: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn parses_console_script_entry_points() {
+        let d = temp("scripts");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\n\n[project.scripts]\nserve = \"birefringence.cli:main\"\n\
+             [project.gui-scripts]\ngui = \"birefringence.ui\"\n",
+        )
+        .unwrap();
+        let mods = entry_point_modules(&d);
+        assert!(mods.contains(&"birefringence.cli".to_string()), "got {mods:?}");
+        assert!(mods.contains(&"birefringence.ui".to_string()), "got {mods:?}");
         std::fs::remove_dir_all(&d).ok();
     }
 

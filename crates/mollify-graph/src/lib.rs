@@ -24,6 +24,10 @@ pub struct ModuleInfo {
     pub parsed: ParsedModule,
     /// True if this module is an analysis root (entry point).
     pub is_entry: bool,
+    /// True if this module is a package surface (`__init__.py`). Its `dotted`
+    /// name is the package itself, so relative imports resolve against it
+    /// directly (a leading `.` = this package, not its parent).
+    pub is_package: bool,
 }
 
 /// An import that looks first-party/relative but resolves to no module.
@@ -317,9 +321,11 @@ impl ModuleGraph {
             let dotted = dotted_name(root, &path);
             global_dynamic |= pm.has_dynamic_sink;
             by_dotted.entry(dotted.clone()).or_insert(id);
+            let is_package = path.file_name() == Some("__init__.py");
             modules.push(ModuleInfo {
                 id,
                 is_entry: is_entry(&path),
+                is_package,
                 path,
                 dotted,
                 parsed: pm,
@@ -350,9 +356,11 @@ impl ModuleGraph {
         let mut imported_symbols: FxHashMap<FileId, FxHashSet<String>> = FxHashMap::default();
 
         for m in &self.modules {
-            for imp in &m.parsed.imports {
+            // Top-level + lazy (in-function) imports both create real edges.
+            let all_imports = m.parsed.imports.iter().chain(&m.parsed.nested_imports);
+            for imp in all_imports {
                 let target_dotted = if imp.relative_dots > 0 {
-                    resolve_relative(&m.dotted, imp.relative_dots, &imp.module)
+                    resolve_relative(&m.dotted, imp.relative_dots, &imp.module, m.is_package)
                 } else {
                     imp.module.clone()
                 };
@@ -360,7 +368,12 @@ impl ModuleGraph {
                 // (handles `from pkg.mod import name` where `pkg.mod` is a module
                 // and `name` is a symbol, vs `import pkg.mod`).
                 if let Some(&tid) = self.lookup(&target_dotted) {
-                    edges.push((m.id, tid));
+                    // Skip self-references: `from . import x` in a package's own
+                    // `__init__.py` resolves the target to the package itself —
+                    // not a real edge (and a spurious self-cycle otherwise).
+                    if tid != m.id {
+                        edges.push((m.id, tid));
+                    }
                     let set = imported_symbols.entry(tid).or_default();
                     for n in &imp.names {
                         set.insert(n.clone());
@@ -368,12 +381,17 @@ impl ModuleGraph {
                     if imp.is_star {
                         set.insert("*".into());
                     }
-                } else if !imp.names.is_empty() {
-                    // `from pkg import submod` where submod is itself a module.
+                }
+                // `from pkg import submod` where `submod` is itself a module.
+                // Runs even when `target_dotted` resolves (a package surface), so
+                // `from . import bb` in `pkg/__init__.py` reaches `pkg.bb`.
+                if !imp.names.is_empty() {
                     for n in &imp.names {
                         let candidate = format!("{target_dotted}.{n}");
                         if let Some(&tid) = self.lookup(&candidate) {
-                            edges.push((m.id, tid));
+                            if tid != m.id {
+                                edges.push((m.id, tid));
+                            }
                         }
                     }
                 }
@@ -417,7 +435,7 @@ impl ModuleGraph {
             for imp in &m.parsed.imports {
                 let relative = imp.relative_dots > 0;
                 let target = if relative {
-                    resolve_relative(&m.dotted, imp.relative_dots, &imp.module)
+                    resolve_relative(&m.dotted, imp.relative_dots, &imp.module, m.is_package)
                 } else {
                     imp.module.clone()
                 };
@@ -476,6 +494,23 @@ impl ModuleGraph {
             }
         }
         self.reachable = seen;
+    }
+
+    /// Mark additional modules as analysis roots by dotted name (e.g. the module
+    /// half of a `[project.scripts]` entry point `pkg.cli:main`), then recompute
+    /// reachability. A no-op for names that match no module.
+    pub fn mark_entry_points(&mut self, dotted_modules: &[String]) {
+        let wanted: FxHashSet<&str> = dotted_modules.iter().map(|s| s.as_str()).collect();
+        let mut changed = false;
+        for m in &mut self.modules {
+            if !m.is_entry && wanted.contains(m.dotted.as_str()) {
+                m.is_entry = true;
+                changed = true;
+            }
+        }
+        if changed {
+            self.compute_reachability();
+        }
     }
 
     /// Files that are neither entries nor reachable from any entry.
@@ -634,11 +669,22 @@ impl ModuleGraph {
 
 /// Resolve a relative import (`from ..pkg import x` inside `a.b.c`) to a dotted
 /// module name. `dots`=1 means the current package.
-fn resolve_relative(importer_dotted: &str, dots: u8, module: &str) -> String {
+///
+/// `is_package` distinguishes a package surface (`__init__.py`, whose `dotted`
+/// name *is* the current package) from a regular module (whose package is its
+/// parent). For a module `a.b.c`, one dot resolves against the package `a.b`
+/// (drop the module's own segment); for the package `a.b`'s `__init__.py`, one
+/// dot already *is* `a.b` (drop nothing).
+fn resolve_relative(importer_dotted: &str, dots: u8, module: &str, is_package: bool) -> String {
     let parts: Vec<&str> = importer_dotted.split('.').collect();
-    // The importer's package = drop the module's own last segment.
-    // For `a.b.c`, package is `a.b`; one extra dot goes up one more level.
-    let keep = parts.len().saturating_sub(dots as usize);
+    // A package's own dotted name is already the current package, so a single
+    // leading dot keeps every segment; a module must first drop its own segment.
+    let drop = if is_package {
+        (dots as usize).saturating_sub(1)
+    } else {
+        dots as usize
+    };
+    let keep = parts.len().saturating_sub(drop);
     let base = parts[..keep].join(".");
     match (base.is_empty(), module.is_empty()) {
         (true, _) => module.to_string(),
@@ -680,9 +726,88 @@ mod tests {
 
     #[test]
     fn relative_import_resolution() {
-        assert_eq!(resolve_relative("a.b.c", 1, "d"), "a.b.d");
-        assert_eq!(resolve_relative("a.b.c", 2, "d"), "a.d");
-        assert_eq!(resolve_relative("a.b.c", 1, ""), "a.b");
+        // Module case (`a/b/c.py`): one dot resolves against the parent package.
+        assert_eq!(resolve_relative("a.b.c", 1, "d", false), "a.b.d");
+        assert_eq!(resolve_relative("a.b.c", 2, "d", false), "a.d");
+        assert_eq!(resolve_relative("a.b.c", 1, "", false), "a.b");
+    }
+
+    #[test]
+    fn relative_import_resolution_from_package_init() {
+        // Package surface (`pkg/__init__.py`, dotted == "pkg"): one dot is the
+        // package itself, so `.aa` -> `pkg.aa` (the v0.1.2 cascade bug).
+        assert_eq!(resolve_relative("pkg", 1, "aa", true), "pkg.aa");
+        assert_eq!(resolve_relative("pkg", 1, "", true), "pkg");
+        // Subpackage `pkg/sub/__init__.py` (dotted == "pkg.sub"): two dots go up
+        // one real level to the parent package.
+        assert_eq!(resolve_relative("pkg.sub", 1, "x", true), "pkg.sub.x");
+        assert_eq!(resolve_relative("pkg.sub", 2, "x", true), "pkg.x");
+    }
+
+    #[test]
+    fn entry_points_become_reachability_roots() {
+        let d = temp("entrypts");
+        // `cli.py` has no in-repo importer; only a console-script references it.
+        write(&d, "cli.py", "def main():\n    return 1\n");
+        let files = discover_python_files(&d);
+        let mut g = ModuleGraph::build(&d, &files);
+        // Before marking, cli is unused.
+        assert!(g.unused_files().iter().any(|m| m.dotted == "cli"));
+        g.mark_entry_points(&["cli".to_string()]);
+        // After marking, it's an entry root → not unused.
+        assert!(!g.unused_files().iter().any(|m| m.dotted == "cli"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn lazy_imports_are_collected_and_create_edges() {
+        let d = temp("lazyedge");
+        write(&d, "__main__.py", "import app\napp.run()\n");
+        // `app` lazily imports the internal `helper` module inside a function.
+        write(
+            &d,
+            "app.py",
+            "def run():\n    from helper import go\n    return go()\n",
+        );
+        write(&d, "helper.py", "def go():\n    return 1\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        // The lazy `from helper import go` makes `helper` reachable.
+        assert!(
+            !g.unused_files().iter().any(|m| m.dotted == "helper"),
+            "lazy-imported module wrongly unused"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn package_init_reexports_resolve() {
+        // A package whose __init__.py re-exports submodules via relative imports
+        // must NOT produce unresolved-import / unused-file / unused-export.
+        let d = temp("pkginit");
+        write(&d, "__main__.py", "from pkg import helper\nhelper()\n");
+        write(
+            &d,
+            "pkg/__init__.py",
+            "from .aa import helper\nfrom . import bb\n",
+        );
+        write(&d, "pkg/aa.py", "def helper():\n    return 1\n");
+        write(&d, "pkg/bb.py", "def thing():\n    return 2\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        // Both relative re-exports resolve: no unresolved imports.
+        assert!(
+            g.unresolved_imports().is_empty(),
+            "unexpected unresolved: {:?}",
+            g.unresolved_imports()
+        );
+        // The submodules are reachable, so neither is an unused file.
+        let unused: Vec<_> = g.unused_files().iter().map(|m| m.dotted.clone()).collect();
+        assert!(
+            !unused.contains(&"pkg.aa".to_string()) && !unused.contains(&"pkg.bb".to_string()),
+            "submodules wrongly unused: {unused:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

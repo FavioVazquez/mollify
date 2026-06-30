@@ -1,0 +1,86 @@
+//! Shared path/test-discovery helpers used by the dead-code and dependency
+//! engines, so "what counts as a test module" has a single definition.
+
+use camino::Utf8Path;
+
+/// True if a module path is test/dev code (so importing dev deps there is fine,
+/// and pytest collection roots inside it are reachable). `test_dirs` are extra
+/// directory names beyond the `tests/` convention — typically a project's
+/// `[tool.pytest.ini_options].testpaths`.
+pub fn is_test_module(path: &Utf8Path, test_dirs: &[String]) -> bool {
+    let p = path.as_str();
+    let name = path.file_name().unwrap_or("");
+    if p.contains("/tests/")
+        || p.contains("/test/")
+        || p.starts_with("tests/")
+        || p.starts_with("test/")
+        || name.starts_with("test_")
+        || name.ends_with("_test.py")
+        || name == "conftest.py"
+    {
+        return true;
+    }
+    test_dirs.iter().any(|d| {
+        let d = d.trim_matches('/');
+        !d.is_empty() && (p.starts_with(&format!("{d}/")) || p.contains(&format!("/{d}/")))
+    })
+}
+
+/// True if a top-level name is a pytest collection root: a `test_*` function or
+/// a `Test*` class. Such symbols are invoked by the test runner, not by in-repo
+/// callers, so they must not be reported as `unused-export` inside test modules.
+pub fn is_pytest_entity(name: &str) -> bool {
+    name.starts_with("test_") || name.starts_with("Test")
+}
+
+/// Read `[tool.pytest.ini_options].testpaths` from a project's `pyproject.toml`,
+/// returning the configured test directories (empty if absent/unparseable). Lets
+/// dead-code/dep analysis honor non-conventional test layouts.
+pub fn pytest_testpaths(root: &Utf8Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(root.join("pyproject.toml")) else {
+        return Vec::new();
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    table
+        .get("tool")
+        .and_then(|t| t.get("pytest"))
+        .and_then(|p| p.get("ini_options"))
+        .and_then(|i| i.get("testpaths"))
+        .and_then(|tp| tp.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use camino::Utf8Path;
+
+    #[test]
+    fn test_module_detection() {
+        assert!(is_test_module(Utf8Path::new("tests/test_x.py"), &[]));
+        assert!(is_test_module(Utf8Path::new("pkg/conftest.py"), &[]));
+        assert!(is_test_module(Utf8Path::new("a/test/b.py"), &[]));
+        assert!(!is_test_module(Utf8Path::new("pkg/core.py"), &[]));
+        // Non-conventional dir via testpaths.
+        assert!(is_test_module(
+            Utf8Path::new("suite/check_a.py"),
+            &["suite".into()]
+        ));
+        assert!(!is_test_module(Utf8Path::new("pkg/core.py"), &["suite".into()]));
+    }
+
+    #[test]
+    fn pytest_entity_detection() {
+        assert!(is_pytest_entity("test_addition"));
+        assert!(is_pytest_entity("TestScorecard"));
+        assert!(!is_pytest_entity("helper"));
+        assert!(!is_pytest_entity("compute_total"));
+    }
+}

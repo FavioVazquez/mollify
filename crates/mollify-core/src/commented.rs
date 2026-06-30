@@ -24,6 +24,13 @@ fn looks_like_code(body: &str) -> bool {
     if DIRECTIVES.iter().any(|d| lower.starts_with(d)) {
         return false;
     }
+    // Prose guards, applied even to keyword-opening lines: a trailing period is
+    // a sentence, and a long wordy line is explanatory English. Words like
+    // "from"/"for"/"with"/"if" open both code and prose, so a bare keyword match
+    // is not enough (e.g. "from zero (proportion of draws ...), doubled.").
+    if b.ends_with('.') || b.split_whitespace().count() > 12 {
+        return false;
+    }
     // Statement keywords at the start.
     let starters = [
         "import ", "from ", "def ", "class ", "return", "if ", "elif ", "else:", "for ", "while ",
@@ -31,15 +38,18 @@ fn looks_like_code(body: &str) -> bool {
         "async ", "await ", "lambda ",
     ];
     if starters.iter().any(|s| b.starts_with(s)) {
+        // `from X import Y` is code; "from a distance ..." is not.
+        if b.starts_with("from ") {
+            return b.contains(" import ");
+        }
         return true;
     }
     // `name = value` / `name(...)` / `obj.method(...)` shaped lines (with a
     // trailing colon or paren/operator), excluding prose-like sentences.
-    let codeish = (b.contains(" = ") || b.contains("=="))
+    (b.contains(" = ") || b.contains("=="))
         || (b.ends_with(':') && !b.contains(' '))
         || (b.ends_with(')') && b.contains('('))
-        || b.ends_with('\\');
-    codeish && !b.ends_with('.') && b.split_whitespace().count() <= 12
+        || b.ends_with('\\')
 }
 
 /// Emit a `commented-code` finding per comment line that looks like code.
@@ -105,5 +115,20 @@ mod tests {
         assert!(!looks_like_code(" noqa: F401"));
         assert!(!looks_like_code(" type: ignore"));
         assert!(!looks_like_code(" TODO: fix this later"));
+    }
+
+    #[test]
+    fn prose_opening_with_keywords_is_not_code() {
+        // Real Birefringence false positives: English prose that happens to open
+        // with a Python keyword.
+        assert!(!looks_like_code(
+            " from zero (proportion of draws on the wrong side of 0, doubled)."
+        ));
+        assert!(!looks_like_code(" for each row we compute the running mean."));
+        assert!(!looks_like_code(" with these settings the model converges."));
+        assert!(!looks_like_code(" from a distance the curve looks linear"));
+        // Genuine commented-out imports are still caught.
+        assert!(looks_like_code(" from a import b"));
+        assert!(looks_like_code(" import os"));
     }
 }
