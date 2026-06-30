@@ -812,19 +812,13 @@ mod tests {
         let d = temp("scripts");
         std::fs::write(
             d.join("pyproject.toml"),
-            "[project]\nname = \"x\"\n\n[project.scripts]\nserve = \"birefringence.cli:main\"\n\
-             [project.gui-scripts]\ngui = \"birefringence.ui\"\n",
+            "[project]\nname = \"x\"\n\n[project.scripts]\nserve = \"myapp.cli:main\"\n\
+             [project.gui-scripts]\ngui = \"myapp.ui\"\n",
         )
         .unwrap();
         let mods = entry_point_modules(&d);
-        assert!(
-            mods.contains(&"birefringence.cli".to_string()),
-            "got {mods:?}"
-        );
-        assert!(
-            mods.contains(&"birefringence.ui".to_string()),
-            "got {mods:?}"
-        );
+        assert!(mods.contains(&"myapp.cli".to_string()), "got {mods:?}");
+        assert!(mods.contains(&"myapp.ui".to_string()), "got {mods:?}");
         std::fs::remove_dir_all(&d).ok();
     }
 

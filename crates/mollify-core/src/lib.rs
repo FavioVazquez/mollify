@@ -507,8 +507,8 @@ pub fn into_report(category: Option<Category>, report: FindingsReport) -> Report
 /// Penalties are scaled by **confidence** so that low-confidence candidates —
 /// which are, by design, the noisier tier — don't tank the headline number the
 /// way a confirmed defect does. A repo full of `Uncertain` findings should not
-/// read the same as one full of `Certain` ones (the Birefringence audit scored
-/// 20/100 almost entirely on uncertain false positives).
+/// read the same as one full of `Certain` ones (a real-world audit scored a
+/// clean codebase 20/100 almost entirely on uncertain false positives).
 fn quality_score(findings: &[Finding], files: usize) -> u8 {
     if files == 0 {
         return 100;

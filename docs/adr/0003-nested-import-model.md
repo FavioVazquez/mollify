@@ -1,9 +1,9 @@
 # ADR-0003: Nested (lazy) import model — reachability/deps yes, architecture no
 
 - **Status:** Accepted (2026-06-30).
-- **Context:** The same Birefringence audit (`docs/birefringenceaudit.md`) showed
-  dependencies imported **lazily inside a function body** (e.g. `uvicorn`
-  imported inside `main()`) being reported `unused-dependency`, because the parser
+- **Context:** The same real-world audit showed dependencies imported **lazily
+  inside a function body** (e.g. `uvicorn` imported inside `main()`) being
+  reported `unused-dependency`, because the parser
   only collected **top-level** imports (`scan_top_level` recurses into `if`/`try`
   but not function/class bodies). Fixing that means collecting nested imports —
   but nested imports must be fed to the right consumers, and *only* those.

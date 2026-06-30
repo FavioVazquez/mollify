@@ -7,9 +7,8 @@ versioned by `schema_version` (currently `0.1`).
 ## Unreleased
 
 ### Fixed
-Precision pass from a real-world audit (running `mollify` on the *Birefringence*
-package surfaced these false positives; see `docs/birefringenceaudit.md` and
-`docs/birefringence-audit-plan.md`):
+Precision pass from a real-world audit (running `mollify` on an external Python
+package surfaced these false positives):
 - **Relative imports in a package `__init__.py` now resolve.** A package's
   `__init__.py` has the package itself as its dotted name, so the resolver was
   dropping one segment too many — `.aa` resolved to `aa` instead of `pkg.aa`.

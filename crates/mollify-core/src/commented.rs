@@ -119,8 +119,8 @@ mod tests {
 
     #[test]
     fn prose_opening_with_keywords_is_not_code() {
-        // Real Birefringence false positives: English prose that happens to open
-        // with a Python keyword.
+        // Real-world false positives: English prose that happens to open with a
+        // Python keyword.
         assert!(!looks_like_code(
             " from zero (proportion of draws on the wrong side of 0, doubled)."
         ));
