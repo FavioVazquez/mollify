@@ -450,7 +450,9 @@ mod tests {
             .collect();
         // test_* function and Test* class are reachable via the runner.
         assert!(
-            !dead.iter().any(|r| r.contains("test_helper") || r.contains("TestThing")),
+            !dead
+                .iter()
+                .any(|r| r.contains("test_helper") || r.contains("TestThing")),
             "pytest entities wrongly flagged: {dead:?}"
         );
         // A genuinely dead non-test helper in the same file is still flagged.
@@ -465,7 +467,11 @@ mod tests {
     fn entry_point_function_not_unused_export() {
         let d = temp("entrysym");
         // `main` has no in-repo caller but is the console-script target.
-        write(&d, "cli.py", "def main():\n    return 0\n\ndef helper():\n    return 1\n");
+        write(
+            &d,
+            "cli.py",
+            "def main():\n    return 0\n\ndef helper():\n    return 1\n",
+        );
         let files = discover_python_files(&d);
         let mut g = ModuleGraph::build(&d, &files);
         g.mark_entry_points(&["cli".to_string()]);

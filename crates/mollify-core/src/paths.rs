@@ -73,7 +73,10 @@ mod tests {
             Utf8Path::new("suite/check_a.py"),
             &["suite".into()]
         ));
-        assert!(!is_test_module(Utf8Path::new("pkg/core.py"), &["suite".into()]));
+        assert!(!is_test_module(
+            Utf8Path::new("pkg/core.py"),
+            &["suite".into()]
+        ));
     }
 
     #[test]

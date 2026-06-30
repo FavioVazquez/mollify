@@ -2059,7 +2059,11 @@ mod tests {
             );
         }
         // Bare builtins on a non-literal are still flagged.
-        for src in ["exec(code)\n", "eval(user_input)\n", "compile(src, '<s>', 'exec')\n"] {
+        for src in [
+            "exec(code)\n",
+            "eval(user_input)\n",
+            "compile(src, '<s>', 'exec')\n",
+        ] {
             let m = parse(src);
             assert!(
                 m.security_hits.iter().any(|h| h.rule == "dangerous-eval"),

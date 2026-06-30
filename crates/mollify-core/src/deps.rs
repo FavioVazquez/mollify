@@ -771,7 +771,8 @@ mod tests {
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&d, &g);
         assert!(
-            !f.iter().any(|x| x.rule == "unused-dependency" && x.reason.contains("uvicorn")),
+            !f.iter()
+                .any(|x| x.rule == "unused-dependency" && x.reason.contains("uvicorn")),
             "lazy import wrongly flagged unused: {f:?}"
         );
         std::fs::remove_dir_all(&d).ok();
@@ -816,8 +817,14 @@ mod tests {
         )
         .unwrap();
         let mods = entry_point_modules(&d);
-        assert!(mods.contains(&"birefringence.cli".to_string()), "got {mods:?}");
-        assert!(mods.contains(&"birefringence.ui".to_string()), "got {mods:?}");
+        assert!(
+            mods.contains(&"birefringence.cli".to_string()),
+            "got {mods:?}"
+        );
+        assert!(
+            mods.contains(&"birefringence.ui".to_string()),
+            "got {mods:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

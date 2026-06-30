@@ -124,8 +124,12 @@ mod tests {
         assert!(!looks_like_code(
             " from zero (proportion of draws on the wrong side of 0, doubled)."
         ));
-        assert!(!looks_like_code(" for each row we compute the running mean."));
-        assert!(!looks_like_code(" with these settings the model converges."));
+        assert!(!looks_like_code(
+            " for each row we compute the running mean."
+        ));
+        assert!(!looks_like_code(
+            " with these settings the model converges."
+        ));
         assert!(!looks_like_code(" from a distance the curve looks linear"));
         // Genuine commented-out imports are still caught.
         assert!(looks_like_code(" from a import b"));
