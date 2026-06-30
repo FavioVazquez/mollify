@@ -612,4 +612,44 @@ mod tests {
         // No findings → perfect score.
         assert_eq!(quality_score(&[], 3), 100);
     }
+
+    #[test]
+    fn src_layout_entry_point_suppresses_dead_code() {
+        // A src/ layout: `src/pkg/cli.py` is named by a console-script entry
+        // point. `dotted_name` strips the leading `src/`, so the dotted name is
+        // `pkg.cli` and the entry-point wiring matches it. The module must not be
+        // `unused-file`, and its `main` must not be `unused-export`.
+        let d = temp("srclayout");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"pkg\"\n\n[project.scripts]\nserve = \"pkg.cli:main\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(d.join("src/pkg")).unwrap();
+        std::fs::write(d.join("src/pkg/__init__.py"), "").unwrap();
+        std::fs::write(
+            d.join("src/pkg/cli.py"),
+            "def main():\n    return 0\n\n\ndef _orphan():\n    return 1\n",
+        )
+        .unwrap();
+        let report = dead_code_report(&d);
+        let dead: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.rule == "unused-file" || f.rule == "unused-export")
+            .map(|f| f.reason.clone())
+            .collect();
+        assert!(
+            !dead
+                .iter()
+                .any(|r| r.contains("pkg.cli") || r.contains("`main`")),
+            "entry-point module/function wrongly flagged in src/ layout: {dead:?}"
+        );
+        // The genuinely-dead sibling is still flagged (sanity).
+        assert!(
+            dead.iter().any(|r| r.contains("_orphan")),
+            "real dead code missed: {dead:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
 }

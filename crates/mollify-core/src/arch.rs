@@ -352,6 +352,41 @@ mod tests {
     }
 
     #[test]
+    fn lazy_cross_layer_import_not_layer_violation() {
+        let d = temp("lazylayer");
+        // `domain` (lower) reaches up to `api` (higher) — but lazily, inside a
+        // function. A deliberately-deferred cross-boundary import must NOT be a
+        // layer-violation (same rationale as the cycle-breaker).
+        write(&d, "api/__init__.py", "");
+        write(&d, "api/routes.py", "def handle():\n    return 1\n");
+        write(&d, "domain/__init__.py", "");
+        write(
+            &d,
+            "domain/core.py",
+            "def run():\n    import api.routes\n    return api.routes.handle()\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let layers = vec!["api".to_string(), "domain".to_string()];
+        assert!(
+            analyze_layers(&g, &layers).is_empty(),
+            "lazy cross-layer import wrongly flagged: {:?}",
+            analyze_layers(&g, &layers)
+        );
+        // Control: the same import at top level IS a violation.
+        write(&d, "domain/core.py", "import api.routes\n");
+        let files = discover_python_files(&d);
+        let g2 = ModuleGraph::build(&d, &files);
+        assert!(
+            analyze_layers(&g2, &layers)
+                .iter()
+                .any(|x| x.rule == "layer-violation"),
+            "top-level cross-layer import should still violate"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
     fn reports_forbidden_and_independence() {
         let d = temp("contracts");
         write(&d, "domain/__init__.py", "");

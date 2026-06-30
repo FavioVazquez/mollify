@@ -918,7 +918,7 @@ fn run_metrics(a: &MetricsArgs) -> i32 {
 }
 
 /// A documented starter `.mollifyrc.json`. Severities default to `warn` for the
-/// five co-equal areas; `_comment` keys are ignored by the loader and serve as
+/// core analysis areas; `_comment` keys are ignored by the loader and serve as
 /// inline docs (JSON has no comments). Complexity thresholds are the engine
 /// defaults, surfaced here as obvious knobs. The audit score weights findings by
 /// confidence — `uncertain` candidates count least — so a first run is not

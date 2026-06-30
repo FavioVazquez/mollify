@@ -46,8 +46,15 @@ pub struct UnresolvedImport {
 pub struct ModuleGraph {
     pub modules: Vec<ModuleInfo>,
     by_dotted: FxHashMap<String, FileId>,
-    /// Resolved internal import edges: importer → imported.
+    /// Resolved internal import edges from **top-level** imports: importer →
+    /// imported. These feed both reachability *and* architecture analysis
+    /// (cycles, layers, contracts).
     edges: Vec<(FileId, FileId)>,
+    /// Edges from **lazy** imports nested in function/class bodies. These feed
+    /// reachability *only* — deferring an import into a function body is the
+    /// canonical way to break an import cycle, so they must not count toward
+    /// `circular-dependency` / `layer-violation` / contract checks.
+    lazy_edges: Vec<(FileId, FileId)>,
     /// For each imported module, the set of symbol names pulled in by importers,
     /// keyed by the imported module's FileId.
     imported_symbols: FxHashMap<FileId, FxHashSet<String>>,
@@ -336,6 +343,7 @@ impl ModuleGraph {
             modules,
             by_dotted,
             edges: Vec::new(),
+            lazy_edges: Vec::new(),
             imported_symbols: FxHashMap::default(),
             reachable: FxHashSet::default(),
             global_dynamic,
@@ -353,17 +361,23 @@ impl ModuleGraph {
     /// and which symbol names each importer pulls from the target.
     fn resolve_edges(&mut self) {
         let mut edges = Vec::new();
+        let mut lazy_edges = Vec::new();
         let mut imported_symbols: FxHashMap<FileId, FxHashSet<String>> = FxHashMap::default();
 
         for m in &self.modules {
-            // Top-level + lazy (in-function) imports both create real edges.
-            let all_imports = m.parsed.imports.iter().chain(&m.parsed.nested_imports);
-            for imp in all_imports {
+            // Top-level imports feed both reachability and architecture; lazy
+            // (in-function/class-body) imports feed reachability only — they are
+            // collected into `lazy_edges` so cycle/layer/contract checks never
+            // see them (deferring an import is the canonical cycle-breaker).
+            let top = m.parsed.imports.iter().map(|i| (i, false));
+            let lazy = m.parsed.nested_imports.iter().map(|i| (i, true));
+            for (imp, is_lazy) in top.chain(lazy) {
                 let target_dotted = if imp.relative_dots > 0 {
                     resolve_relative(&m.dotted, imp.relative_dots, &imp.module, m.is_package)
                 } else {
                     imp.module.clone()
                 };
+                let sink = if is_lazy { &mut lazy_edges } else { &mut edges };
                 // Try the full dotted path, then progressively shorter prefixes
                 // (handles `from pkg.mod import name` where `pkg.mod` is a module
                 // and `name` is a symbol, vs `import pkg.mod`).
@@ -372,8 +386,10 @@ impl ModuleGraph {
                     // `__init__.py` resolves the target to the package itself —
                     // not a real edge (and a spurious self-cycle otherwise).
                     if tid != m.id {
-                        edges.push((m.id, tid));
+                        sink.push((m.id, tid));
                     }
+                    // Symbol-level "used" tracking sees lazy imports too: a lazy
+                    // `from helper import go` still means `helper.go` is used.
                     let set = imported_symbols.entry(tid).or_default();
                     for n in &imp.names {
                         set.insert(n.clone());
@@ -390,7 +406,7 @@ impl ModuleGraph {
                         let candidate = format!("{target_dotted}.{n}");
                         if let Some(&tid) = self.lookup(&candidate) {
                             if tid != m.id {
-                                edges.push((m.id, tid));
+                                sink.push((m.id, tid));
                             }
                         }
                     }
@@ -399,7 +415,10 @@ impl ModuleGraph {
         }
         edges.sort();
         edges.dedup();
+        lazy_edges.sort();
+        lazy_edges.dedup();
         self.edges = edges;
+        self.lazy_edges = lazy_edges;
         self.imported_symbols = imported_symbols;
     }
 
@@ -474,7 +493,9 @@ impl ModuleGraph {
     /// BFS mark-reachable from all entry modules over import edges.
     fn compute_reachability(&mut self) {
         let mut adj: FxHashMap<FileId, Vec<FileId>> = FxHashMap::default();
-        for (a, b) in &self.edges {
+        // Reachability follows both top-level and lazy import edges — a lazily
+        // imported module is still loaded at runtime, just deferred.
+        for (a, b) in self.edges.iter().chain(&self.lazy_edges) {
             adj.entry(*a).or_default().push(*b);
         }
         let mut queue: Vec<FileId> = self
@@ -776,6 +797,41 @@ mod tests {
         assert!(
             !g.unused_files().iter().any(|m| m.dotted == "helper"),
             "lazy-imported module wrongly unused"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn lazy_import_does_not_create_arch_cycle() {
+        // The canonical cycle-breaker: A imports B at top level; B imports A
+        // *inside a function* to avoid the cycle. mollify must NOT report a
+        // circular-dependency — but B must still be reachable, and A reachable
+        // from B's lazy import (no false unused-file).
+        let d = temp("lazycycle");
+        write(&d, "__main__.py", "import a\na.go()\n");
+        write(&d, "a.py", "import b\n\ndef go():\n    return b.helper()\n");
+        write(&d, "b.py", "def helper():\n    import a\n    return a.go\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        // The lazy b→a edge must not form a cycle in the arch view.
+        assert!(
+            g.find_cycles().is_empty(),
+            "lazy import wrongly produced a cycle: {:?}",
+            g.find_cycles()
+        );
+        // Both modules are still reachable (lazy edges feed reachability).
+        let unused: Vec<_> = g.unused_files().iter().map(|m| m.dotted.clone()).collect();
+        assert!(
+            !unused.contains(&"a".to_string()) && !unused.contains(&"b".to_string()),
+            "modules wrongly unused: {unused:?}"
+        );
+        // Sanity: a *top-level* b→a import (no deferral) still IS a cycle.
+        write(&d, "b.py", "import a\n\ndef helper():\n    return a.go\n");
+        let files = discover_python_files(&d);
+        let g2 = ModuleGraph::build(&d, &files);
+        assert!(
+            !g2.find_cycles().is_empty(),
+            "top-level mutual import should still be a cycle"
         );
         std::fs::remove_dir_all(&d).ok();
     }
