@@ -1,8 +1,8 @@
 # ADR-0002: Package-aware relative-import resolution
 
 - **Status:** Accepted (2026-06-30).
-- **Context:** A real-world audit (running mollify v0.1.2 on the *Birefringence*
-  package — see `docs/birefringenceaudit.md`) showed that **every** relative
+- **Context:** A real-world audit (running mollify v0.1.2 on an external Python
+  package) showed that **every** relative
   import in a package `__init__.py` (`from .aa import x`, `from . import bb`) was
   reported `unresolved-import`, which cascaded into `unused-file` for the
   submodules and `unused-export` for their public symbols — roughly 200 of the
