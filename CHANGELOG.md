@@ -6,6 +6,14 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+## 0.1.3 - 2026-07-01
+
+Precision release: a real-world audit surfaced a cluster of false positives whose
+root causes are fixed here (on a fixture reproducing the audited patterns, the
+score moved from 20/100 to 95/100). Two new ADRs document the core graph-semantic
+changes ([ADR-0002](docs/adr/0002-package-aware-relative-import-resolution.md),
+[ADR-0003](docs/adr/0003-nested-import-model.md)).
+
 ### Fixed
 Precision pass from a real-world audit (running `mollify` on an external Python
 package) that surfaced these false positives:

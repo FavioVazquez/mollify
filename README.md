@@ -29,12 +29,12 @@ Its one rule: **no AI invents findings.** Every result is a piece of determinist
 evidence with a stable fingerprint, a confidence tier, and a human-readable reason.
 Mollify *produces candidates*; you (or your agent) decide what to do with them.
 
-> **Project status:** early but real — **`v0.1.0` is published on
+> **Project status:** early but real — **published on
 > [PyPI](https://pypi.org/project/mollify/) and
-> [crates.io](https://crates.io/crates/mollify-cli)**. The core analysis phases
-> are implemented, tested (140+ tests), and dogfooded; CI + CodeQL are green. See
-> [`docs/adr/`](docs/adr) for design decisions and *Engineering notes* below for
-> how it works.
+> [crates.io](https://crates.io/crates/mollify-cli)** (see the badges above for
+> the current version). The core analysis phases are implemented, tested
+> (140+ tests), and dogfooded; CI + CodeQL are green. See [`docs/adr/`](docs/adr)
+> for design decisions and *Engineering notes* below for how it works.
 
 ## Why Mollify
 

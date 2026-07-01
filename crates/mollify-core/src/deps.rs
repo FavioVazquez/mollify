@@ -817,14 +817,8 @@ mod tests {
         )
         .unwrap();
         let mods = entry_point_modules(&d);
-        assert!(
-            mods.contains(&"myapp.cli".to_string()),
-            "got {mods:?}"
-        );
-        assert!(
-            mods.contains(&"myapp.ui".to_string()),
-            "got {mods:?}"
-        );
+        assert!(mods.contains(&"myapp.cli".to_string()), "got {mods:?}");
+        assert!(mods.contains(&"myapp.ui".to_string()), "got {mods:?}");
         std::fs::remove_dir_all(&d).ok();
     }
 
