@@ -299,7 +299,10 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     findings.extend(security::analyze_parsed(path, &parsed));
     findings.extend(commented::analyze_source(path, source));
-    // Unused local variables / parameters.
+    // Unused local variables / parameters. (Live-buffer path: the display
+    // path doubles as the fingerprint identity; occurrence keeps the scheme
+    // aligned with the batch engines.)
+    let mut occ = fingerprint::Occurrences::default();
     for s in &parsed.scope_findings {
         let (rule, kind, confidence) = if s.is_param {
             (
@@ -315,10 +318,7 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
             )
         };
         findings.push(Finding {
-            fingerprint: fingerprint::fingerprint(
-                rule,
-                &[path.as_str(), &s.name, &s.line.to_string()],
-            ),
+            fingerprint: fingerprint::fingerprint(rule, &[path.as_str(), &s.name, &occ.next(&s.name)]),
             rule: rule.into(),
             category: Category::DeadCode,
             severity: Severity::Warn,
@@ -335,12 +335,17 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
         });
     }
     // High complexity over default thresholds.
+    let mut fn_occ = fingerprint::Occurrences::default();
     for f in &parsed.functions {
+        let occurrence = fn_occ.next(&f.name);
         if f.cyclomatic > complexity::DEFAULT_CYCLOMATIC
             || f.cognitive > complexity::DEFAULT_COGNITIVE
         {
             findings.push(Finding {
-                fingerprint: fingerprint::fingerprint("high-complexity", &[path.as_str(), &f.name]),
+                fingerprint: fingerprint::fingerprint(
+                    "high-complexity",
+                    &[path.as_str(), &f.name, &occurrence],
+                ),
                 rule: "high-complexity".into(),
                 category: Category::Complexity,
                 severity: Severity::Warn,
@@ -509,7 +514,7 @@ pub fn into_report(category: Option<Category>, report: FindingsReport) -> Report
 /// way a confirmed defect does. A repo full of `Uncertain` findings should not
 /// read the same as one full of `Certain` ones (a real-world audit scored
 /// 20/100 almost entirely on uncertain false positives).
-fn quality_score(findings: &[Finding], files: usize) -> u8 {
+pub fn quality_score(findings: &[Finding], files: usize) -> u8 {
     if files == 0 {
         return 100;
     }

@@ -149,7 +149,11 @@ pub fn analyze_contracts(
             .cmp(&b.location.path)
             .then(a.reason.cmp(&b.reason))
     });
-    findings.dedup_by(|a, b| a.fingerprint == b.fingerprint);
+    // Global (not adjacent-only) dedup: overlapping contracts can produce the
+    // same fingerprint with different reasons that don't sort next to each
+    // other. Keep the first in the sorted order.
+    let mut seen = rustc_hash::FxHashSet::default();
+    findings.retain(|f| seen.insert(f.fingerprint.clone()));
     findings
 }
 
@@ -161,18 +165,15 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
             .iter()
             .map(|id| graph.modules[id.0 as usize].dotted.as_str())
             .collect();
-        let paths: Vec<&str> = cycle
-            .iter()
-            .map(|id| graph.modules[id.0 as usize].path.as_str())
-            .collect();
         let first = &graph.modules[cycle[0].0 as usize];
         let chain = if members.len() == 1 {
             format!("`{}` imports itself", members[0])
         } else {
             format!("import cycle: {} → {}", members.join(" → "), members[0])
         };
+        // Dotted names are checkout- and spelling-independent identity.
         findings.push(Finding {
-            fingerprint: fingerprint("circular-dependency", &paths),
+            fingerprint: fingerprint("circular-dependency", &members),
             rule: "circular-dependency".into(),
             category: Category::CircularDependency,
             severity: Severity::Warn,
@@ -216,6 +217,7 @@ pub fn private_imports(graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     for m in &graph.modules {
         let importer_top = m.dotted.split('.').next().unwrap_or("");
+        let mut occ = crate::fingerprint::Occurrences::default();
         for imp in &m.parsed.imports {
             if imp.relative_dots > 0 {
                 continue; // relative imports are intra-package by construction
@@ -232,10 +234,11 @@ pub fn private_imports(graph: &ModuleGraph) -> Vec<Finding> {
                     continue;
                 }
                 let rule = "private-import";
+                let occ_key = format!("{}\u{1f}{name}", imp.module);
                 findings.push(Finding {
                     fingerprint: fingerprint(
                         rule,
-                        &[m.path.as_str(), &imp.module, name, &imp.line.to_string()],
+                        &[m.rel.as_str(), &imp.module, name, &occ.next(&occ_key)],
                     ),
                     rule: rule.into(),
                     category: Category::Architecture,

@@ -57,15 +57,24 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     for m in &graph.modules {
         if let Some(src) = mollify_graph::read_source(&m.path) {
-            findings.extend(analyze_source(&m.path, &src));
+            findings.extend(analyze_source_ids(&m.path, &m.rel, &src));
         }
     }
     findings
 }
 
-/// Commented-code findings from a file's source text (also the live LSP path).
+/// Commented-code findings from a file's source text (also the live LSP path,
+/// where the display path doubles as the fingerprint identity).
 pub fn analyze_source(path: &camino::Utf8Path, src: &str) -> Vec<Finding> {
+    analyze_source_ids(path, path, src)
+}
+
+/// `path` is what findings display; `rel` (root-relative) is the stable
+/// fingerprint identity. The comment's own content anchors the fingerprint,
+/// so unrelated edits above it don't churn baselines.
+fn analyze_source_ids(path: &camino::Utf8Path, rel: &camino::Utf8Path, src: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
+    let mut occ = crate::fingerprint::Occurrences::default();
     for (i, line) in src.lines().enumerate() {
         let trimmed = line.trim_start();
         let Some(body) = trimmed.strip_prefix('#') else {
@@ -76,8 +85,9 @@ pub fn analyze_source(path: &camino::Utf8Path, src: &str) -> Vec<Finding> {
         }
         let rule = "commented-code";
         let line_no = i as u32 + 1;
+        let content = body.trim();
         findings.push(Finding {
-            fingerprint: fingerprint(rule, &[path.as_str(), &line_no.to_string()]),
+            fingerprint: fingerprint(rule, &[rel.as_str(), content, &occ.next(content)]),
             rule: rule.into(),
             category: Category::DeadCode,
             severity: Severity::Warn,

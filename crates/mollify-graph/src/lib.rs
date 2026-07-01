@@ -19,6 +19,11 @@ pub struct FileId(pub u32);
 pub struct ModuleInfo {
     pub id: FileId,
     pub path: Utf8PathBuf,
+    /// Path relative to the analysis root. This is the module's **stable
+    /// identity** for fingerprints and baselines: unlike `path`, it does not
+    /// vary with how the root was spelled (`.` vs an absolute path) or where
+    /// the checkout lives on disk.
+    pub rel: Utf8PathBuf,
     /// Dotted module name relative to its source root (e.g. `pkg.sub.mod`).
     pub dotted: String,
     pub parsed: ParsedModule,
@@ -35,6 +40,8 @@ pub struct ModuleInfo {
 pub struct UnresolvedImport {
     /// The importing module's file path.
     pub importer: Utf8PathBuf,
+    /// The importing module's root-relative path (stable fingerprint identity).
+    pub importer_rel: Utf8PathBuf,
     /// The import as written (`.sub.thing` for relative, `pkg.mod` for absolute).
     pub display: String,
     pub line: u32,
@@ -333,10 +340,15 @@ impl ModuleGraph {
             global_dynamic |= pm.has_dynamic_sink;
             by_dotted.entry(dotted.clone()).or_insert(id);
             let is_package = path.file_name() == Some("__init__.py");
+            let rel = path
+                .strip_prefix(root)
+                .map(Utf8Path::to_path_buf)
+                .unwrap_or_else(|_| path.clone());
             modules.push(ModuleInfo {
                 id,
                 is_entry: is_entry(&path),
                 is_package,
+                rel,
                 path,
                 dotted,
                 parsed: pm,
@@ -480,6 +492,7 @@ impl ModuleGraph {
                 };
                 out.push(UnresolvedImport {
                     importer: m.path.clone(),
+                    importer_rel: m.rel.clone(),
                     display,
                     line: imp.line,
                     relative,

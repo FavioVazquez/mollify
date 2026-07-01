@@ -208,27 +208,27 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
 
 /// Flag imports that look first-party or relative but resolve to no module in
 /// the project (typo / broken refactor) — distinct from `missing-dependency`,
-/// which is third-party. Relative imports are `certain` (they *must* be
-/// internal); first-party absolute imports are `likely` (path hacks exist).
+/// which is third-party. Both tiers are `likely`, not `certain`: a relative
+/// import must be internal, but it may resolve to something the `.py` walk
+/// can't see — an in-tree C/Cython extension (`._speedups`) or a
+/// build-generated module (`._version`).
 /// Independent of any manifest, so it runs even with no `pyproject.toml`.
 pub fn unresolved(graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
+    let mut occ = crate::fingerprint::Occurrences::default();
     for u in graph.unresolved_imports() {
         let rule = "unresolved-import";
-        let confidence = if u.relative {
-            Confidence::Certain
-        } else {
-            Confidence::Likely
-        };
+        let confidence = Confidence::Likely;
         let kind = if u.relative {
             "relative"
         } else {
             "first-party"
         };
+        let occ_key = format!("{}\u{1f}{}", u.importer_rel, u.display);
         findings.push(Finding {
             fingerprint: fingerprint(
                 rule,
-                &[u.importer.as_str(), &u.line.to_string(), &u.display],
+                &[u.importer_rel.as_str(), &u.display, &occ.next(&occ_key)],
             ),
             rule: rule.into(),
             category: Category::DependencyHygiene,
@@ -705,12 +705,14 @@ mod tests {
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = unresolved(&g);
-        // Relative `.missing_mod` → certain; absolute `app.nope` → likely.
+        // Both tiers are `likely`: a relative import must be internal, but the
+        // target may be a C extension or build-generated module the .py walk
+        // can't see — never `certain`.
         let rel = f
             .iter()
             .find(|x| x.reason.contains("missing_mod"))
             .expect("relative unresolved");
-        assert_eq!(rel.confidence, Confidence::Certain);
+        assert_eq!(rel.confidence, Confidence::Likely);
         assert!(f
             .iter()
             .any(|x| x.reason.contains("app.nope") && x.confidence == Confidence::Likely));

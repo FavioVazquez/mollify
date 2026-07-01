@@ -42,14 +42,24 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph, coverage_path: &Utf8Path) -
         let Some(executed) = executed else {
             continue; // no coverage data for this file → no claim
         };
+        let mut occ = crate::fingerprint::Occurrences::default();
         for f in &m.parsed.functions {
-            let ran = (f.line..=f.end_line).any(|ln| executed.contains(&ln));
+            let occurrence = occ.next(&f.name);
+            // Importing a module executes every `def` statement, so the def
+            // line alone proves nothing about the body. A function "ran" only
+            // if a line strictly inside its body executed; one-line defs (body
+            // on the def line) stay conservative and count as ran.
+            let ran = if f.line >= f.end_line {
+                executed.contains(&f.line)
+            } else {
+                (f.line + 1..=f.end_line).any(|ln| executed.contains(&ln))
+            };
             if ran {
                 continue;
             }
             let rule = "cold-code";
             findings.push(Finding {
-                fingerprint: fingerprint(rule, &[m.path.as_str(), &f.name, &f.line.to_string()]),
+                fingerprint: fingerprint(rule, &[m.rel.as_str(), &f.name, &occurrence]),
                 rule: rule.into(),
                 category: Category::DeadCode,
                 severity: Severity::Warn,

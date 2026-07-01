@@ -6,7 +6,7 @@
 
 use crate::config::Policy;
 use crate::fingerprint::fingerprint;
-use mollify_graph::ModuleGraph;
+use mollify_graph::{ModuleGraph, ModuleInfo};
 use mollify_types::{Action, Category, Confidence, Finding, Location};
 
 /// Does a dotted name match a forbidden prefix? `requests` matches `requests`
@@ -28,6 +28,9 @@ pub fn analyze(graph: &ModuleGraph, policies: &[Policy]) -> Vec<Finding> {
     let mut findings = Vec::new();
     for m in &graph.modules {
         let path = m.path.as_str();
+        // Occurrence over repeated identical violations in a module keeps
+        // fingerprints line-independent yet unique.
+        let mut occ = crate::fingerprint::Occurrences::default();
         for pol in policies {
             if !in_scope(path, &pol.in_paths) {
                 continue;
@@ -35,12 +38,15 @@ pub fn analyze(graph: &ModuleGraph, policies: &[Policy]) -> Vec<Finding> {
             if let Some(banned) = &pol.forbid_import {
                 for imp in &m.parsed.imports {
                     if matches_prefix(&imp.module, banned) {
+                        let what = format!("import of `{}`", imp.module);
+                        let occurrence = occ.next(&format!("{}\u{1f}{what}", pol.id));
                         findings.push(violation(
                             pol,
-                            &m.path,
+                            m,
                             imp.line,
-                            &format!("import of `{}`", imp.module),
+                            &what,
                             banned,
+                            &occurrence,
                         ));
                     }
                 }
@@ -48,12 +54,15 @@ pub fn analyze(graph: &ModuleGraph, policies: &[Policy]) -> Vec<Finding> {
             if let Some(banned) = &pol.forbid_call {
                 for call in &m.parsed.calls {
                     if matches_prefix(&call.callee, banned) {
+                        let what = format!("call to `{}`", call.callee);
+                        let occurrence = occ.next(&format!("{}\u{1f}{what}", pol.id));
                         findings.push(violation(
                             pol,
-                            &m.path,
+                            m,
                             call.line,
-                            &format!("call to `{}`", call.callee),
+                            &what,
                             banned,
+                            &occurrence,
                         ));
                     }
                 }
@@ -72,11 +81,13 @@ pub fn analyze(graph: &ModuleGraph, policies: &[Policy]) -> Vec<Finding> {
 
 fn violation(
     pol: &Policy,
-    path: &camino::Utf8Path,
+    m: &ModuleInfo,
     line: u32,
     what: &str,
     banned: &str,
+    occurrence: &str,
 ) -> Finding {
+    let path = m.path.as_path();
     let reason = match &pol.message {
         Some(msg) => format!("policy `{}`: {what} is forbidden — {msg}", pol.id),
         None => format!(
@@ -85,7 +96,7 @@ fn violation(
         ),
     };
     Finding {
-        fingerprint: fingerprint(&pol.id, &[path.as_str(), &line.to_string(), banned]),
+        fingerprint: fingerprint(&pol.id, &[m.rel.as_str(), what, banned, occurrence]),
         rule: pol.id.clone(),
         category: Category::Architecture,
         severity: pol.severity,

@@ -56,7 +56,7 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
             }
             let rule = "low-cohesion";
             findings.push(Finding {
-                fingerprint: fingerprint(rule, &[module.path.as_str(), &class.name]),
+                fingerprint: fingerprint(rule, &[module.rel.as_str(), &class.name]),
                 rule: rule.into(),
                 category: Category::Complexity,
                 severity: Severity::Warn,

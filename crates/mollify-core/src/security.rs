@@ -50,20 +50,34 @@ fn cwe_for(rule: &str) -> Option<&'static str> {
 pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     for m in &graph.modules {
-        findings.extend(analyze_parsed(&m.path, &m.parsed));
+        findings.extend(analyze_parsed_ids(&m.path, &m.rel, &m.parsed));
     }
     findings
 }
 
-/// Security findings for a single parsed module (also used by the live LSP path).
+/// Security findings for a single parsed module (also used by the live LSP
+/// path, where the display path doubles as the fingerprint identity).
 pub fn analyze_parsed(
     path: &camino::Utf8Path,
     parsed: &mollify_parse::ParsedModule,
 ) -> Vec<Finding> {
+    analyze_parsed_ids(path, path, parsed)
+}
+
+/// `path` is what findings display; `rel` (root-relative) is the stable
+/// fingerprint identity. The hit's detail text anchors the fingerprint, so
+/// unrelated edits above it don't churn baselines.
+fn analyze_parsed_ids(
+    path: &camino::Utf8Path,
+    rel: &camino::Utf8Path,
+    parsed: &mollify_parse::ParsedModule,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
+    let mut occ = crate::fingerprint::Occurrences::default();
     for hit in &parsed.security_hits {
+        let occ_key = format!("{}\u{1f}{}", hit.rule, hit.detail);
         findings.push(Finding {
-            fingerprint: fingerprint(hit.rule, &[path.as_str(), &hit.line.to_string()]),
+            fingerprint: fingerprint(hit.rule, &[rel.as_str(), &hit.detail, &occ.next(&occ_key)]),
             rule: hit.rule.to_string(),
             category: Category::Security,
             severity: Severity::Warn,

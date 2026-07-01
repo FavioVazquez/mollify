@@ -17,7 +17,11 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
 pub fn analyze_with(graph: &ModuleGraph, max_cyclo: u32, max_cog: u32) -> Vec<Finding> {
     let mut findings = Vec::new();
     for m in &graph.modules {
+        // Occurrence over ALL functions of a name (source order): same-named
+        // methods of different classes must not share a fingerprint.
+        let mut occ = crate::fingerprint::Occurrences::default();
         for f in &m.parsed.functions {
+            let occurrence = occ.next(&f.name);
             let over_cyclo = f.cyclomatic > max_cyclo;
             let over_cog = f.cognitive > max_cog;
             if !over_cyclo && !over_cog {
@@ -29,7 +33,7 @@ pub fn analyze_with(graph: &ModuleGraph, max_cyclo: u32, max_cog: u32) -> Vec<Fi
                 f.name, f.cyclomatic, f.cognitive, max_cyclo, max_cog
             );
             findings.push(Finding {
-                fingerprint: fingerprint(rule, &[m.path.as_str(), &f.name]),
+                fingerprint: fingerprint(rule, &[m.rel.as_str(), &f.name, &occurrence]),
                 rule: rule.into(),
                 category: Category::Complexity,
                 severity: Severity::Warn,

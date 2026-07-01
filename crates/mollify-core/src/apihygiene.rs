@@ -19,7 +19,10 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
         } else {
             Confidence::Likely
         };
+        let mut occ = crate::fingerprint::Occurrences::default();
         for leak in &m.parsed.type_leaks {
+            let occ_key = format!("{}\u{1f}{}", leak.function, leak.type_name);
+            let occurrence = occ.next(&occ_key);
             let rule = "private-type-leak";
             let position = if leak.is_return {
                 "return type"
@@ -27,7 +30,10 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
                 "a parameter"
             };
             out.push(Finding {
-                fingerprint: fingerprint(rule, &[m.path.as_str(), &leak.function, &leak.type_name]),
+                fingerprint: fingerprint(
+                    rule,
+                    &[m.rel.as_str(), &leak.function, &leak.type_name, &occurrence],
+                ),
                 rule: rule.into(),
                 category: Category::TypeHealth,
                 severity: Severity::Warn,
