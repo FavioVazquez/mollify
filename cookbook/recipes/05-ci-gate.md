@@ -18,7 +18,7 @@ mollify audit --save-baseline .mollify/baseline.json
 ```
 
 ```text
-Wrote baseline with 20 fingerprint(s) to .mollify/baseline.json
+Wrote baseline with 21 fingerprint(s) to .mollify/baseline.json
 ```
 
 **2. In CI, compare against it and fail on regressions:**
@@ -32,7 +32,7 @@ adds one dead function — here we append `def _brand_new_dead(): ...` and re-ru
 
 ```text
 Mollify audit — .
-Quality score: 70/100
+Quality score: 79/100
 1 finding(s) across 7 file(s) — 0 error, 1 warn
   ./billing/app.py:21 [warn/certain] unused-export — function `_brand_new_dead` has no reachable references in the project  (unused-export:fe475f51)
 ```
@@ -41,7 +41,7 @@ Quality score: 70/100
 echo $?    # → 1
 ```
 
-The other 20 findings are filtered out as known debt; CI flags **only the one
+The other 21 findings are filtered out as known debt; CI flags **only the one
 thing this PR introduced**, and exits non-zero. That's a review comment a
 developer will actually read.
 

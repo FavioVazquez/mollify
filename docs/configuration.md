@@ -20,6 +20,43 @@ are optional.
 }
 ```
 
+## `mollify init` — starter config
+
+`mollify init` scaffolds a documented starter `.mollifyrc.json` (it leaves an
+existing one untouched). The generated file sets the core areas to `warn`,
+silences `type-health` by default, and surfaces the complexity thresholds as
+obvious knobs. `_comment` keys are ignored by the loader and act as inline docs
+(JSON has no comments):
+
+```json
+{
+  "_comment": "mollify config — see docs/configuration.md. Severities: error | warn | off.",
+  "source_roots": [".", "src"],
+  "severity": {
+    "dead-code": "warn",
+    "dependency-hygiene": "warn",
+    "type-health": "off"
+  },
+  "ignore": [],
+  "exclude_dirs": [],
+  "max_cyclomatic": 10,
+  "max_cognitive": 15
+}
+```
+
+To install agent integrations instead of a config, use `mollify init --agent
+<name>` / `--all` (see the [README](../README.md#install)).
+
+## pytest test paths
+
+Dead-code reachability treats `test_*`/`Test*` collection roots in test paths as
+reachable. Beyond the `tests/`/`test/` convention, mollify reads
+`[tool.pytest.ini_options].testpaths` from `pyproject.toml` to widen what counts
+as a test path. Note: only `pyproject.toml` is consulted today — `pytest.ini`,
+`setup.cfg`, and `tox.ini` are not yet read, so projects that configure
+`testpaths` only in those files should add the dir to the `tests/` convention or
+declare it in `pyproject.toml`.
+
 ## `severity`
 
 Map of **rule id** or **category** → `error` | `warn` | `off`.

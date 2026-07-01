@@ -917,6 +917,28 @@ fn run_metrics(a: &MetricsArgs) -> i32 {
     0
 }
 
+/// A documented starter `.mollifyrc.json`. Severities default to `warn` for the
+/// core analysis areas; `_comment` keys are ignored by the loader and serve as
+/// inline docs (JSON has no comments). Complexity thresholds are the engine
+/// defaults, surfaced here as obvious knobs. The audit score weights findings by
+/// confidence — `uncertain` candidates count least — so a first run is not
+/// dominated by low-confidence noise.
+const STARTER_RC: &str = r#"{
+  "_comment": "mollify config — see docs/configuration.md. Severities: error | warn | off.",
+  "source_roots": [".", "src"],
+  "severity": {
+    "_comment": "Per-rule ids win over category names (dead-code, dependency-hygiene, complexity, security, architecture, type-health).",
+    "dead-code": "warn",
+    "dependency-hygiene": "warn",
+    "type-health": "off"
+  },
+  "ignore": [],
+  "exclude_dirs": [],
+  "max_cyclomatic": 10,
+  "max_cognitive": 15
+}
+"#;
+
 fn run_init(a: &InitArgs) -> i32 {
     // Agent-integration mode: install skills/rules/hooks/commands/workflows.
     if a.all || !a.agent.is_empty() {
@@ -927,8 +949,7 @@ fn run_init(a: &InitArgs) -> i32 {
         println!("{cfg} already exists; leaving it untouched.");
         return 0;
     }
-    let default = "{\n  \"source_roots\": [\".\", \"src\"],\n  \"severity\": { \"dead-code\": \"warn\", \"dependency-hygiene\": \"warn\" }\n}\n";
-    match std::fs::write(&cfg, default) {
+    match std::fs::write(&cfg, STARTER_RC) {
         Ok(()) => {
             println!("Wrote {cfg}");
             0
@@ -1048,5 +1069,31 @@ fn exit_code(errors: usize) -> i32 {
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mollify_types::Severity;
+
+    #[test]
+    fn starter_rc_is_valid_and_loads() {
+        // The scaffolded rc must parse cleanly through the real loader
+        // (including the `_comment` doc keys) and apply its overrides.
+        let base = std::env::temp_dir().join(format!("mollify-cli-rc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = Utf8PathBuf::from_path_buf(base).unwrap();
+        std::fs::write(dir.join(".mollifyrc.json"), STARTER_RC).unwrap();
+        let cfg = mollify_core::config::load(&dir);
+        assert_eq!(cfg.max_cyclomatic, 10);
+        assert_eq!(cfg.max_cognitive, 15);
+        assert_eq!(
+            cfg.severity.get("type-health"),
+            Some(&Severity::Off),
+            "starter rc should silence type-health by default"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -6,6 +6,43 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+### Fixed
+Precision pass from a real-world audit (running `mollify` on the *Birefringence*
+package surfaced these false positives; see `docs/birefringenceaudit.md` and
+`docs/birefringence-audit-plan.md`):
+- **Relative imports in a package `__init__.py` now resolve.** A package's
+  `__init__.py` has the package itself as its dotted name, so the resolver was
+  dropping one segment too many — `.aa` resolved to `aa` instead of `pkg.aa`.
+  This cascaded into spurious `unresolved-import` → `unused-file` →
+  `unused-export` across re-exporting packages (the dominant FP source). Package
+  self-references no longer create a `circular-dependency`.
+- **`session.exec(...)` no longer flagged `dangerous-eval` (CWE-95).** The
+  security rule matched any trailing `.exec`/`.eval` segment; it now matches only
+  the `eval`/`exec`/`compile` builtins, not ORM/driver methods.
+- **pytest `test_*`/`Test*` are no longer `unused-export`.** They are treated as
+  reachability roots within test paths, honoring
+  `[tool.pytest.ini_options].testpaths`.
+- **`from __future__ import …` is no longer `unused-import`** (it has a compiler
+  effect and is never unused).
+- **Lazy/in-function imports** now count toward dependency usage and
+  reachability, so a dependency imported only inside `main()` (e.g. `uvicorn`)
+  isn't falsely `unused-dependency`; module-scope `unused-import` is unaffected.
+- **`[project.scripts]` entry points are reachability roots** — the target
+  module isn't `unused-file` and the named function isn't `unused-export`.
+- **First-party test helpers** imported by bare leaf name (`conftest`, sibling
+  modules on a test path) are no longer `missing-dependency`.
+- **`commented-code` no longer fires on prose** that opens with a keyword
+  (e.g. `# from zero (...), doubled.`); `from …` now requires a real `import`.
+
+### Changed
+- **Quality score is weighted by confidence** — `uncertain` findings penalize
+  the 0–100 score far less than `certain` ones, so a report dominated by
+  low-confidence review items no longer reads as a failing grade. Still
+  deterministic.
+- **`mollify init` writes a richer, documented starter `.mollifyrc.json`**
+  (five-area severities, `type-health` off by default, complexity knobs,
+  inline `_comment` docs).
+
 ### Added
 - **`--include <DIR>`** flag on all 8 analysis commands (`audit`, `dead-code`,
   `deps`, `arch`, `complexity`, `dupes`, `types`, `security`; not

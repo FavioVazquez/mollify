@@ -9,8 +9,8 @@
 use camino::Utf8Path;
 use mollify_graph::{discover_python_files_with, ModuleGraph};
 use mollify_types::{
-    sort_findings, AuditReport, Category, Finding, FindingsReport, Report, Severity, Summary,
-    SCHEMA_VERSION,
+    sort_findings, AuditReport, Category, Confidence, Finding, FindingsReport, Report, Severity,
+    Summary, SCHEMA_VERSION,
 };
 
 pub mod agents;
@@ -34,6 +34,7 @@ pub mod installed;
 pub mod known;
 pub mod members;
 pub mod metrics;
+pub mod paths;
 pub mod plugins;
 pub mod policy;
 pub mod sarif;
@@ -57,7 +58,11 @@ pub fn build_graph(root: &Utf8Path) -> ModuleGraph {
 pub fn build_graph_with_includes(root: &Utf8Path, includes: &[String]) -> ModuleGraph {
     let cfg = config::load(root);
     let files = discover_python_files_with(root, &cfg.exclude_dirs, includes);
-    ModuleGraph::build(root, &files)
+    let mut graph = ModuleGraph::build(root, &files);
+    // Console-script entry points (`[project.scripts]` etc.) are reachability
+    // roots even with no in-repo caller.
+    graph.mark_entry_points(&deps::entry_point_modules(root));
+    graph
 }
 
 /// Sort, apply inline `# mollify: ignore[...]` suppressions and `.mollifyrc`
@@ -110,7 +115,11 @@ pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`dead_code_report`], honoring the CLI's `--include` override.
 pub fn dead_code_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
-    let mut findings = deadcode::analyze(&graph);
+    let mut findings = deadcode::analyze_with(
+        &graph,
+        &paths::pytest_testpaths(root),
+        &deps::entry_point_symbols(root),
+    );
     findings.extend(members::analyze(&graph));
     findings.extend(commented::analyze(&graph));
     finalize(&config::load(root), &graph, findings)
@@ -436,7 +445,11 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
     let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
     let mut findings: Vec<Finding> = Vec::new();
-    findings.extend(deadcode::analyze(&graph));
+    findings.extend(deadcode::analyze_with(
+        &graph,
+        &paths::pytest_testpaths(root),
+        &deps::entry_point_symbols(root),
+    ));
     findings.extend(members::analyze(&graph));
     findings.extend(commented::analyze(&graph));
     findings.extend(deps::analyze(root, &graph));
@@ -489,18 +502,30 @@ pub fn into_report(category: Option<Category>, report: FindingsReport) -> Report
 }
 
 /// A simple, deterministic 0–100 health score: start at 100, subtract weighted
-/// penalties per finding (errors hurt more than warnings), floor at 0. Tunable.
+/// penalties per finding (errors hurt more than warnings), floor at 0.
+///
+/// Penalties are scaled by **confidence** so that low-confidence candidates —
+/// which are, by design, the noisier tier — don't tank the headline number the
+/// way a confirmed defect does. A repo full of `Uncertain` findings should not
+/// read the same as one full of `Certain` ones (the Birefringence audit scored
+/// 20/100 almost entirely on uncertain false positives).
 fn quality_score(findings: &[Finding], files: usize) -> u8 {
     if files == 0 {
         return 100;
     }
     let mut penalty = 0.0f64;
     for f in findings {
-        penalty += match f.severity {
+        let severity_weight = match f.severity {
             Severity::Error => 3.0,
             Severity::Warn => 1.0,
             Severity::Off => 0.0,
         };
+        let confidence_weight = match f.confidence {
+            Confidence::Certain => 1.0,
+            Confidence::Likely => 0.5,
+            Confidence::Uncertain => 0.15,
+        };
+        penalty += severity_weight * confidence_weight;
     }
     // Normalize against project size so big repos aren't unfairly punished.
     let per_file = penalty / files as f64;
@@ -553,6 +578,78 @@ mod tests {
         assert_eq!(j1, j2);
         assert!(r1.quality_score <= 100);
         assert!(r1.findings.iter().any(|f| f.rule == "unused-export"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn score_weights_penalty_by_confidence() {
+        fn finding(conf: Confidence) -> Finding {
+            Finding {
+                fingerprint: "x".into(),
+                rule: "r".into(),
+                category: Category::DeadCode,
+                severity: Severity::Warn,
+                confidence: conf,
+                attribution: None,
+                reason: String::new(),
+                location: mollify_types::Location {
+                    path: Utf8PathBuf::from("a.py"),
+                    line: 1,
+                    column: 0,
+                    end_line: None,
+                },
+                actions: vec![],
+            }
+        }
+        // Same count + severity, different confidence → uncertain hurts least.
+        let repeat = |c, n| vec![finding(c); n];
+        let certain = quality_score(&repeat(Confidence::Certain, 5), 1);
+        let uncertain = quality_score(&repeat(Confidence::Uncertain, 5), 1);
+        assert!(
+            uncertain > certain,
+            "uncertain {uncertain} should beat certain {certain}"
+        );
+        // No findings → perfect score.
+        assert_eq!(quality_score(&[], 3), 100);
+    }
+
+    #[test]
+    fn src_layout_entry_point_suppresses_dead_code() {
+        // A src/ layout: `src/pkg/cli.py` is named by a console-script entry
+        // point. `dotted_name` strips the leading `src/`, so the dotted name is
+        // `pkg.cli` and the entry-point wiring matches it. The module must not be
+        // `unused-file`, and its `main` must not be `unused-export`.
+        let d = temp("srclayout");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"pkg\"\n\n[project.scripts]\nserve = \"pkg.cli:main\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(d.join("src/pkg")).unwrap();
+        std::fs::write(d.join("src/pkg/__init__.py"), "").unwrap();
+        std::fs::write(
+            d.join("src/pkg/cli.py"),
+            "def main():\n    return 0\n\n\ndef _orphan():\n    return 1\n",
+        )
+        .unwrap();
+        let report = dead_code_report(&d);
+        let dead: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.rule == "unused-file" || f.rule == "unused-export")
+            .map(|f| f.reason.clone())
+            .collect();
+        assert!(
+            !dead
+                .iter()
+                .any(|r| r.contains("pkg.cli") || r.contains("`main`")),
+            "entry-point module/function wrongly flagged in src/ layout: {dead:?}"
+        );
+        // The genuinely-dead sibling is still flagged (sanity).
+        assert!(
+            dead.iter().any(|r| r.contains("_orphan")),
+            "real dead code missed: {dead:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 }

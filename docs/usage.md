@@ -140,6 +140,33 @@ that DB current.
 - **uncertain** — public surface, or the module uses `getattr`/`eval`/`importlib`.
   Reported for review only.
 
+The **quality score** (`mollify audit`) weights each finding's penalty by its
+confidence — `uncertain` candidates count least, `certain` most — so a report
+dominated by low-confidence review items isn't punished like one full of proven
+defects. The score is still deterministic.
+
+## What counts as reachable
+
+Dead-code reachability starts from analysis **roots** and follows imports. A
+symbol or file reachable from a root is never reported as unused. Roots include:
+
+- **Entry files** — `__main__.py`, `setup.py`, `conftest.py`, `test_*.py` /
+  `*_test.py`, notebooks, and every package `__init__.py`.
+- **`[project.scripts]` / `[project.gui-scripts]` / `[tool.poetry.scripts]`
+  entry points** — the target module is a root, and the named function (the
+  `:func` half of `pkg.mod:func`) is exempt from `unused-export`.
+- **pytest collection** — `test_*` functions and `Test*` classes inside test
+  paths, honoring `[tool.pytest.ini_options].testpaths` for non-conventional
+  layouts.
+- **Framework-registered symbols** — Flask/FastAPI routes, Celery tasks, pytest
+  fixtures, Django signal receivers, Click commands, Pydantic validators, etc.
+  (anything carrying a recognized decorator).
+
+Imports are resolved package-aware: relative re-exports in a package
+`__init__.py` (`from .sub import x`, `from . import sub`) resolve correctly, and
+**lazy imports** inside function/class bodies still create real edges (and count
+toward dependency usage) without affecting module-scope `unused-import`.
+
 ## Exit codes
 
 `0` when there are no `error`-severity findings, `1` otherwise. Findings are

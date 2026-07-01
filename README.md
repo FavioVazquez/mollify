@@ -32,7 +32,7 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 > **Project status:** early but real — **`v0.1.0` is published on
 > [PyPI](https://pypi.org/project/mollify/) and
 > [crates.io](https://crates.io/crates/mollify-cli)**. The core analysis phases
-> are implemented, tested (120+ tests), and dogfooded; CI + CodeQL are green. See
+> are implemented, tested (140+ tests), and dogfooded; CI + CodeQL are green. See
 > [`docs/adr/`](docs/adr) for design decisions and *Engineering notes* below for
 > how it works.
 
@@ -309,8 +309,11 @@ Mollify is built to be precise and dependency-light:
   (never claimed as proven vulnerabilities), surfaced with a confidence tier — by
   design, not a gap.
 
-There are no known correctness limitations; remaining roadmap items are
-performance optimizations (e.g. Salsa keystroke-incremental reparse for the LSP).
+Precision is the priority, built on real scope/binding resolution and
+package-aware import resolution; the deliberate precision tradeoffs (e.g. how
+lazy imports feed reachability but not architecture) are documented in
+[docs/adr/](docs/adr). Remaining roadmap items are mostly performance
+optimizations (e.g. Salsa keystroke-incremental reparse for the LSP).
 
 ## Contributing
 

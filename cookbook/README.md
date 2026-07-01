@@ -58,10 +58,11 @@ packs one of almost every problem Mollify detects into ~40 lines:
 
 - an unused module, function, import, and local variable (**dead code**)
 - two declared-but-never-imported dependencies (**dependency hygiene**)
+- an `invoice` ↔ `ledger` import cycle (**architecture**)
 - an over-nested function past the complexity threshold (**complexity**)
 - a `hashlib.md5` password hash (**security**, CWE-327)
 - public functions with no type annotations (**type health**)
 
-A clean audit scores it **71/100 with 20 findings** — your starting line for the
+A clean audit scores it **80/100 with 21 findings** — your starting line for the
 recipes. Nothing here is fixed for real; the project stays messy on purpose so the
 recipes are reproducible.
