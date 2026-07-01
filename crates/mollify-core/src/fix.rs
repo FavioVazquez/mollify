@@ -25,6 +25,9 @@ pub fn plan(root: &Utf8Path) -> Vec<FixEdit> {
             (f.rule == "unused-export" || f.rule == "unused-import")
                 && f.confidence == Confidence::Certain
                 && f.actions.first().is_some_and(|a| a.auto_fixable)
+                // Defense in depth: only plain .py files can be line-edited
+                // safely (notebook findings carry cell-relative lines).
+                && f.location.path.extension() == Some("py")
         })
         .map(|f| FixEdit {
             start_line: f.location.line,
@@ -101,6 +104,67 @@ mod tests {
         assert_eq!(edits.len(), 1, "got {edits:?}");
         assert!(edits[0].path.as_str().ends_with("lib.py"));
         assert_eq!(edits[0].start_line, 1);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn plan_never_touches_notebooks() {
+        // Notebook finding lines are relative to the concatenated code cells;
+        // editing the raw JSON by those line numbers destroys the file.
+        let d = temp("notebook");
+        std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
+        let nb = r#"{
+ "cells": [
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "source": ["import os\n", "x = 1\n", "print(x)\n"],
+   "outputs": [],
+   "execution_count": null
+  }
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}"#;
+        std::fs::write(d.join("analysis.ipynb"), nb).unwrap();
+        let report = dead_code_report(&d);
+        // The unused-import finding still exists (evidence is preserved)…
+        let nb_finding = report
+            .findings
+            .iter()
+            .find(|f| f.rule == "unused-import" && f.location.path.extension() == Some("ipynb"))
+            .expect("notebook unused-import finding");
+        // …but it is never auto-fixable.
+        assert!(!nb_finding.actions[0].auto_fixable);
+        let edits = plan(&d);
+        assert!(
+            edits.iter().all(|e| e.path.extension() == Some("py")),
+            "plan contains a non-.py edit: {edits:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn cross_module_dynamic_dispatch_blocks_auto_fix() {
+        // `getattr(lib, "_handler_" + name)()` in another module means the
+        // "unused" private symbol may be live — never Certain, never planned.
+        let d = temp("dynsink");
+        std::fs::write(
+            d.join("__main__.py"),
+            "import lib\nname = 'a'\nfn = getattr(lib, '_handler_' + name)\nfn()\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("lib.py"), "def _handler_a():\n    return 'a'\n").unwrap();
+        let report = dead_code_report(&d);
+        for f in report.findings.iter().filter(|f| f.rule == "unused-export") {
+            assert_ne!(
+                f.confidence,
+                Confidence::Certain,
+                "dynamic-dispatch project must not grade unused-export Certain: {f:?}"
+            );
+        }
+        assert!(plan(&d).is_empty(), "fix plan must be empty");
         std::fs::remove_dir_all(&d).ok();
     }
 

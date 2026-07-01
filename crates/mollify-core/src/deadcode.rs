@@ -195,6 +195,9 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                 } else {
                     Confidence::Certain
                 };
+                // Notebook line numbers are relative to the concatenated code
+                // cells, not the raw .ipynb JSON — never auto-edit those files.
+                let fixable_file = m.path.extension() == Some("py");
                 out.push(Finding {
                     fingerprint: fingerprint(
                         rule,
@@ -219,7 +222,7 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                     actions: vec![Action {
                         kind: "remove-import".into(),
                         description: format!("Remove the unused import {what}"),
-                        auto_fixable: confidence == Confidence::Certain,
+                        auto_fixable: confidence == Confidence::Certain && fixable_file,
                         suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
                     }],
                 });
@@ -345,8 +348,10 @@ fn unused_symbols(
                 continue;
             }
 
-            // Confidence tiering.
-            let confidence = if m.parsed.has_dynamic_sink {
+            // Confidence tiering. A dynamic sink (getattr/eval/importlib)
+            // anywhere in the project can reference this symbol across module
+            // boundaries, so it caps confidence exactly as in `unused_files`.
+            let confidence = if m.parsed.has_dynamic_sink || graph.global_dynamic {
                 Confidence::Uncertain
             } else if d.private_by_convention {
                 Confidence::Certain
@@ -380,8 +385,10 @@ fn unused_symbols(
                 actions: vec![Action {
                     kind: "remove-symbol".into(),
                     description: format!("Delete unused {kind_str} `{}`", d.name),
-                    // Only Certain findings are ever auto-fixable.
-                    auto_fixable: confidence == Confidence::Certain,
+                    // Only Certain findings in plain .py files are ever
+                    // auto-fixable (notebook lines are cell-relative).
+                    auto_fixable: confidence == Confidence::Certain
+                        && m.path.extension() == Some("py"),
                     suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
                 }],
             });

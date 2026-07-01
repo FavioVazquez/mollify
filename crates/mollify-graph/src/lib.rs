@@ -287,7 +287,11 @@ fn dotted_name(root: &Utf8Path, path: &Utf8Path) -> String {
         }
     }
     let no_ext = rel.as_str().strip_suffix(".py").unwrap_or(rel.as_str());
-    let no_init = no_ext.strip_suffix("/__init__").unwrap_or(no_ext);
+    // A root-level `__init__.py` has the bare name `__init__` (no slash):
+    // the analysis root is itself a package, whose dotted name is "".
+    let no_init = no_ext
+        .strip_suffix("/__init__")
+        .unwrap_or(if no_ext == "__init__" { "" } else { no_ext });
     no_init.replace('/', ".").trim_matches('.').to_string()
 }
 
@@ -403,7 +407,7 @@ impl ModuleGraph {
                 // `from . import bb` in `pkg/__init__.py` reaches `pkg.bb`.
                 if !imp.names.is_empty() {
                     for n in &imp.names {
-                        let candidate = format!("{target_dotted}.{n}");
+                        let candidate = join_dotted(&target_dotted, n);
                         if let Some(&tid) = self.lookup(&candidate) {
                             if tid != m.id {
                                 sink.push((m.id, tid));
@@ -434,7 +438,7 @@ impl ModuleGraph {
         }
         imp.names
             .iter()
-            .any(|n| self.lookup(&format!("{target}.{n}")).is_some())
+            .any(|n| self.lookup(&join_dotted(target, n)).is_some())
     }
 
     /// Imports that *look* internal but resolve to no module in the project:
@@ -451,7 +455,9 @@ impl ModuleGraph {
         }
         let mut out = Vec::new();
         for m in &self.modules {
-            for imp in &m.parsed.imports {
+            // Lazy (in-function) imports resolve by the same rules — a typo'd
+            // relative import inside a function is just as broken at call time.
+            for imp in m.parsed.imports.iter().chain(&m.parsed.nested_imports) {
                 let relative = imp.relative_dots > 0;
                 let target = if relative {
                     resolve_relative(&m.dotted, imp.relative_dots, &imp.module, m.is_package)
@@ -569,10 +575,12 @@ impl ModuleGraph {
                 return true;
             }
         }
-        // Cross-module: any module that imports `module` references `name`.
+        // Cross-module: any module that imports `module` (eagerly or lazily —
+        // the in-function cycle-breaker pattern) references `name`.
         let importers: Vec<FileId> = self
             .edges
             .iter()
+            .chain(&self.lazy_edges)
             .filter(|(_, b)| *b == module)
             .map(|(a, _)| *a)
             .collect();
@@ -696,6 +704,16 @@ impl ModuleGraph {
 /// parent). For a module `a.b.c`, one dot resolves against the package `a.b`
 /// (drop the module's own segment); for the package `a.b`'s `__init__.py`, one
 /// dot already *is* `a.b` (drop nothing).
+/// Join a dotted prefix and a name; when the prefix is the root package
+/// (empty string — a root-level `__init__.py`), the name stands alone.
+fn join_dotted(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}.{name}")
+    }
+}
+
 fn resolve_relative(importer_dotted: &str, dots: u8, module: &str, is_package: bool) -> String {
     let parts: Vec<&str> = importer_dotted.split('.').collect();
     // A package's own dotted name is already the current package, so a single
@@ -743,6 +761,70 @@ mod tests {
             "pkg"
         );
         assert_eq!(dotted_name(root, Utf8Path::new("/proj/src/a/b.py")), "a.b");
+        // The analysis root is itself a package: its `__init__.py` is the
+        // root package surface, not a module named `__init__`.
+        assert_eq!(dotted_name(root, Utf8Path::new("/proj/__init__.py")), "");
+    }
+
+    #[test]
+    fn root_level_init_resolves_sibling_relative_imports() {
+        // When the analysis root is itself a package, `from . import mod` in
+        // the root `__init__.py` must reach the sibling module `mod`.
+        let d = temp("rootinit");
+        write(&d, "__init__.py", "from . import mod\n");
+        write(&d, "mod.py", "def go():\n    return 1\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        assert!(
+            !g.unused_files().iter().any(|m| m.dotted == "mod"),
+            "sibling of a root __init__.py wrongly unused"
+        );
+        assert!(
+            g.unresolved_imports().is_empty(),
+            "root-relative import wrongly unresolved"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn lazy_importer_counts_for_symbol_use() {
+        // A symbol used exclusively through a deferred `import helper` inside
+        // a function (the cycle-breaker pattern) is NOT dead.
+        let d = temp("lazysym");
+        write(&d, "__main__.py", "import app\napp.run()\n");
+        write(
+            &d,
+            "app.py",
+            "def run():\n    import helper\n    return helper.go()\n",
+        );
+        write(&d, "helper.py", "def go():\n    return 1\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let helper = g
+            .modules
+            .iter()
+            .find(|m| m.dotted == "helper")
+            .expect("helper module");
+        assert!(
+            g.symbol_used(helper.id, "go", 1),
+            "lazily-imported symbol wrongly unused"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn nested_unresolved_relative_imports_are_reported() {
+        let d = temp("nestedunres");
+        write(&d, "pkg/__init__.py", "");
+        write(&d, "pkg/app.py", "def f():\n    from .helprs import go\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let unresolved = g.unresolved_imports();
+        assert!(
+            unresolved.iter().any(|u| u.display == ".helprs" && u.relative),
+            "typo'd in-function relative import not reported: {unresolved:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
