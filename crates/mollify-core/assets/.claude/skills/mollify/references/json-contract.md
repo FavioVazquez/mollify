@@ -16,7 +16,7 @@ Every `--format json` invocation prints one envelope. Clients **switch on `kind`
   },
   "findings": [
     {
-      "fingerprint": "unused-export:931a82e6",
+      "fingerprint": "unused-export:931a82e6d41f07c3",
       "rule": "unused-export",
       "category": "dead-code",                 // dead-code | duplication |
                                                 // circular-dependency | complexity |

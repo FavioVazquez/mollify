@@ -62,7 +62,7 @@ The envelope has a discriminating top-level `kind` (`audit` | `dead-code` |
 files_analyzed}`, and `findings[]`. `audit` also has `quality_score` (0–100).
 
 Each finding:
-- `fingerprint` — stable id (e.g. `unused-export:931a82e6`).
+- `fingerprint` — stable id (e.g. `unused-export:931a82e6d41f07c3`).
 - `rule` — one of: `unused-file`, `unused-export`, `unused-import`,
   `unused-variable`, `unused-parameter`, `unused-method`, `unused-attribute`,
   `unused-enum-member`, `unreachable-code`,

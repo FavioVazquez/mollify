@@ -153,7 +153,7 @@ mollify audit --path /your/python/project
 Mollify audit — /your/project
 Quality score: 84/100
 12 finding(s) across 47 file(s) — 0 error, 12 warn
-  src/app.py:6   [warn/certain]  unused-export — function `_legacy` has no reachable references  (unused-export:931a82e6)
+  src/app.py:6   [warn/certain]  unused-export — function `_legacy` has no reachable references  (unused-export:931a82e6d41f07c3)
   src/api.py:88  [warn/likely]   high-complexity — function `handle` is complex (cyclomatic 14, cognitive 19)  (high-complexity:1aa9…)
   src/db.py:1    [warn/certain]  circular-dependency — import cycle: db → models → db  (circular-dependency:7c…)
   pyproject.toml:1 [warn/likely] unused-dependency — declared dependency `rich` is never imported  (unused-dependency:93…)
@@ -196,7 +196,7 @@ agent skills). Clients switch on `kind` and iterate `findings[]`:
   "kind": "audit", "schema_version": "0.1", "quality_score": 84,
   "summary": { "total": 12, "errors": 0, "warnings": 12, "files_analyzed": 47 },
   "findings": [{
-    "fingerprint": "unused-export:931a82e6d41f07c3", "rule": "unused-export",
+    "fingerprint": "unused-export:931a82e6d41f07c3d41f07c3", "rule": "unused-export",
     "category": "dead-code", "severity": "warn", "confidence": "certain",
     "reason": "function `_legacy` has no reachable references in the project",
     "location": { "path": "src/app.py", "line": 6, "end_line": 7 },
