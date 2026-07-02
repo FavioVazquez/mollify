@@ -564,6 +564,16 @@ impl ModuleGraph {
             .collect()
     }
 
+    /// True if any module (eagerly or lazily) imports `module`. Used to word
+    /// evidence precisely: "never imported" vs "only imported by unreachable
+    /// modules".
+    pub fn has_importer(&self, module: FileId) -> bool {
+        self.edges
+            .iter()
+            .chain(&self.lazy_edges)
+            .any(|(_, b)| *b == module)
+    }
+
     /// Whether a symbol defined in `module` is referenced internally or by any
     /// importer of that module. `defs_named` is how many top-level defs share
     /// the name (to discount the definition site in the internal count).

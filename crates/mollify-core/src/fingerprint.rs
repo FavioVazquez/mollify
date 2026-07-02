@@ -12,7 +12,9 @@ use xxhash_rust::xxh3::xxh3_64;
 /// (e.g. relative path + symbol name). Independent of run order, checkout
 /// location, root spelling, and edits elsewhere in the file.
 pub fn fingerprint(rule: &str, parts: &[&str]) -> String {
-    let joined = parts.join("\u{1f}");
+    // The rule participates in the hash, so the hex part alone is unique —
+    // two rules firing on the same symbol don't share a suffix.
+    let joined = format!("{rule}\u{1f}{}", parts.join("\u{1f}"));
     let h = xxh3_64(joined.as_bytes());
     format!("{rule}:{h:016x}")
 }

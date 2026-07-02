@@ -285,6 +285,19 @@ fn unused_files(graph: &ModuleGraph, out: &mut Vec<Finding>) {
         } else {
             Confidence::Likely
         };
+        // Precise evidence: a file can be unreachable because nothing imports
+        // it, or because everything that imports it is itself unreachable.
+        let reason = if graph.has_importer(m.id) {
+            format!(
+                "module `{}` is only imported by unreachable modules (dead subtree)",
+                m.dotted
+            )
+        } else {
+            format!(
+                "module `{}` is never imported and is not an entry point",
+                m.dotted
+            )
+        };
         out.push(Finding {
             fingerprint: fingerprint("unused-file", &[m.rel.as_str()]),
             rule: "unused-file".into(),
@@ -292,10 +305,7 @@ fn unused_files(graph: &ModuleGraph, out: &mut Vec<Finding>) {
             severity: Severity::Warn,
             confidence,
             attribution: None,
-            reason: format!(
-                "module `{}` is never imported and is not an entry point",
-                m.dotted
-            ),
+            reason,
             location: Location {
                 path: m.path.clone(),
                 line: 1,
