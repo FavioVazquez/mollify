@@ -196,7 +196,7 @@ agent skills). Clients switch on `kind` and iterate `findings[]`:
   "kind": "audit", "schema_version": "0.1", "quality_score": 84,
   "summary": { "total": 12, "errors": 0, "warnings": 12, "files_analyzed": 47 },
   "findings": [{
-    "fingerprint": "unused-export:931a82e6d41f07c3d41f07c3", "rule": "unused-export",
+    "fingerprint": "unused-export:931a82e6d41f07c3", "rule": "unused-export",
     "category": "dead-code", "severity": "warn", "confidence": "certain",
     "reason": "function `_legacy` has no reachable references in the project",
     "location": { "path": "src/app.py", "line": 6, "end_line": 7 },
