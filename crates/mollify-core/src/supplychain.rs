@@ -136,7 +136,18 @@ pub fn analyze_declared(
                     ),
                 )
             } else if dep.spec.is_empty() {
-                (false, String::new(), Confidence::Uncertain, String::new())
+                // Unconstrained (`flask` with no version): any advisory range
+                // is permitted by definition — same semantics as
+                // `specs_intersect("", …) == true`.
+                (
+                    true,
+                    String::new(),
+                    Confidence::Uncertain,
+                    format!(
+                        "unconstrained `{}` permits a version affected by {alias}{summary}; pin or constrain above the fix",
+                        dep.name
+                    ),
+                )
             } else {
                 // No concrete version — does the declared range permit a vulnerable one?
                 let hit = adv.specs.iter().any(|s| specs_intersect(&dep.spec, s));
@@ -263,14 +274,8 @@ pub fn analyze_pins(pins: &[PinnedDep], advisories: &[Advisory]) -> Vec<Finding>
 pub fn collect_pins(root: &Utf8Path) -> Vec<PinnedDep> {
     let mut pins = Vec::new();
     // requirements*.txt — `name==version` lines.
-    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("requirements") && name.ends_with(".txt") {
-            if let Ok(p) = camino::Utf8PathBuf::from_path_buf(entry.path()) {
-                parse_requirements(&p, &mut pins);
-            }
-        }
+    for p in requirements_files(root) {
+        parse_requirements(&p, &mut pins);
     }
     // poetry.lock / uv.lock — TOML [[package]] tables.
     for lock in ["poetry.lock", "uv.lock"] {
@@ -279,9 +284,34 @@ pub fn collect_pins(root: &Utf8Path) -> Vec<PinnedDep> {
             parse_toml_lock(&p, &mut pins);
         }
     }
-    pins.sort_by(|a, b| a.name.cmp(&b.name).then(a.version.cmp(&b.version)));
+    // source/line in the key: a pin duplicated across files must tie-break
+    // deterministically (finding locations depend on which copy wins).
+    pins.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then(a.version.cmp(&b.version))
+            .then(a.source.cmp(&b.source))
+            .then(a.line.cmp(&b.line))
+    });
     pins.dedup();
     pins
+}
+
+/// The project's `requirements*.txt` files, sorted by name — `read_dir`
+/// order is filesystem-dependent and must not leak into output.
+fn requirements_files(root: &Utf8Path) -> Vec<camino::Utf8PathBuf> {
+    let mut files: Vec<camino::Utf8PathBuf> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| camino::Utf8PathBuf::from_path_buf(e.path()).ok())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|f| f.starts_with("requirements") && f.ends_with(".txt"))
+        })
+        .collect();
+    files.sort();
+    files
 }
 
 fn parse_requirements(path: &Utf8Path, out: &mut Vec<PinnedDep>) {
@@ -345,26 +375,20 @@ fn parse_toml_lock(path: &Utf8Path, out: &mut Vec<PinnedDep>) {
 /// and `pyproject.toml` (PEP 621 `[project].dependencies` + Poetry).
 pub fn collect_declared_ranges(root: &Utf8Path) -> Vec<DeclaredRange> {
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("requirements") && name.ends_with(".txt") {
-            if let Ok(p) = camino::Utf8PathBuf::from_path_buf(entry.path()) {
-                if let Ok(text) = std::fs::read_to_string(&p) {
-                    for (i, raw) in text.lines().enumerate() {
-                        let line = raw.split('#').next().unwrap_or("").trim();
-                        if line.is_empty() || line.starts_with('-') {
-                            continue;
-                        }
-                        if let Some((name, spec)) = split_requirement(line) {
-                            out.push(DeclaredRange {
-                                name,
-                                spec,
-                                source: p.clone(),
-                                line: i as u32 + 1,
-                            });
-                        }
-                    }
+    for p in requirements_files(root) {
+        if let Ok(text) = std::fs::read_to_string(&p) {
+            for (i, raw) in text.lines().enumerate() {
+                let line = raw.split('#').next().unwrap_or("").trim();
+                if line.is_empty() || line.starts_with('-') {
+                    continue;
+                }
+                if let Some((name, spec)) = split_requirement(line) {
+                    out.push(DeclaredRange {
+                        name,
+                        spec,
+                        source: p.clone(),
+                        line: i as u32 + 1,
+                    });
                 }
             }
         }
@@ -373,7 +397,13 @@ pub fn collect_declared_ranges(root: &Utf8Path) -> Vec<DeclaredRange> {
     if pp.exists() {
         parse_pyproject_ranges(&pp, &mut out);
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name).then(a.spec.cmp(&b.spec)));
+    out.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then(a.spec.cmp(&b.spec))
+            .then(a.source.cmp(&b.source))
+            .then(a.line.cmp(&b.line))
+    });
     out.dedup();
     out
 }

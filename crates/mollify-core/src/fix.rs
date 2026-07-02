@@ -46,18 +46,31 @@ pub fn plan(root: &Utf8Path) -> Vec<FixEdit> {
 }
 
 /// Apply edits in place. Deletes the inclusive line ranges, bottom-up per file
-/// so earlier line numbers stay valid. Returns the number of edits applied.
+/// so earlier line numbers stay valid. Line endings are preserved: a CRLF
+/// file keeps CRLF on every untouched line (a one-line fix must not rewrite
+/// the whole file's endings). Returns the number of edits applied; a file
+/// that fails I/O is skipped (reported in the error) without abandoning the
+/// edits already applied to other files.
 pub fn apply(edits: &[FixEdit]) -> std::io::Result<usize> {
     let mut by_file: FxHashMap<&Utf8Path, Vec<&FixEdit>> = FxHashMap::default();
     for e in edits {
         by_file.entry(e.path.as_path()).or_default().push(e);
     }
     let mut applied = 0;
+    let mut failed: Vec<String> = Vec::new();
     for (path, mut file_edits) in by_file {
         // Bottom-up; skip overlaps defensively.
         file_edits.sort_by_key(|e| std::cmp::Reverse(e.start_line));
-        let content = std::fs::read_to_string(path)?;
-        let mut lines: Vec<&str> = content.lines().collect();
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                failed.push(format!("{path}: {e}"));
+                continue;
+            }
+        };
+        // split_inclusive keeps each line's own terminator (\n or \r\n).
+        let mut lines: Vec<&str> = content.split_inclusive('\n').collect();
+        let mut removed_here = 0usize;
         let mut last_removed_start = u32::MAX;
         for e in file_edits {
             let start = e.start_line.saturating_sub(1) as usize;
@@ -67,15 +80,25 @@ pub fn apply(edits: &[FixEdit]) -> std::io::Result<usize> {
             }
             lines.drain(start..end);
             last_removed_start = e.start_line;
-            applied += 1;
+            removed_here += 1;
         }
-        let mut out = lines.join("\n");
-        if content.ends_with('\n') {
-            out.push('\n');
+        if removed_here == 0 {
+            continue;
         }
-        std::fs::write(path, out)?;
+        if let Err(e) = std::fs::write(path, lines.concat()) {
+            failed.push(format!("{path}: {e}"));
+            continue;
+        }
+        applied += removed_here;
     }
-    Ok(applied)
+    if failed.is_empty() {
+        Ok(applied)
+    } else {
+        Err(std::io::Error::other(format!(
+            "applied {applied} fix(es); failed: {}",
+            failed.join("; ")
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -142,6 +165,25 @@ mod tests {
             edits.iter().all(|e| e.path.extension() == Some("py")),
             "plan contains a non-.py edit: {edits:?}"
         );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn apply_preserves_crlf_line_endings() {
+        let d = temp("crlf");
+        std::fs::write(d.join("__main__.py"), "print('hi')\r\n").unwrap();
+        let lib = d.join("lib.py");
+        std::fs::write(
+            &lib,
+            "import os\r\ndef _priv():\r\n    return 1\r\ndef keep():\r\n    return 2\r\n",
+        )
+        .unwrap();
+        let edits = plan(&d);
+        assert!(!edits.is_empty());
+        apply(&edits).unwrap();
+        let after = std::fs::read_to_string(&lib).unwrap();
+        assert!(after.contains("def keep():\r\n"), "CRLF rewritten: {after:?}");
+        assert!(!after.contains('\n') || !after.replace("\r\n", "").contains('\n'));
         std::fs::remove_dir_all(&d).ok();
     }
 

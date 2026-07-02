@@ -145,14 +145,18 @@ const ALIASES: &[(&str, &str)] = &[
     ("OpenSSL", "pyopenssl"),
     ("serial", "pyserial"),
     ("Crypto", "pycryptodome"),
-    ("google", "google-api-python-client"),
     ("jwt", "pyjwt"),
     ("MySQLdb", "mysqlclient"),
     ("psycopg2", "psycopg2-binary"),
     ("docx", "python-docx"),
     ("pptx", "python-pptx"),
-    ("markdown", "markdown"),
 ];
+
+/// Namespace-package top levels claimed by many unrelated distributions
+/// (`google` alone is protobuf, google-api-python-client, google-cloud-*…).
+/// Without an installed environment the owning distribution is unknowable,
+/// so `missing-dependency` must not guess a name for these.
+const NAMESPACE_TOPS: &[&str] = &["google", "azure", "backports", "zope"];
 
 pub struct Known {
     stdlib: FxHashSet<&'static str>,
@@ -179,6 +183,40 @@ impl Known {
             return normalize_dist(d);
         }
         normalize_dist(top_level)
+    }
+
+    /// Every distribution name that plausibly provides `module` (a dotted
+    /// import path). First entry is the preferred name for messages. An
+    /// import counts as "declared" if ANY candidate is declared: `psycopg2`
+    /// and `psycopg2-binary` are both real dists providing `import psycopg2`,
+    /// and namespace imports like `google.cloud.storage` are provided by the
+    /// dashed dist (`google-cloud-storage`), not the bare top level.
+    pub fn dists_for_import(&self, module: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut push = |d: String| {
+            if !out.contains(&d) {
+                out.push(d);
+            }
+        };
+        let top = module.split('.').next().unwrap_or(module);
+        push(self.dist_for_import(top));
+        push(normalize_dist(top));
+        // Dotted prefixes as dashed dist names (2–3 segments): covers
+        // namespace packages (google-cloud-storage) and dotted dists
+        // (ruamel-yaml).
+        let segs: Vec<&str> = module.split('.').collect();
+        for n in [2usize, 3] {
+            if segs.len() >= n {
+                push(normalize_dist(&segs[..n].join("-")));
+            }
+        }
+        out
+    }
+
+    /// True if `top_level` is a namespace package claimed by many unrelated
+    /// distributions — `missing-dependency` must not guess a name for it.
+    pub fn is_namespace_top(&self, top_level: &str) -> bool {
+        NAMESPACE_TOPS.contains(&top_level)
     }
 }
 
@@ -223,5 +261,23 @@ mod tests {
         assert!(!k.is_stdlib("numpy"));
         assert_eq!(k.dist_for_import("cv2"), "opencv-python");
         assert_eq!(k.dist_for_import("requests"), "requests");
+    }
+
+    #[test]
+    fn import_candidates_cover_alias_and_bare_names() {
+        let k = Known::new();
+        // Both `psycopg2` and `psycopg2-binary` are real dists providing
+        // `import psycopg2`; declaring either must count.
+        let c = k.dists_for_import("psycopg2");
+        assert!(c.contains(&"psycopg2-binary".to_string()));
+        assert!(c.contains(&"psycopg2".to_string()));
+        // Namespace imports: the dashed dist name is a candidate.
+        let g = k.dists_for_import("google.cloud.storage");
+        assert!(g.contains(&"google-cloud-storage".to_string()));
+        assert!(k.is_namespace_top("google"));
+        assert!(!k.is_namespace_top("requests"));
+        // ruamel.yaml → ruamel-yaml.
+        let r = k.dists_for_import("ruamel.yaml");
+        assert!(r.contains(&"ruamel-yaml".to_string()));
     }
 }

@@ -59,6 +59,8 @@ fn level(sev: Severity) -> &'static str {
         Severity::Error => "error",
         Severity::Warn => "warning",
         Severity::Off => "none",
+        // Future severities (the enum is #[non_exhaustive]) degrade to note.
+        _ => "note",
     }
 }
 
@@ -67,6 +69,8 @@ fn confidence_str(c: Confidence) -> &'static str {
         Confidence::Certain => "certain",
         Confidence::Likely => "likely",
         Confidence::Uncertain => "uncertain",
+        // Future tiers (the enum is #[non_exhaustive]) read as uncertain.
+        _ => "uncertain",
     }
 }
 

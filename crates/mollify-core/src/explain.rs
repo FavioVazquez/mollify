@@ -159,7 +159,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "respect-policy" | "policy-violation" => {
             "A declarative `.mollifyrc` policy was \
-            violated (a forbidden import or call appeared). Confidence: certain. Action: remove \
+            violated (a forbidden import or call appeared). Policy findings carry the \
+            *configured policy id* as their rule (e.g. `no-print`), so look for that id \
+            in your `.mollifyrc` policies. Confidence: certain. Action: remove \
             or relocate the forbidden construct."
         }
         "dangerous-eval" => {

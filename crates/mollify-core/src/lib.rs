@@ -9,7 +9,7 @@
 use camino::Utf8Path;
 use mollify_graph::{discover_python_files_with, ModuleGraph};
 use mollify_types::{
-    sort_findings, AuditReport, Category, Confidence, Finding, FindingsReport, Report, Severity,
+    sort_findings, AuditReport, Category, Confidence, Finding, FindingsReport, Severity,
     Summary, SCHEMA_VERSION,
 };
 
@@ -247,10 +247,11 @@ pub struct Inspection {
     pub imported_by: Vec<String>,
 }
 
-/// Returns true if `path` matches the user's `file` argument (exact, or as a
-/// trailing path fragment).
+/// Returns true if `path` matches the user's `file` argument: exact, or as a
+/// trailing path fragment anchored at a path-separator boundary (`b.py`
+/// matches `pkg/b.py` but never `lib.py`).
 fn path_matches(path: &str, file: &str) -> bool {
-    path == file || path.ends_with(file) || path.ends_with(&format!("/{file}"))
+    path == file || path.ends_with(&format!("/{file}"))
 }
 
 /// Build the evidence bundle for a single file.
@@ -498,14 +499,6 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
     }
 }
 
-/// Wrap a findings report in the right `Report` variant for a given category.
-pub fn into_report(category: Option<Category>, report: FindingsReport) -> Report {
-    match category {
-        Some(Category::DependencyHygiene) => Report::Deps(report),
-        _ => Report::DeadCode(report),
-    }
-}
-
 /// A simple, deterministic 0–100 health score: start at 100, subtract weighted
 /// penalties per finding (errors hurt more than warnings), floor at 0.
 ///
@@ -523,12 +516,14 @@ pub fn quality_score(findings: &[Finding], files: usize) -> u8 {
         let severity_weight = match f.severity {
             Severity::Error => 3.0,
             Severity::Warn => 1.0,
-            Severity::Off => 0.0,
+            // `Off` and any future severity (#[non_exhaustive]) score zero.
+            _ => 0.0,
         };
         let confidence_weight = match f.confidence {
             Confidence::Certain => 1.0,
             Confidence::Likely => 0.5,
-            Confidence::Uncertain => 0.15,
+            // `Uncertain` and any future tier score as the noisiest tier.
+            _ => 0.15,
         };
         penalty += severity_weight * confidence_weight;
     }
@@ -542,6 +537,7 @@ pub fn quality_score(findings: &[Finding], files: usize) -> u8 {
 mod tests {
     use super::*;
     use camino::Utf8PathBuf;
+    use mollify_types::Report;
 
     fn temp(tag: &str) -> Utf8PathBuf {
         let base =

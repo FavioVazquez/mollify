@@ -108,10 +108,15 @@ fn match_coverage<'a>(
     if let Some(s) = by_key.get(rel) {
         return Some(s);
     }
+    // Fallback by file name, anchored at a path-separator boundary so
+    // `app.py` never inherits `myapp.py`'s coverage; smallest key wins for
+    // determinism.
     let name = path.file_name()?;
+    let suffix = format!("/{name}");
     by_key
         .iter()
-        .find(|(k, _)| k.ends_with(name))
+        .filter(|(k, _)| k.as_str() == name || k.ends_with(&suffix))
+        .min_by(|a, b| a.0.cmp(b.0))
         .map(|(_, v)| v)
 }
 
