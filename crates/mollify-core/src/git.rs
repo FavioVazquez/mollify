@@ -13,6 +13,7 @@ use std::process::Command;
 pub fn changed_files(root: &Utf8Path, base: Option<&str>) -> Option<FxHashSet<String>> {
     // Quick check: is this a git work tree?
     let ok = Command::new("git")
+        .args(["-c", "core.quotepath=off"])
         .arg("-C")
         .arg(root.as_str())
         .args(["rev-parse", "--is-inside-work-tree"])
@@ -25,6 +26,7 @@ pub fn changed_files(root: &Utf8Path, base: Option<&str>) -> Option<FxHashSet<St
     let mut set = FxHashSet::default();
     let mut add = |args: &[&str]| {
         if let Ok(out) = Command::new("git")
+            .args(["-c", "core.quotepath=off"])
             .arg("-C")
             .arg(root.as_str())
             .args(args)
@@ -60,6 +62,7 @@ pub fn changed_lines(
     base: Option<&str>,
 ) -> Option<rustc_hash::FxHashMap<String, Vec<(u32, u32)>>> {
     let ok = Command::new("git")
+        .args(["-c", "core.quotepath=off"])
         .arg("-C")
         .arg(root.as_str())
         .args(["rev-parse", "--is-inside-work-tree"])
@@ -71,6 +74,7 @@ pub fn changed_lines(
     let mut map: rustc_hash::FxHashMap<String, Vec<(u32, u32)>> = rustc_hash::FxHashMap::default();
     let mut add_diff = |args: &[&str]| {
         if let Ok(out) = Command::new("git")
+            .args(["-c", "core.quotepath=off"])
             .arg("-C")
             .arg(root.as_str())
             .args(args)
@@ -89,6 +93,7 @@ pub fn changed_lines(
     }
     // Untracked files: the whole file is "introduced".
     if let Ok(out) = Command::new("git")
+        .args(["-c", "core.quotepath=off"])
         .arg("-C")
         .arg(root.as_str())
         .args(["ls-files", "--others", "--exclude-standard"])
@@ -150,10 +155,15 @@ pub fn line_is_changed(
         .as_str()
         .trim_start_matches("./");
     let ranges = changed.get(rel).or_else(|| {
+        // Fallback by file name, anchored at a path-separator boundary so
+        // `app.py` never inherits `myapp.py`'s hunks; smallest key wins for
+        // determinism.
         finding_path.file_name().and_then(|name| {
+            let suffix = format!("/{name}");
             changed
                 .iter()
-                .find(|(k, _)| k.ends_with(name))
+                .filter(|(k, _)| k.as_str() == name || k.ends_with(&suffix))
+                .min_by(|a, b| a.0.cmp(b.0))
                 .map(|(_, v)| v)
         })
     })?;
@@ -164,6 +174,7 @@ pub fn line_is_changed(
 /// `None` if not a git repo. Used for churn×complexity hotspot ranking.
 pub fn file_churn(root: &Utf8Path) -> Option<rustc_hash::FxHashMap<String, u32>> {
     let out = Command::new("git")
+        .args(["-c", "core.quotepath=off"])
         .arg("-C")
         .arg(root.as_str())
         .args(["log", "--no-merges", "--pretty=format:", "--name-only"])
@@ -197,9 +208,14 @@ pub fn path_is_changed(
     if changed.contains(rel) {
         return true;
     }
-    // Fallback: match by file name (handles path-normalization edge cases).
+    // Fallback: match by file name at a path-separator boundary (handles
+    // path-normalization edge cases without letting `app.py` match
+    // `myapp.py`).
     if let Some(name) = finding_path.file_name() {
-        return changed.iter().any(|c| c.ends_with(name));
+        let suffix = format!("/{name}");
+        return changed
+            .iter()
+            .any(|c| c.as_str() == name || c.ends_with(&suffix));
     }
     false
 }

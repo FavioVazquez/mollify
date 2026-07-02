@@ -33,7 +33,7 @@
 - `--min-confidence certain|likely|uncertain` — keep only findings at or above the given confidence tier.
 - `--gate all|new-only` — `new-only` keeps only findings in changed files (introduced).
 - `--base <ref>` — git base ref for `--gate new-only` (e.g. `origin/main`).
-- `--save-baseline <f>` — write a regression baseline (finding fingerprints) and exit 0.
+- `--save-baseline <f>` — write a regression baseline (finding fingerprints); exit 1 if the write fails.
 - `--baseline <f>` — keep only findings new since that baseline.
 - `--fail-on-regression` — with `--baseline`, exit non-zero if any new findings appeared.
 - `--brief` — advisory mode: print the report but always exit 0.
@@ -50,7 +50,11 @@
 
 ## Exit codes
 - `0` — no `error`-severity findings.
-- `1` — one or more `error`-severity findings (CI gate) or a command error.
+- `1` — `error`-severity findings (CI gate), or a failed/misconfigured gate
+  (`--save-baseline` write failure, or `--fail-on-regression` with a
+  missing/invalid `--baseline`).
+- `2` — a usage error: a nonexistent `--path`, or a `--format` the subcommand
+  doesn't implement.
 
 Severities are `warn` by default; raise rules/categories to `error` in `.mollifyrc.json` to gate CI.
 
@@ -96,7 +100,7 @@ Params: `mollify_coverage` requires `coverage_file`; `mollify_trace` requires
 ```
 `severity` keys are rule ids or category names (`dead-code`, `duplication`,
 `circular-dependency`, `complexity`, `architecture`, `dependency-hygiene`, `type-health`, `security`).
-See `references/configuration.md` semantics in `docs/configuration.md` for `architecture` and `policies`.
+See `docs/configuration.md` for the full semantics of `architecture` and `policies`.
 
 ## LSP server
 `mollify lsp` runs a stdio Language Server (Content-Length framed JSON-RPC) that

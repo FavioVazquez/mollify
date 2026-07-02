@@ -1,7 +1,7 @@
 //! Dead-code engine: reachability-based unused files and unused top-level
 //! symbols, with confidence tiers (RESEARCH.md §4 / PLAN.md §4).
 
-use crate::fingerprint::fingerprint;
+use crate::fingerprint::{fingerprint, Occurrences};
 use mollify_graph::ModuleGraph;
 use mollify_parse::DefKind;
 use mollify_types::{Action, Category, Confidence, Finding, Location, Severity};
@@ -42,6 +42,7 @@ fn duplicate_exports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
         }
         // binding name -> (first source module, first line)
         let mut first: FxHashMap<&str, (&str, u32)> = FxHashMap::default();
+        let mut occ = Occurrences::default();
         for imp in &m.parsed.imports {
             if imp.is_star {
                 continue;
@@ -57,7 +58,7 @@ fn duplicate_exports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                         out.push(Finding {
                             fingerprint: fingerprint(
                                 rule,
-                                &[m.path.as_str(), b, &imp.line.to_string()],
+                                &[m.rel.as_str(), b, &imp.module, &occ.next(b.as_str())],
                             ),
                             rule: rule.into(),
                             category: Category::Architecture,
@@ -95,10 +96,11 @@ fn duplicate_exports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
 /// never auto-fixed (the dead statement may document intent).
 fn unreachable_code(graph: &ModuleGraph, out: &mut Vec<Finding>) {
     for m in &graph.modules {
+        let mut occ = Occurrences::default();
         for u in &m.parsed.unreachable {
             let rule = "unreachable-code";
             out.push(Finding {
-                fingerprint: fingerprint(rule, &[m.path.as_str(), &u.line.to_string()]),
+                fingerprint: fingerprint(rule, &[m.rel.as_str(), u.after, &occ.next(u.after)]),
                 rule: rule.into(),
                 category: Category::DeadCode,
                 severity: Severity::Warn,
@@ -127,6 +129,7 @@ fn unreachable_code(graph: &ModuleGraph, out: &mut Vec<Finding>) {
 /// auto-fixable: the assignment's right-hand side may have side effects.
 fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
     for m in &graph.modules {
+        let mut occ = Occurrences::default();
         for s in &m.parsed.scope_findings {
             let (rule, kind, confidence) = if s.is_param {
                 ("unused-parameter", "parameter", Confidence::Uncertain)
@@ -134,7 +137,7 @@ fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                 ("unused-variable", "local variable", Confidence::Likely)
             };
             out.push(Finding {
-                fingerprint: fingerprint(rule, &[m.path.as_str(), &s.name, &s.line.to_string()]),
+                fingerprint: fingerprint(rule, &[m.rel.as_str(), &s.name, &occ.next(&s.name)]),
                 rule: rule.into(),
                 category: Category::DeadCode,
                 severity: Severity::Warn,
@@ -171,7 +174,19 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
         let local: FxHashSet<&str> = m.parsed.local_uses.iter().map(|s| s.as_str()).collect();
         let dunder_all: Option<&Vec<String>> = m.parsed.dunder_all.as_ref();
         let is_init = m.path.file_name().is_some_and(|f| f == "__init__.py");
+        // Occurrence indices are counted over ALL import statements/bindings
+        // (in source order), so fixing one finding doesn't shift another's
+        // fingerprint.
+        let mut occ = Occurrences::default();
+        let mut name_occ = Occurrences::default();
         for imp in &m.parsed.imports {
+            let bindings_key = imp.bindings.join(",");
+            let stmt_occurrence = occ.next(&bindings_key);
+            let name_occurrences: Vec<String> = imp
+                .bindings
+                .iter()
+                .map(|b| name_occ.next(b.as_str()))
+                .collect();
             if imp.is_star || imp.bindings.is_empty() || imp.type_checking_only {
                 continue; // star imports / unparsed bindings / type-only: skip
             }
@@ -195,14 +210,13 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                 } else {
                     Confidence::Certain
                 };
+                // Notebook line numbers are relative to the concatenated code
+                // cells, not the raw .ipynb JSON — never auto-edit those files.
+                let fixable_file = m.path.extension() == Some("py");
                 out.push(Finding {
                     fingerprint: fingerprint(
                         rule,
-                        &[
-                            m.path.as_str(),
-                            &imp.line.to_string(),
-                            &imp.bindings.join(","),
-                        ],
+                        &[m.rel.as_str(), &bindings_key, &stmt_occurrence],
                     ),
                     rule: rule.into(),
                     category: Category::DeadCode,
@@ -219,18 +233,21 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                     actions: vec![Action {
                         kind: "remove-import".into(),
                         description: format!("Remove the unused import {what}"),
-                        auto_fixable: confidence == Confidence::Certain,
+                        auto_fixable: confidence == Confidence::Certain && fixable_file,
                         suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
                     }],
                 });
             } else {
                 // Some names still used: report each unused name (not auto-fixed,
                 // since rewriting a shared import line precisely is risky).
-                for name in unused {
+                for (i, name) in imp.bindings.iter().enumerate() {
+                    if is_used(name) {
+                        continue;
+                    }
                     out.push(Finding {
                         fingerprint: fingerprint(
                             rule,
-                            &[m.path.as_str(), &imp.line.to_string(), name],
+                            &[m.rel.as_str(), name, &name_occurrences[i]],
                         ),
                         rule: rule.into(),
                         category: Category::DeadCode,
@@ -268,17 +285,27 @@ fn unused_files(graph: &ModuleGraph, out: &mut Vec<Finding>) {
         } else {
             Confidence::Likely
         };
+        // Precise evidence: a file can be unreachable because nothing imports
+        // it, or because everything that imports it is itself unreachable.
+        let reason = if graph.has_importer(m.id) {
+            format!(
+                "module `{}` is only imported by unreachable modules (dead subtree)",
+                m.dotted
+            )
+        } else {
+            format!(
+                "module `{}` is never imported and is not an entry point",
+                m.dotted
+            )
+        };
         out.push(Finding {
-            fingerprint: fingerprint("unused-file", &[m.path.as_str()]),
+            fingerprint: fingerprint("unused-file", &[m.rel.as_str()]),
             rule: "unused-file".into(),
             category: Category::DeadCode,
             severity: Severity::Warn,
             confidence,
             attribution: None,
-            reason: format!(
-                "module `{}` is never imported and is not an entry point",
-                m.dotted
-            ),
+            reason,
             location: Location {
                 path: m.path.clone(),
                 line: 1,
@@ -318,7 +345,12 @@ fn unused_symbols(
             .map(|(_, func)| func.as_str())
             .collect();
 
+        // Occurrence is counted over ALL defs of a name (in source order), so
+        // a finding's fingerprint doesn't shift when a sibling def's finding
+        // is fixed or suppressed.
+        let mut occ = Occurrences::default();
         for d in &m.parsed.definitions {
+            let occurrence = occ.next(&d.name);
             if is_test && crate::paths::is_pytest_entity(&d.name) {
                 continue;
             }
@@ -345,8 +377,10 @@ fn unused_symbols(
                 continue;
             }
 
-            // Confidence tiering.
-            let confidence = if m.parsed.has_dynamic_sink {
+            // Confidence tiering. A dynamic sink (getattr/eval/importlib)
+            // anywhere in the project can reference this symbol across module
+            // boundaries, so it caps confidence exactly as in `unused_files`.
+            let confidence = if m.parsed.has_dynamic_sink || graph.global_dynamic {
                 Confidence::Uncertain
             } else if d.private_by_convention {
                 Confidence::Certain
@@ -361,7 +395,7 @@ fn unused_symbols(
             };
             let rule = "unused-export";
             out.push(Finding {
-                fingerprint: fingerprint(rule, &[m.path.as_str(), &d.name]),
+                fingerprint: fingerprint(rule, &[m.rel.as_str(), &d.name, &occurrence]),
                 rule: rule.into(),
                 category: Category::DeadCode,
                 severity: Severity::Warn,
@@ -380,8 +414,10 @@ fn unused_symbols(
                 actions: vec![Action {
                     kind: "remove-symbol".into(),
                     description: format!("Delete unused {kind_str} `{}`", d.name),
-                    // Only Certain findings are ever auto-fixable.
-                    auto_fixable: confidence == Confidence::Certain,
+                    // Only Certain findings in plain .py files are ever
+                    // auto-fixable (notebook lines are cell-relative).
+                    auto_fixable: confidence == Confidence::Certain
+                        && m.path.extension() == Some("py"),
                     suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
                 }],
             });

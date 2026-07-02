@@ -32,7 +32,7 @@ Acting / exploring:
 - "what imports / is imported by module M" -> `mollify trace <module>`
 - "evidence bundle for one file" -> `mollify inspect <file>`
 - "project metrics (LOC, counts, complexity dist.)" -> `mollify metrics --format json`
-- "module dependency graph"      -> `mollify graph [--mermaid] --format json`
+- "module dependency graph"      -> `mollify graph [--mermaid]` (no `--format`; emits DOT to stdout, or Mermaid with `--mermaid`)
 - "project topology"             -> `mollify list [entry-points|files|frameworks]`
 - "watch and re-audit on change" -> `mollify watch [--interval-ms]` (CLI-only)
 - "create a config"              -> `mollify init`
@@ -76,7 +76,11 @@ Reading the kind-discriminated JSON envelope:
 - To silence a known-good finding, add its action's `suppression_comment` instead
   of deleting code. (`mollify fix --apply` auto-removes certain unused symbols.)
 
-Exit codes: 0 = no error-severity findings; 1 = error-severity findings or error.
+Exit codes: 0 = no error-severity findings; 1 = error-severity findings or a
+failed/misconfigured gate (`--save-baseline` write failure, or
+`--fail-on-regression` with a missing/invalid `--baseline`); 2 = usage error
+(nonexistent `--path`, or an unsupported `--format` for the subcommand). The
+MCP tools report the same usage errors as `isError` results.
 
 MCP server (`mollify mcp`) exposes 16 tools (`watch` and `lsp` are CLI-only):
 mollify_audit, mollify_dead_code, mollify_deps, mollify_arch, mollify_complexity,

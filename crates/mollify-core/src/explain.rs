@@ -91,8 +91,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
         "unresolved-import" => {
             "An import that looks internal — relative (`from . import x`) or under \
             a first-party top-level package — but resolves to no module in the \
-            project. Confidence: certain for relative imports, likely for absolute \
-            (path hacks exist). Action: fix the module path or remove the broken import."
+            project. Confidence: likely — a relative import may still resolve to \
+            an in-tree C extension or a build-generated module the `.py` walk \
+            can't see. Action: fix the module path or remove the broken import."
         }
         "duplicate-export" => {
             "An `__init__.py` re-exports the same name from two different \
@@ -159,7 +160,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "respect-policy" | "policy-violation" => {
             "A declarative `.mollifyrc` policy was \
-            violated (a forbidden import or call appeared). Confidence: certain. Action: remove \
+            violated (a forbidden import or call appeared). Policy findings carry the \
+            *configured policy id* as their rule (e.g. `no-print`), so look for that id \
+            in your `.mollifyrc` policies. Confidence: certain. Action: remove \
             or relocate the forbidden construct."
         }
         "dangerous-eval" => {

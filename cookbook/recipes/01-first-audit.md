@@ -12,16 +12,16 @@ mollify audit
 Mollify audit — .
 Quality score: 80/100
 21 finding(s) across 7 file(s) — 0 error, 21 warn
-  ./billing/app.py:1 [warn/likely] unused-file — module `billing.app` is never imported and is not an entry point  (unused-file:acccc57d)
-  ./billing/app.py:1 [warn/certain] unused-import — import `os` is never used in this module  (unused-import:dda43b1c)
-  ./billing/app.py:7 [warn/likely] unused-export — function `main` has no reachable references in the project  (unused-export:25516e8e)
-  ./billing/app.py:12 [warn/certain] unused-export — function `_legacy_helper` has no reachable references in the project  (unused-export:93948eee)
-  ./billing/app.py:13 [warn/likely] unused-variable — local variable `tmp` is assigned but never used  (unused-variable:20c24491)
-  ./billing/app.py:17 [warn/likely] untyped-function — public function `password_hash` has no type annotations (0/1 params typed, no return type)  (untyped-function:dd33214d)
-  ./billing/app.py:18 [warn/likely] weak-hash — `hashlib.md5` is a weak hash; use sha256+ (or pass usedforsecurity=False) [CWE-327]  (weak-hash:5468b0a6)
-  ./billing/services/invoice.py:1 [warn/certain] circular-dependency — import cycle: billing.services.invoice → billing.services.ledger → billing.services.invoice  (circular-dependency:efe63e78)
-  ./billing/services/invoice.py:6 [warn/certain] high-complexity — function `create_invoice` is complex (cyclomatic 7, cognitive 21); thresholds 10/15  (high-complexity:d62ca38c)
-  ./pyproject.toml:1 [warn/likely] unused-dependency — declared dependency `rich` is never imported  (unused-dependency:9333f874)
+  ./billing/app.py:1 [warn/likely] unused-file — module `billing.app` is never imported and is not an entry point  (unused-file:97f87ac90f4a3ffa)
+  ./billing/app.py:1 [warn/certain] unused-import — import `os` is never used in this module  (unused-import:9a5e10483cc040fd)
+  ./billing/app.py:7 [warn/likely] unused-export — function `main` has no reachable references in the project  (unused-export:0056e57951f6a9db)
+  ./billing/app.py:12 [warn/certain] unused-export — function `_legacy_helper` has no reachable references in the project  (unused-export:b3454f8f0092acf5)
+  ./billing/app.py:13 [warn/likely] unused-variable — local variable `tmp` is assigned but never used  (unused-variable:bced62ab9da79356)
+  ./billing/app.py:17 [warn/likely] untyped-function — public function `password_hash` has no type annotations (0/1 params typed, no return type)  (untyped-function:a3c79d14005834f2)
+  ./billing/app.py:17 [warn/likely] unused-export — function `password_hash` has no reachable references in the project  (unused-export:5024ab2f29d5cdeb)
+  ./billing/app.py:18 [warn/likely] weak-hash — `hashlib.md5` is a weak hash; use sha256+ (or pass usedforsecurity=False) [CWE-327]  (weak-hash:2fda8ae0463ffdee)
+  ./billing/domain/money.py:1 [warn/likely] unused-file — module `billing.domain.money` is only imported by unreachable modules (dead subtree)  (unused-file:988fbad17ad68b33)
+  ./billing/services/invoice.py:1 [warn/certain] circular-dependency — import cycle: billing.services.invoice → billing.services.ledger → billing.services.invoice  (circular-dependency:d297a057a059c6fb)
   … 11 more
 ```
 
@@ -32,8 +32,8 @@ deterministic pass and folds the result into one report.
 ## How to read it
 
 ```
-./billing/app.py:12   [warn/certain]   unused-export   — function `_legacy_helper` …   (unused-export:93948eee)
-└── where ─────────┘   └─ sev/conf ─┘   └── rule ────┘   └────────── reason ────────┘   └── fingerprint ──┘
+./billing/app.py:12   [warn/certain]   unused-export   — function `_legacy_helper` …   (unused-export:b3454f8f0092acf5)
+└── where ─────────┘   └─ sev/conf ─┘   └── rule ────┘   └────────── reason ────────┘   └───── fingerprint ─────┘
 ```
 
 - **Quality score (0–100)** — one number for "how healthy is this code?" Great for
@@ -46,7 +46,7 @@ deterministic pass and folds the result into one report.
   Python dead-code detection is undecidable in general, so a `certain` finding is
   provable and a `likely` one has a small residual dynamic risk. Only `certain`
   findings are ever auto-fixed (Recipe 03).
-- **fingerprint** (`unused-export:93948eee`) is a stable, content-derived id. It
+- **fingerprint** (`unused-export:b3454f8f0092acf5`) is a stable, content-derived id. It
   survives line moves and reformatting — which is what makes baselines and
   PR-scoped gates possible (Recipe 05).
 
@@ -106,8 +106,8 @@ Mollify audit — .
 Quality score: 81/100
 23 finding(s) across 8 file(s) — 0 error, 23 warn
   …
-  ./node_modules/leftpad/__init__.py:4 [warn/likely] untyped-function — public function `pad` has no type annotations (0/2 params typed, no return type)  (untyped-function:89f6096f)
-  ./node_modules/leftpad/__init__.py:4 [warn/likely] unused-export — function `pad` has no reachable references in the project  (unused-export:fc72f998)
+  ./node_modules/leftpad/__init__.py:4 [warn/likely] untyped-function — public function `pad` has no type annotations (0/2 params typed, no return type)  (untyped-function:7732bf595fb1c176)
+  ./node_modules/leftpad/__init__.py:4 [warn/likely] unused-export — function `pad` has no reachable references in the project  (unused-export:54aef9d4df4d4f22)
   …
 ```
 

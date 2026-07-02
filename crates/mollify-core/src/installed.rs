@@ -25,13 +25,23 @@ pub struct Installed {
 pub fn discover(root: &Utf8Path) -> Option<Installed> {
     let sp = find_site_packages(root)?;
     let mut inst = Installed::default();
-    for entry in std::fs::read_dir(&sp).ok()?.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.ends_with(".dist-info") {
-            continue;
-        }
-        let dir = entry.path();
+    // Sorted: `read_dir` order is filesystem-dependent, and when several
+    // dists claim the same top-level import (namespace packages), which one
+    // wins must not vary across machines (invariant: byte-identical output).
+    let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&sp)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().ends_with(".dist-info"))
+                .unwrap_or(false)
+        })
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        let name = dir.file_name().unwrap_or_default().to_string_lossy();
+        let name = name.to_string();
         // Distribution name from METADATA `Name:`, else the dir prefix.
         let meta = std::fs::read_to_string(dir.join("METADATA")).ok();
         let dist = meta
@@ -64,9 +74,20 @@ pub fn discover(root: &Utf8Path) -> Option<Installed> {
         for top in tops {
             // Only the package's top segment matters for import resolution.
             let top = top.split('/').next().unwrap_or(&top).to_string();
-            inst.import_to_dist
-                .entry(top)
-                .or_insert_with(|| dist.clone());
+            // On a claim collision, a dist named after the import wins
+            // (`requests` over an alphabetically-earlier claimant); otherwise
+            // first-in-sorted-order stays — deterministic either way.
+            let self_named = normalize_dist(&top) == dist;
+            match inst.import_to_dist.entry(top) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    if self_named && normalize_dist(e.key()) != *e.get() {
+                        e.insert(dist.clone());
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    v.insert(dist.clone());
+                }
+            }
         }
     }
     if inst.dists.is_empty() {

@@ -19,7 +19,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     let Some(churn) = git::file_churn(root) else {
         return Vec::new(); // not a git repo → no churn signal
     };
-    let mut scored: Vec<(f64, u32, u32, &str, &camino::Utf8Path)> = Vec::new();
+    let mut scored: Vec<(f64, u32, u32, &str, &mollify_graph::ModuleInfo)> = Vec::new();
     for m in &graph.modules {
         let complexity: u32 = m.parsed.functions.iter().map(|f| f.cyclomatic).sum();
         let rel = m
@@ -32,10 +32,17 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
             .get(rel)
             .copied()
             .or_else(|| {
-                // fallback: match by file name suffix
-                m.path
-                    .file_name()
-                    .and_then(|n| churn.iter().find(|(k, _)| k.ends_with(n)).map(|(_, v)| *v))
+                // Fallback: match by file name, anchored at a path-separator
+                // boundary so `app.py` never claims `myapp.py`'s churn. Take
+                // the smallest matching key for a deterministic winner.
+                m.path.file_name().and_then(|n| {
+                    let suffix = format!("/{n}");
+                    churn
+                        .iter()
+                        .filter(|(k, _)| k.as_str() == n || k.ends_with(&suffix))
+                        .min_by(|a, b| a.0.cmp(b.0))
+                        .map(|(_, v)| *v)
+                })
             })
             .unwrap_or(0);
         if c >= MIN_CHURN && complexity >= MIN_COMPLEXITY {
@@ -44,7 +51,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
                 c,
                 complexity,
                 m.dotted.as_str(),
-                &m.path,
+                m,
             ));
         }
     }
@@ -52,15 +59,16 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     scored.sort_by(|a, b| {
         b.0.partial_cmp(&a.0)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.4.cmp(b.4))
+            .then(a.4.path.cmp(&b.4.path))
     });
 
     scored
         .into_iter()
-        .map(|(score, churn, complexity, dotted, path)| {
+        .map(|(score, churn, complexity, dotted, m)| {
+            let path = &m.path;
             let rule = "hotspot";
             Finding {
-                fingerprint: fingerprint(rule, &[path.as_str()]),
+                fingerprint: fingerprint(rule, &[m.rel.as_str()]),
                 rule: rule.into(),
                 category: Category::Complexity,
                 severity: Severity::Warn,

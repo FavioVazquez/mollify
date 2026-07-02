@@ -39,9 +39,12 @@ pub fn analyze_with(graph: &ModuleGraph, min_tokens: usize, min_lines: u32) -> V
     let min_tokens = min_tokens.max(8) as u32;
 
     // Tokenize each module (deterministic order via sorted modules).
+    // read_source, not read_to_string: notebooks must contribute their code
+    // cells, not their JSON scaffolding (which is near-identical across
+    // notebooks and produces bogus clone families).
     let mut files: Vec<(usize, Vec<Tok>)> = Vec::new();
     for (i, m) in graph.modules.iter().enumerate() {
-        if let Ok(src) = std::fs::read_to_string(&m.path) {
+        if let Some(src) = mollify_graph::read_source(&m.path) {
             let toks = tokenize(&src);
             if toks.len() as u32 >= min_tokens {
                 files.push((i, toks));
@@ -240,9 +243,7 @@ fn tokenize(src: &str) -> Vec<Tok> {
             continue;
         }
         if c.is_ascii_digit() {
-            while i < b.len()
-                && (b[i].is_ascii_alphanumeric() || b[i] == b'.' || b[i] == b'_' || b[i] == b'x')
-            {
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'.' || b[i] == b'_') {
                 i += 1;
             }
             out.push(Tok {
@@ -299,10 +300,13 @@ fn consume_string(b: &[u8], quote: char) -> (usize, u32) {
             continue;
         }
         if b[i] == b'\n' {
-            lines += 1;
             if !triple {
+                // Unterminated single-quoted string: stop *before* the
+                // newline and don't count it — the caller's main loop will
+                // see it and count it exactly once.
                 return (i, lines);
             }
+            lines += 1;
             i += 1;
             continue;
         }
@@ -355,6 +359,45 @@ mod tests {
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&g);
         assert!(f.iter().any(|x| x.rule == "duplication"), "got {f:?}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn notebooks_compare_code_cells_not_json_scaffolding() {
+        // Two notebooks with completely different code share near-identical
+        // JSON scaffolding; tokenizing the raw file produced bogus clones.
+        let d = temp("nbdup");
+        let nb = |code: &str| {
+            format!(
+                r#"{{
+ "cells": [
+  {{
+   "cell_type": "code",
+   "metadata": {{"collapsed": false, "scrolled": true, "tags": ["x"]}},
+   "source": [{code}],
+   "outputs": [],
+   "execution_count": null
+  }}
+ ],
+ "metadata": {{"kernelspec": {{"display_name": "Python 3", "language": "python", "name": "python3"}}}},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}}"#
+            )
+        };
+        write(&d, "a.ipynb", &nb(r#""x = 1\n", "print(x)\n""#));
+        write(
+            &d,
+            "b.ipynb",
+            &nb(r#""def f(name):\n", "    return name.upper()\n""#),
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            f.is_empty(),
+            "notebook JSON scaffolding reported as clone: {f:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

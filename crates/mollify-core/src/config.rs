@@ -260,6 +260,9 @@ fn category_key(c: Category) -> &'static str {
         Category::DependencyHygiene => "dependency-hygiene",
         Category::TypeHealth => "type-health",
         Category::Security => "security",
+        // Future contract categories (the enum is #[non_exhaustive]) have no
+        // config key yet; they fall through severity overrides untouched.
+        _ => "unknown",
     }
 }
 

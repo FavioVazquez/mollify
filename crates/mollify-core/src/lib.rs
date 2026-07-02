@@ -9,8 +9,8 @@
 use camino::Utf8Path;
 use mollify_graph::{discover_python_files_with, ModuleGraph};
 use mollify_types::{
-    sort_findings, AuditReport, Category, Confidence, Finding, FindingsReport, Report, Severity,
-    Summary, SCHEMA_VERSION,
+    sort_findings, AuditReport, Category, Confidence, Finding, FindingsReport, Severity, Summary,
+    SCHEMA_VERSION,
 };
 
 pub mod agents;
@@ -247,10 +247,11 @@ pub struct Inspection {
     pub imported_by: Vec<String>,
 }
 
-/// Returns true if `path` matches the user's `file` argument (exact, or as a
-/// trailing path fragment).
+/// Returns true if `path` matches the user's `file` argument: exact, or as a
+/// trailing path fragment anchored at a path-separator boundary (`b.py`
+/// matches `pkg/b.py` but never `lib.py`).
 fn path_matches(path: &str, file: &str) -> bool {
-    path == file || path.ends_with(file) || path.ends_with(&format!("/{file}"))
+    path == file || path.ends_with(&format!("/{file}"))
 }
 
 /// Build the evidence bundle for a single file.
@@ -299,7 +300,10 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     findings.extend(security::analyze_parsed(path, &parsed));
     findings.extend(commented::analyze_source(path, source));
-    // Unused local variables / parameters.
+    // Unused local variables / parameters. (Live-buffer path: the display
+    // path doubles as the fingerprint identity; occurrence keeps the scheme
+    // aligned with the batch engines.)
+    let mut occ = fingerprint::Occurrences::default();
     for s in &parsed.scope_findings {
         let (rule, kind, confidence) = if s.is_param {
             (
@@ -317,7 +321,7 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
         findings.push(Finding {
             fingerprint: fingerprint::fingerprint(
                 rule,
-                &[path.as_str(), &s.name, &s.line.to_string()],
+                &[path.as_str(), &s.name, &occ.next(&s.name)],
             ),
             rule: rule.into(),
             category: Category::DeadCode,
@@ -335,12 +339,17 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
         });
     }
     // High complexity over default thresholds.
+    let mut fn_occ = fingerprint::Occurrences::default();
     for f in &parsed.functions {
+        let occurrence = fn_occ.next(&f.name);
         if f.cyclomatic > complexity::DEFAULT_CYCLOMATIC
             || f.cognitive > complexity::DEFAULT_COGNITIVE
         {
             findings.push(Finding {
-                fingerprint: fingerprint::fingerprint("high-complexity", &[path.as_str(), &f.name]),
+                fingerprint: fingerprint::fingerprint(
+                    "high-complexity",
+                    &[path.as_str(), &f.name, &occurrence],
+                ),
                 rule: "high-complexity".into(),
                 category: Category::Complexity,
                 severity: Severity::Warn,
@@ -493,14 +502,6 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
     }
 }
 
-/// Wrap a findings report in the right `Report` variant for a given category.
-pub fn into_report(category: Option<Category>, report: FindingsReport) -> Report {
-    match category {
-        Some(Category::DependencyHygiene) => Report::Deps(report),
-        _ => Report::DeadCode(report),
-    }
-}
-
 /// A simple, deterministic 0–100 health score: start at 100, subtract weighted
 /// penalties per finding (errors hurt more than warnings), floor at 0.
 ///
@@ -509,7 +510,7 @@ pub fn into_report(category: Option<Category>, report: FindingsReport) -> Report
 /// way a confirmed defect does. A repo full of `Uncertain` findings should not
 /// read the same as one full of `Certain` ones (a real-world audit scored
 /// 20/100 almost entirely on uncertain false positives).
-fn quality_score(findings: &[Finding], files: usize) -> u8 {
+pub fn quality_score(findings: &[Finding], files: usize) -> u8 {
     if files == 0 {
         return 100;
     }
@@ -518,12 +519,14 @@ fn quality_score(findings: &[Finding], files: usize) -> u8 {
         let severity_weight = match f.severity {
             Severity::Error => 3.0,
             Severity::Warn => 1.0,
-            Severity::Off => 0.0,
+            // `Off` and any future severity (#[non_exhaustive]) score zero.
+            _ => 0.0,
         };
         let confidence_weight = match f.confidence {
             Confidence::Certain => 1.0,
             Confidence::Likely => 0.5,
-            Confidence::Uncertain => 0.15,
+            // `Uncertain` and any future tier score as the noisiest tier.
+            _ => 0.15,
         };
         penalty += severity_weight * confidence_weight;
     }
@@ -537,6 +540,7 @@ fn quality_score(findings: &[Finding], files: usize) -> u8 {
 mod tests {
     use super::*;
     use camino::Utf8PathBuf;
+    use mollify_types::Report;
 
     fn temp(tag: &str) -> Utf8PathBuf {
         let base =

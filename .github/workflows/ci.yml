@@ -1,5 +1,9 @@
 name: CI
 
+# Security note: pinning third-party actions to full commit SHAs (rather than
+# mutable tags) is recommended. Dependabot (.github/dependabot.yml) tracks
+# action updates.
+
 on:
   push:
     branches: [main, research-and-plan]

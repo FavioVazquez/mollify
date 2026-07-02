@@ -119,7 +119,12 @@ fn write_cache(path: &PathBuf, latest: &str) {
         "latest_version": latest,
         "checked_at_secs": now_secs(),
     });
-    let _ = std::fs::write(path, body.to_string());
+    // Write-then-rename (same directory) so a `process::exit` racing this
+    // background thread can never leave a torn cache file behind.
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    if std::fs::write(&tmp, body.to_string()).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 fn now_secs() -> u64 {
@@ -201,6 +206,24 @@ mod tests {
         assert!(!is_newer("0.1.0", ""));
         assert!(!is_newer("0.1.0", "0.2.0rc1"));
         assert!(!is_newer("abc", "0.2.0"));
+    }
+
+    #[test]
+    fn cache_write_is_atomic_and_round_trips() {
+        let dir = std::env::temp_dir().join(format!("mollify-upd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("mollify").join("update-check.json");
+        write_cache(&path, "9.9.9");
+        let cache = read_cache(&path).expect("cache must be readable after write");
+        assert_eq!(cache.latest_version, "9.9.9");
+        assert!(cache.checked_at_secs > 0);
+        // The temp file must have been renamed away, not left beside the cache.
+        let names: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["update-check.json".to_string()]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -10,7 +10,11 @@ use mollify_types::{Action, Category, Confidence, Finding, Location, Severity};
 pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     for m in &graph.modules {
+        // Occurrence over ALL functions sharing a name (source order), so
+        // fingerprints survive edits elsewhere in the file.
+        let mut occ = crate::fingerprint::Occurrences::default();
         for f in &m.parsed.functions {
+            let occurrence = occ.next(&f.name);
             // Only public functions that take parameters.
             if f.name.starts_with('_') || f.params_total == 0 {
                 continue;
@@ -21,7 +25,7 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
             }
             let rule = "untyped-function";
             findings.push(Finding {
-                fingerprint: fingerprint(rule, &[m.path.as_str(), &f.name, &f.line.to_string()]),
+                fingerprint: fingerprint(rule, &[m.rel.as_str(), &f.name, &occurrence]),
                 rule: rule.into(),
                 category: Category::TypeHealth,
                 severity: Severity::Warn,

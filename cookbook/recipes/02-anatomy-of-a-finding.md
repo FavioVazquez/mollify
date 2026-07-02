@@ -18,9 +18,7 @@ mollify explain unused-export
 
 ```text
 unused-export
-  A top-level function/class never referenced outside its own module and not
-  listed in `__all__`. Confidence: likely (dynamic access via getattr downgrades
-  it). Action: remove it or make it private.
+  A top-level function/class never referenced outside its own module and not listed in `__all__`. Confidence: likely (dynamic access via getattr downgrades it). Reachability roots are exempt: framework-registered symbols, pytest `test_*`/`Test*` in test paths (honoring `[tool.pytest.ini_options].testpaths`), and functions named by a `[project.scripts]` entry point. Action: remove it or make it private.
 ```
 
 Run `mollify explain` with no argument to print the entire rule catalog — handy

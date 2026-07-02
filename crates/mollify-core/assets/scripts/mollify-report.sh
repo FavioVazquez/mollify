@@ -31,12 +31,19 @@ REPORT="$("$BIN" audit --gate new-only --format json 2>/dev/null || true)"
 [ -z "$REPORT" ] && exit 0
 
 if command -v jq >/dev/null 2>&1; then
-  TOTAL=$(printf '%s' "$REPORT" | jq -r '.summary.total // 0')
-  CERTAIN=$(printf '%s' "$REPORT" | jq -r '[.findings[]? | select(.confidence=="certain")] | length')
-  [ "${TOTAL:-0}" -eq 0 ] && exit 0
+  # Every jq call is guarded with a fallback: invalid/partial JSON must never
+  # make this script exit nonzero (it runs under `set -euo pipefail` and is
+  # wired into agent hooks where a nonzero exit blocks the action).
+  TOTAL=$(printf '%s' "$REPORT" | jq -r '.summary.total // 0' 2>/dev/null || echo 0)
+  CERTAIN=$(printf '%s' "$REPORT" | jq -r '[.findings[]? | select(.confidence=="certain")] | length' 2>/dev/null || echo 0)
+  # Normalize anything non-numeric (e.g. jq output on malformed input) to 0.
+  case "$TOTAL" in '' | *[!0-9]*) TOTAL=0 ;; esac
+  case "$CERTAIN" in '' | *[!0-9]*) CERTAIN=0 ;; esac
+  [ "$TOTAL" -eq 0 ] && exit 0
   echo "mollify: ${TOTAL} finding(s), ${CERTAIN} high-confidence. Top items:"
   printf '%s' "$REPORT" | jq -r \
-    '[.findings[]? | select(.confidence=="certain")][:5][] | "  \(.location.path):\(.location.line) \(.rule) — \(.reason)"'
+    '[.findings[]? | select(.confidence=="certain")][:5][] | "  \(.location.path):\(.location.line) \(.rule) — \(.reason)"' \
+    2>/dev/null || true
 else
   echo "mollify: audit complete (install jq for a detailed summary)."
 fi

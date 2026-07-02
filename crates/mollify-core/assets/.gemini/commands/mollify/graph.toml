@@ -3,8 +3,8 @@ prompt = """
 You are reviewing this repository with Mollify, a deterministic Python
 code-intelligence engine. The dependency graph is computed from static imports.
 
-Here is the current graph output:
-!{mollify graph --format json {{args}}}
+Here is the current graph output (Graphviz DOT):
+!{mollify graph {{args}}}
 
 Using ONLY this output (do not grep, do not guess):
 

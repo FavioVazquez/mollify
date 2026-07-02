@@ -18,7 +18,11 @@ mollify audit --save-baseline .mollify/baseline.json
 ```
 
 ```text
-Wrote baseline with 21 fingerprint(s) to .mollify/baseline.json
+Mollify audit — .
+Quality score: 80/100
+21 finding(s) across 7 file(s) — 0 error, 21 warn
+  …
+mollify: wrote baseline with 21 fingerprint(s) to .mollify/baseline.json
 ```
 
 **2. In CI, compare against it and fail on regressions:**
@@ -32,9 +36,9 @@ adds one dead function — here we append `def _brand_new_dead(): ...` and re-ru
 
 ```text
 Mollify audit — .
-Quality score: 79/100
+Quality score: 99/100
 1 finding(s) across 7 file(s) — 0 error, 1 warn
-  ./billing/app.py:21 [warn/certain] unused-export — function `_brand_new_dead` has no reachable references in the project  (unused-export:fe475f51)
+  ./billing/app.py:21 [warn/certain] unused-export — function `_brand_new_dead` has no reachable references in the project  (unused-export:026db265e8eaea13)
 ```
 
 ```bash
@@ -71,7 +75,7 @@ jobs:
   mollify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { fetch-depth: 0 }          # needed for --base diffing
       - run: pipx install mollify
       # Inline annotations on the PR's changed lines:
@@ -79,7 +83,7 @@ jobs:
       # …and upload SARIF to the Security tab:
       - run: mollify audit --format sarif > mollify.sarif
         if: always()
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with: { sarif_file: mollify.sarif }
 ```

@@ -9,7 +9,7 @@ Here is the current audit output:
 
 Using ONLY this output (do not grep, do not guess, do not invent findings):
 
-1. Summarize the findings grouped by `kind` and `confidence`. Note the
+1. Summarize the findings grouped by `rule` and `confidence`. Note the
    `quality_score` and the `summary` counts (total, errors, warnings,
    files_analyzed). For each finding cite `location.path:location.line`, its
    `rule`, `severity`, and `reason`.

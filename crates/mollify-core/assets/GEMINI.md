@@ -56,8 +56,10 @@ delete, or whether dependencies are unused/missing.
 - Auto-act ONLY on `confidence: certain` (and only where an action is
   `auto_fixable: true`). Surface `likely`/`uncertain` findings with their reason
   and let the user decide; never hand-delete code on a guess.
-- Exit codes: `0` = no error-severity findings; non-zero = error-severity findings
-  or a command error (useful as a CI gate).
+- Exit codes: `0` = no error-severity findings; `1` = error-severity findings or
+  a failed/misconfigured gate (`--save-baseline` write failure, or
+  `--fail-on-regression` with a missing/invalid `--baseline`); `2` = usage error
+  (nonexistent `--path`, or an unsupported `--format` for the subcommand).
 
 ## MCP tools (`mollify mcp`)
 

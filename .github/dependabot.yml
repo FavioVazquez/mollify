@@ -1,0 +1,12 @@
+# Keep GitHub Actions and Rust dependencies current. Dependabot PRs also make
+# it easy to move third-party actions from mutable tags to pinned commit SHAs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly

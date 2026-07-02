@@ -52,6 +52,9 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
 
     let mut out = Vec::new();
     for m in &graph.modules {
+        // Disambiguates same-named (class, member) pairs across conditional
+        // class redefinitions in one module.
+        let mut occ = crate::fingerprint::Occurrences::default();
         for c in &m.parsed.classes {
             // A fully-unused class is reported once as `unused-export`; don't
             // also flag every member inside it.
@@ -59,9 +62,17 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
                 continue;
             }
             if c.is_enum {
-                enum_members(&m.path, c, &attr_accessed, dynamic, &mut out);
+                enum_members(m, c, &attr_accessed, dynamic, &mut occ, &mut out);
             } else {
-                class_members(&m.path, c, &attr_accessed, &referenced, dynamic, &mut out);
+                class_members(
+                    m,
+                    c,
+                    &attr_accessed,
+                    &referenced,
+                    dynamic,
+                    &mut occ,
+                    &mut out,
+                );
             }
         }
     }
@@ -122,19 +133,22 @@ fn method_exempt(decorators: &[String]) -> bool {
 }
 
 fn class_members(
-    path: &camino::Utf8Path,
+    m: &mollify_graph::ModuleInfo,
     c: &ClassInfo,
     attr_accessed: &FxHashSet<&str>,
     referenced: &FxHashSet<&str>,
     dynamic: bool,
+    occ: &mut crate::fingerprint::Occurrences,
     out: &mut Vec<Finding>,
 ) {
     if is_interface_class(c) {
         return;
     }
+    let path = m.path.as_path();
     let data = is_data_class(c);
     for mem in &c.members {
         let name = mem.name.as_str();
+        let occurrence = occ.next(&format!("{}\u{1f}{name}", c.name));
         if is_dunder(name) || name == "_" {
             continue;
         }
@@ -167,7 +181,7 @@ fn class_members(
             Confidence::Uncertain
         };
         out.push(Finding {
-            fingerprint: fingerprint(rule, &[path.as_str(), &c.name, name]),
+            fingerprint: fingerprint(rule, &[m.rel.as_str(), &c.name, name, &occurrence]),
             rule: rule.into(),
             category: Category::DeadCode,
             severity: Severity::Warn,
@@ -197,17 +211,20 @@ fn class_members(
 }
 
 fn enum_members(
-    path: &camino::Utf8Path,
+    m: &mollify_graph::ModuleInfo,
     c: &ClassInfo,
     attr_accessed: &FxHashSet<&str>,
     dynamic: bool,
+    occ: &mut crate::fingerprint::Occurrences,
     out: &mut Vec<Finding>,
 ) {
+    let path = m.path.as_path();
     for mem in &c.members {
         if mem.is_method {
             continue; // enum methods are regular methods; out of scope here
         }
         let name = mem.name.as_str();
+        let occurrence = occ.next(&format!("{}\u{1f}{name}", c.name));
         if is_dunder(name) || name == "_" {
             continue;
         }
@@ -227,7 +244,7 @@ fn enum_members(
         };
         let rule = "unused-enum-member";
         out.push(Finding {
-            fingerprint: fingerprint(rule, &[path.as_str(), &c.name, name]),
+            fingerprint: fingerprint(rule, &[m.rel.as_str(), &c.name, name, &occurrence]),
             rule: rule.into(),
             category: Category::DeadCode,
             severity: Severity::Warn,

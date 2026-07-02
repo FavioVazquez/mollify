@@ -62,7 +62,7 @@ The envelope has a discriminating top-level `kind` (`audit` | `dead-code` |
 files_analyzed}`, and `findings[]`. `audit` also has `quality_score` (0–100).
 
 Each finding:
-- `fingerprint` — stable id (e.g. `unused-export:931a82e6`).
+- `fingerprint` — stable id (e.g. `unused-export:931a82e6d41f07c3`).
 - `rule` — one of: `unused-file`, `unused-export`, `unused-import`,
   `unused-variable`, `unused-parameter`, `unused-method`, `unused-attribute`,
   `unused-enum-member`, `unreachable-code`,
@@ -124,4 +124,8 @@ language server in any LSP-capable editor (command: `mollify lsp`).
 
 ## Exit codes
 - `0` — no `error`-severity findings.
-- `1` — one or more `error`-severity findings, or a command error.
+- `1` — `error`-severity findings, or a failed/misconfigured gate
+  (`--save-baseline` write failure, or `--fail-on-regression` with a
+  missing/invalid `--baseline`).
+- `2` — a usage error: a nonexistent `--path`, or a `--format` the subcommand
+  doesn't implement.

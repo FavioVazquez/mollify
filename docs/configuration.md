@@ -144,11 +144,16 @@ These emit `forbidden-import` / `independence-violation` (Architecture, certain)
 
 ## Advisory database (supply-chain)
 
-`mollify supply-chain` (and `mollify audit`, when the file exists) reads a local
-advisory database at `.mollify/advisories.json` in the `mollify-advisories/1`
-schema. It is an *input*, not a network call — regenerate it out-of-band with
-`scripts/fetch-advisories.py` (OSV.dev / safety-db). Override the path with
-`mollify supply-chain --advisory-db <path>`. See `examples/advisories.sample.json`.
+`mollify supply-chain` is **live by default**: it queries OSV.dev for each
+pinned package, falling back to the local advisory database at
+`.mollify/advisories.json` (schema `mollify-advisories/1`) when the network is
+unavailable. Pass `--offline` to skip the fetch entirely and use only the local
+DB (fully deterministic), and `--refresh` to cache a live fetch into the DB for
+later offline runs. `mollify audit` never touches the network — it folds in
+supply-chain findings from the local DB only, when the file exists. Seed or
+regenerate the DB with `scripts/fetch-advisories.py` (OSV.dev / safety-db), and
+override its path with `mollify supply-chain --advisory-db <path>`. See
+`examples/advisories.sample.json`.
 
 ## `ignore`
 

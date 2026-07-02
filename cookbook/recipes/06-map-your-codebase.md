@@ -13,11 +13,13 @@ mollify metrics
 
 ```text
 Mollify metrics — .
-7 file(s), 40 LOC (33 SLOC), 6 function(s); mean MI 81.2
+7 file(s), 42 LOC (33 SLOC), 6 function(s); mean MI 81.2
   [A] MI  99.9  cc(max  0, sum   0)  1 sloc  ./billing/__init__.py
   [A] MI  57.9  cc(max  1, sum   3)  12 sloc  ./billing/app.py
+  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  ./billing/domain/__init__.py
   [A] MI  77.1  cc(max  1, sum   1)  3 sloc  ./billing/domain/money.py
-  [A] MI  57.3  cc(max  7, sum   7)  12 sloc  ./billing/services/invoice.py
+  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  ./billing/services/__init__.py
+  [A] MI  57.1  cc(max  7, sum   7)  12 sloc  ./billing/services/invoice.py
   [A] MI  76.4  cc(max  1, sum   1)  3 sloc  ./billing/services/ledger.py
 ```
 
@@ -34,7 +36,7 @@ mollify complexity
 ```text
 Mollify complexity — .
 1 finding(s) across 7 file(s) — 0 error, 1 warn
-  ./billing/services/invoice.py:6 [warn/certain] high-complexity — function `create_invoice` is complex (cyclomatic 7, cognitive 21); thresholds 10/15  (high-complexity:d62ca38c)
+  ./billing/services/invoice.py:6 [warn/certain] high-complexity — function `create_invoice` is complex (cyclomatic 7, cognitive 21); thresholds 10/15  (high-complexity:1cbe4ffa6ee8ed1d)
 ```
 
 Mollify tracks **both** cyclomatic complexity (branch count) and **cognitive**
@@ -57,6 +59,7 @@ flowchart LR
     billing_app["billing.app"] --> billing_services_invoice["billing.services.invoice"]
     billing_services_invoice["billing.services.invoice"] --> billing_domain_money["billing.domain.money"]
     billing_services_invoice["billing.services.invoice"] --> billing_services["billing.services"]
+    billing_services_invoice["billing.services.invoice"] --> billing_services_ledger["billing.services.ledger"]
     billing_services_ledger["billing.services.ledger"] --> billing_services_invoice["billing.services.invoice"]
 ```
 
@@ -74,15 +77,16 @@ mollify trace billing.services.invoice
 
 ```text
 Trace — billing.services.invoice
-  imports (2):
+  imports (3):
     → billing.domain.money
     → billing.services
+    → billing.services.ledger
   imported by (2):
     ← billing.app
     ← billing.services.ledger
 ```
 
-Two imports out, two modules depend on it — change its signature and you know
+Three imports out, two modules depend on it — change its signature and you know
 exactly who to check.
 
 ## More structural commands

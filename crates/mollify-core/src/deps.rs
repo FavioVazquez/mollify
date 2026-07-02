@@ -12,7 +12,7 @@ use crate::known::{normalize_dist, Known};
 use camino::Utf8Path;
 use mollify_graph::ModuleGraph;
 use mollify_types::{Action, Category, Confidence, Finding, Location, Severity};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Analyze dependency hygiene. `root` is the project root. Declared dependencies
 /// are gathered from `pyproject.toml` (PEP 621 + Poetry + uv + pdm + PEP 735) and
@@ -41,31 +41,39 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
         }
     }
     // requirements*.txt (pip / pip-tools) — `name[extras]op version` per line.
-    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        let fname = entry.file_name();
-        let fname = fname.to_string_lossy();
-        if fname.starts_with("requirements") && fname.ends_with(".txt") {
-            if let Ok(text) = std::fs::read_to_string(entry.path()) {
-                let before = declared.len();
-                for line in text.lines() {
-                    let line = line.split('#').next().unwrap_or("").trim();
-                    if line.is_empty() || line.starts_with('-') {
-                        continue;
-                    }
-                    if let Some(name) = spec_name(line) {
-                        declared.insert(name);
-                    }
+    // Sorted by file name: `read_dir` order is filesystem-dependent, and both
+    // the declared set's manifest attribution and finding locations must be
+    // deterministic across machines.
+    let mut req_files: Vec<camino::Utf8PathBuf> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| camino::Utf8PathBuf::from_path_buf(e.path()).ok())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|f| f.starts_with("requirements") && f.ends_with(".txt"))
+        })
+        .collect();
+    req_files.sort();
+    for path in req_files {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let before = declared.len();
+            for line in text.lines() {
+                if let Some(name) = requirement_name(line) {
+                    declared.insert(name);
                 }
-                has_manifest = true;
-                if declared.len() > before && !pyproject_path.exists() {
-                    if let Ok(p) = camino::Utf8PathBuf::from_path_buf(entry.path()) {
-                        manifest = p;
-                    }
-                }
+            }
+            has_manifest = true;
+            if declared.len() > before && !pyproject_path.exists() && manifest == pyproject_path {
+                manifest = path;
             }
         }
     }
-    let pyproject_path = manifest;
+    let manifest_path = manifest;
+    let manifest_name = manifest_path
+        .file_name()
+        .unwrap_or("pyproject.toml")
+        .to_string();
     // No manifest at all → nothing to check (avoid flagging every import as
     // "missing" in a project that simply doesn't declare dependencies here).
     if !has_manifest {
@@ -76,7 +84,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     let internal_tops = internal_top_levels(graph);
     // Accurate import→dist mapping + installed set from a venv, if present.
     let installed = crate::installed::discover(root);
-    let used_dists = used_distributions(graph, &known, &internal_tops, installed.as_ref());
+    let used = used_distributions(graph, &known, &internal_tops, installed.as_ref());
 
     let confidence = if graph.global_dynamic {
         Confidence::Uncertain
@@ -84,12 +92,14 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
         Confidence::Likely
     };
 
-    // Unused: declared but never imported.
+    // Unused: declared but never imported. Dev-group tools (black, mypy,
+    // pre-commit, pytest plugins…) are invoked, not imported — deptry exempts
+    // dev dependencies from this check for the same reason.
     for dist in &declared {
-        if dist == "python" {
+        if dist == "python" || dev_only.contains(dist) {
             continue;
         }
-        if !used_dists.contains(dist) {
+        if !used.candidates.contains(dist) {
             let rule = "unused-dependency";
             findings.push(Finding {
                 fingerprint: fingerprint(rule, &[dist]),
@@ -100,14 +110,14 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
                 attribution: None,
                 reason: format!("declared dependency `{dist}` is never imported"),
                 location: Location {
-                    path: pyproject_path.clone(),
+                    path: manifest_path.clone(),
                     line: 1,
                     column: 0,
                     end_line: None,
                 },
                 actions: vec![Action {
                     kind: "remove-dependency".into(),
-                    description: format!("Remove unused dependency `{dist}` from pyproject.toml"),
+                    description: format!("Remove unused dependency `{dist}` from {manifest_name}"),
                     auto_fixable: false,
                     suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
                 }],
@@ -115,13 +125,20 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
         }
     }
 
-    // Imported but not declared. If we can see the installed env, split into
-    // `transitive-dependency` (installed as someone else's sub-dep) vs
-    // `missing-dependency` (not installed at all).
-    for dist in &used_dists {
-        if declared.contains(dist) {
+    // Imported but not declared (under ANY plausible providing dist). If we
+    // can see the installed env, split into `transitive-dependency` (installed
+    // as someone else's sub-dep) vs `missing-dependency` (not installed).
+    for u in &used.imports {
+        if u.candidates.iter().any(|c| declared.contains(c)) {
             continue;
         }
+        if u.unresolvable_namespace {
+            // `google`/`azure`/… are claimed by many unrelated dists; without
+            // an installed env we can't name the right one — stay silent
+            // rather than guess wrong.
+            continue;
+        }
+        let dist = &u.primary;
         let is_transitive = installed.as_ref().is_some_and(|i| i.dists.contains(dist));
         let (rule, reason, action) = if is_transitive {
             (
@@ -145,7 +162,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
             attribution: None,
             reason,
             location: Location {
-                path: pyproject_path.clone(),
+                path: manifest_path.clone(),
                 line: 1,
                 column: 0,
                 end_line: None,
@@ -185,7 +202,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
                         m.dotted
                     ),
                     location: Location {
-                        path: pyproject_path.clone(),
+                        path: manifest_path.clone(),
                         line: 1,
                         column: 0,
                         end_line: None,
@@ -208,27 +225,27 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
 
 /// Flag imports that look first-party or relative but resolve to no module in
 /// the project (typo / broken refactor) — distinct from `missing-dependency`,
-/// which is third-party. Relative imports are `certain` (they *must* be
-/// internal); first-party absolute imports are `likely` (path hacks exist).
+/// which is third-party. Both tiers are `likely`, not `certain`: a relative
+/// import must be internal, but it may resolve to something the `.py` walk
+/// can't see — an in-tree C/Cython extension (`._speedups`) or a
+/// build-generated module (`._version`).
 /// Independent of any manifest, so it runs even with no `pyproject.toml`.
 pub fn unresolved(graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
+    let mut occ = crate::fingerprint::Occurrences::default();
     for u in graph.unresolved_imports() {
         let rule = "unresolved-import";
-        let confidence = if u.relative {
-            Confidence::Certain
-        } else {
-            Confidence::Likely
-        };
+        let confidence = Confidence::Likely;
         let kind = if u.relative {
             "relative"
         } else {
             "first-party"
         };
+        let occ_key = format!("{}\u{1f}{}", u.importer_rel, u.display);
         findings.push(Finding {
             fingerprint: fingerprint(
                 rule,
-                &[u.importer.as_str(), &u.line.to_string(), &u.display],
+                &[u.importer_rel.as_str(), &u.display, &occ.next(&occ_key)],
             ),
             rule: rule.into(),
             category: Category::DependencyHygiene,
@@ -383,9 +400,10 @@ fn declared_dependencies(value: &toml::Value) -> FxHashSet<String> {
 }
 
 /// Extract the distribution name from a PEP 508 requirement spec.
+/// `@` terminates the name too (direct references: `pkg @ https://…`).
 fn spec_name(spec: &str) -> Option<String> {
     let end = spec
-        .find(|c: char| " <>=!~;[(".contains(c))
+        .find(|c: char| " <>=!~;[(@".contains(c))
         .unwrap_or(spec.len());
     let name = spec[..end].trim();
     if name.is_empty() {
@@ -393,6 +411,38 @@ fn spec_name(spec: &str) -> Option<String> {
     } else {
         Some(normalize_dist(name))
     }
+}
+
+/// Extract a declared name from one requirements.txt line: comments (a `#`
+/// at line start or preceded by whitespace, per pip), pip options, and
+/// URL/VCS requirements handled. A VCS/URL line names its dist only via
+/// `#egg=`; without it the line declares nothing we can name — better silent
+/// than a mangled `git+https-…` finding.
+fn requirement_name(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('-') {
+        return None;
+    }
+    // URL/VCS requirement: the `#egg=name` fragment IS the name — read it
+    // before any comment stripping (the fragment starts with `#`).
+    let lower = trimmed.to_ascii_lowercase();
+    if [
+        "git+", "hg+", "svn+", "bzr+", "http://", "https://", "file:",
+    ]
+    .iter()
+    .any(|p| lower.starts_with(p))
+    {
+        return trimmed.split_once("#egg=").and_then(|(_, rest)| {
+            let name = rest.split(|c: char| c.is_whitespace() || c == '&').next()?;
+            spec_name(name)
+        });
+    }
+    // Strip an end-of-line comment: pip requires whitespace before `#`.
+    let code = match trimmed.find(" #") {
+        Some(i) => &trimmed[..i],
+        None => trimmed,
+    };
+    spec_name(code.trim())
 }
 
 /// Internal top-level package names (first dotted segment of each module).
@@ -492,6 +542,25 @@ pub fn entry_point_symbols(root: &Utf8Path) -> Vec<(String, String)> {
     out
 }
 
+/// One distinct external import, with every distribution that plausibly
+/// provides it.
+struct UsedImport {
+    /// Preferred dist name for messages/fingerprints.
+    primary: String,
+    /// A declared dep matching ANY of these means the import is declared.
+    candidates: Vec<String>,
+    /// Namespace top (`google`, `azure`, …) with no installed env to name the
+    /// real dist — `missing-dependency` stays silent for these.
+    unresolvable_namespace: bool,
+}
+
+struct UsedDistributions {
+    /// Union of all candidates: the "is this declared dep imported?" set.
+    candidates: FxHashSet<String>,
+    /// Distinct imports keyed by primary, sorted for deterministic output.
+    imports: Vec<UsedImport>,
+}
+
 /// Distributions imported by the project (external, non-stdlib, non-internal).
 /// Prefers the installed env's accurate import→dist map when available.
 fn used_distributions(
@@ -499,8 +568,9 @@ fn used_distributions(
     known: &Known,
     internal: &FxHashSet<String>,
     installed: Option<&crate::installed::Installed>,
-) -> FxHashSet<String> {
-    let mut set = FxHashSet::default();
+) -> UsedDistributions {
+    let mut candidates = FxHashSet::default();
+    let mut by_primary: FxHashMap<String, UsedImport> = FxHashMap::default();
     for m in &graph.modules {
         // Lazy/deferred imports inside functions count as usage too (a dep
         // imported only inside `main()` is not unused).
@@ -514,13 +584,44 @@ fn used_distributions(
             if top.is_empty() || internal.contains(top) || known.is_stdlib(top) {
                 continue;
             }
-            let dist = installed
-                .and_then(|i| i.import_to_dist.get(top).cloned())
-                .unwrap_or_else(|| known.dist_for_import(top));
-            set.insert(dist);
+            // The installed env names the exact providing dist; otherwise
+            // every plausible provider counts.
+            let (cands, namespace) = match installed.and_then(|i| i.import_to_dist.get(top)) {
+                Some(d) => (vec![d.clone()], false),
+                None => (
+                    known.dists_for_import(&imp.module),
+                    known.is_namespace_top(top),
+                ),
+            };
+            candidates.extend(cands.iter().cloned());
+            let primary = cands[0].clone();
+            by_primary
+                .entry(primary.clone())
+                .and_modify(|u| {
+                    // Merge candidate lists from different dotted imports of
+                    // the same top level.
+                    for c in &cands {
+                        if !u.candidates.contains(c) {
+                            u.candidates.push(c.clone());
+                        }
+                    }
+                })
+                .or_insert(UsedImport {
+                    primary,
+                    candidates: cands,
+                    unresolvable_namespace: namespace,
+                });
         }
     }
-    set
+    let mut imports: Vec<UsedImport> = by_primary.into_values().collect();
+    imports.sort_by(|a, b| a.primary.cmp(&b.primary));
+    for u in &mut imports {
+        u.candidates.sort();
+    }
+    UsedDistributions {
+        candidates,
+        imports,
+    }
 }
 
 /// Distributions declared in **dev/test/lint/docs/typing** groups only (PEP 735
@@ -638,10 +739,14 @@ fn module_imported_dists(
         if top.is_empty() || internal.contains(top) || known.is_stdlib(top) {
             continue;
         }
-        let dist = installed
-            .and_then(|i| i.import_to_dist.get(top).cloned())
-            .unwrap_or_else(|| known.dist_for_import(top));
-        set.insert(dist);
+        // All plausible providers: a dev-only `psycopg2` is "imported" whether
+        // the import maps to `psycopg2` or `psycopg2-binary`.
+        match installed.and_then(|i| i.import_to_dist.get(top)) {
+            Some(d) => {
+                set.insert(d.clone());
+            }
+            None => set.extend(known.dists_for_import(&imp.module)),
+        }
     }
     set
 }
@@ -705,12 +810,14 @@ mod tests {
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = unresolved(&g);
-        // Relative `.missing_mod` → certain; absolute `app.nope` → likely.
+        // Both tiers are `likely`: a relative import must be internal, but the
+        // target may be a C extension or build-generated module the .py walk
+        // can't see — never `certain`.
         let rel = f
             .iter()
             .find(|x| x.reason.contains("missing_mod"))
             .expect("relative unresolved");
-        assert_eq!(rel.confidence, Confidence::Certain);
+        assert_eq!(rel.confidence, Confidence::Likely);
         assert!(f
             .iter()
             .any(|x| x.reason.contains("app.nope") && x.confidence == Confidence::Likely));
@@ -718,6 +825,86 @@ mod tests {
         assert!(!f.iter().any(|x| x.reason.contains("`os`")));
         assert!(!f.iter().any(|x| x.reason.contains(".real")));
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn dev_group_tools_are_not_unused() {
+        // black/pytest-cov/pre-commit are invoked, not imported — dev groups
+        // are exempt from unused-dependency (deptry DEP002 parity).
+        let d = temp("devgroup");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\"requests\"]\n\n[dependency-groups]\ndev = [\"black\", \"pytest-cov\", \"pre-commit\"]\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("app.py"), "import requests\nrequests.get('x')\n").unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        assert!(
+            !f.iter().any(|x| x.rule == "unused-dependency"),
+            "dev tools flagged unused: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn psycopg2_declared_and_imported_is_clean() {
+        // `psycopg2` is a real dist; the psycopg2-binary alias must not
+        // produce a paired unused+missing false positive.
+        let d = temp("psycopg2");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\"psycopg2\"]\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("app.py"), "import psycopg2\npsycopg2.connect('')\n").unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-dependency" || x.rule == "missing-dependency"),
+            "psycopg2 pairing false positive: {f:?}"
+        );
+        // Declaring the -binary dist instead is equally fine.
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\"psycopg2-binary\"]\n",
+        )
+        .unwrap();
+        let f = analyze(&d, &g);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-dependency" || x.rule == "missing-dependency"),
+            "psycopg2-binary pairing false positive: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn requirement_names_handle_urls_and_comments() {
+        // VCS/URL lines: only `#egg=` names a dist; otherwise stay silent.
+        assert_eq!(
+            requirement_name("git+https://github.com/user/repo.git@v1.0#egg=pkg"),
+            Some("pkg".to_string())
+        );
+        assert_eq!(
+            requirement_name("git+https://github.com/user/repo.git@v1.0"),
+            None
+        );
+        // PEP 508 direct reference.
+        assert_eq!(
+            requirement_name("pkg @ https://example.com/pkg-1.0.tar.gz"),
+            Some("pkg".to_string())
+        );
+        // End-of-line comments need preceding whitespace (pip rules).
+        assert_eq!(
+            requirement_name("requests>=2  # pinned for CVE-xxxx"),
+            Some("requests".to_string())
+        );
+        assert_eq!(requirement_name("# a comment line"), None);
+        assert_eq!(requirement_name("-r other.txt"), None);
     }
 
     #[test]
