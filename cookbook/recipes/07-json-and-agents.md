@@ -14,7 +14,7 @@ switch on `kind` and iterate `findings[]`:
   "kind": "audit", "schema_version": "0.1", "quality_score": 80,
   "summary": { "total": 21, "errors": 0, "warnings": 21, "files_analyzed": 7 },
   "findings": [{
-    "fingerprint": "unused-export:93948eee", "rule": "unused-export",
+    "fingerprint": "unused-export:b3454f8f0092acf5", "rule": "unused-export",
     "category": "dead-code", "severity": "warn", "confidence": "certain",
     "reason": "function `_legacy_helper` has no reachable references in the project",
     "location": { "path": "./billing/app.py", "line": 12, "end_line": 14 },

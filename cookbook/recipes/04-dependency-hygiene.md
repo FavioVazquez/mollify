@@ -12,8 +12,8 @@ mollify deps
 ```text
 Mollify deps — .
 2 finding(s) across 7 file(s) — 0 error, 2 warn
-  ./pyproject.toml:1 [warn/likely] unused-dependency — declared dependency `fastapi` is never imported  (unused-dependency:3f2dc71f)
-  ./pyproject.toml:1 [warn/likely] unused-dependency — declared dependency `rich` is never imported  (unused-dependency:9333f874)
+  ./pyproject.toml:1 [warn/likely] unused-dependency — declared dependency `fastapi` is never imported  (unused-dependency:262b99f436d498a8)
+  ./pyproject.toml:1 [warn/likely] unused-dependency — declared dependency `rich` is never imported  (unused-dependency:d4b9afaea73f6d0a)
 ```
 
 The sample's `pyproject.toml` declares three dependencies but the code only ever
