@@ -6,6 +6,10 @@
 #
 # Requires a CARGO_REGISTRY_TOKEN secret (crates.io API token) in the `crates-io`
 # environment. Crate versions must already be bumped to match the tag.
+#
+# Security note: this workflow holds publish credentials; pinning third-party
+# actions to full commit SHAs (rather than mutable tags) is recommended.
+# Dependabot (.github/dependabot.yml) tracks action updates.
 name: crates.io release
 
 on:

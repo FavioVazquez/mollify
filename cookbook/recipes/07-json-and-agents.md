@@ -18,7 +18,9 @@ switch on `kind` and iterate `findings[]`:
     "category": "dead-code", "severity": "warn", "confidence": "certain",
     "reason": "function `_legacy_helper` has no reachable references in the project",
     "location": { "path": "./billing/app.py", "line": 12, "end_line": 14 },
-    "actions": [{ "type": "remove-symbol", "auto_fixable": true,
+    "actions": [{ "type": "remove-symbol",
+                  "description": "Delete unused function `_legacy_helper`",
+                  "auto_fixable": true,
                   "suppression_comment": "# mollify: ignore[unused-export]" }]
   }]
 }

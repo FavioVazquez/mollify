@@ -6,6 +6,10 @@ name: Security audit
 # before merge, but docs/README/Markdown-only changes never trigger it. Also on
 # a weekly schedule (so advisories disclosed *without* a code change here still
 # surface). Dogfooding: a supply-chain-aware tool should watch its own.
+#
+# Security note: pinning third-party actions to full commit SHAs (rather than
+# mutable tags) is recommended. Dependabot (.github/dependabot.yml) tracks
+# action updates.
 on:
   push:
     branches: [main, research-and-plan]

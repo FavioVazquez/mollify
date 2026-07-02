@@ -71,7 +71,7 @@ jobs:
   mollify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { fetch-depth: 0 }          # needed for --base diffing
       - run: pipx install mollify
       # Inline annotations on the PR's changed lines:
@@ -79,7 +79,7 @@ jobs:
       # …and upload SARIF to the Security tab:
       - run: mollify audit --format sarif > mollify.sarif
         if: always()
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with: { sarif_file: mollify.sarif }
 ```

@@ -12,6 +12,3 @@ mollify-types = { path = "../mollify-types", version = "0.1.3" }
 mollify-core = { path = "../mollify-core", version = "0.1.3" }
 serde_json.workspace = true
 camino.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true

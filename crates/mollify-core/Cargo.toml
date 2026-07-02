@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Analysis orchestration for Mollify: dead-code and dependency-hygiene engines (more to come)."
+description = "Analysis engines for Mollify: dead code, dependency hygiene, architecture, complexity, duplication, security, type health, coverage, and supply chain."
 
 [dependencies]
 mollify-types = { path = "../mollify-types", version = "0.1.3" }
@@ -21,6 +21,3 @@ serde_json.workspace = true
 # `.cursor`, `.gemini`, `.codex`, `.agents`, `.devin`, `.windsurf` trees) into
 # the binary so `mollify init --agent <name>` can scaffold them into any repo.
 include_dir = "0.7"
-
-[dev-dependencies]
-serde_json.workspace = true

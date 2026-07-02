@@ -8,6 +8,10 @@
 #   uvx mollify --help            # one-off, isolated
 #   uv tool install mollify       # persistent, on PATH
 #   pip install mollify
+#
+# Security note: this workflow holds publish rights (PyPI Trusted Publishing);
+# pinning third-party actions to full commit SHAs (rather than mutable tags) is
+# recommended. Dependabot (.github/dependabot.yml) tracks action updates.
 name: Release
 
 on:

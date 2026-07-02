@@ -96,7 +96,7 @@ Params: `mollify_coverage` requires `coverage_file`; `mollify_trace` requires
 ```
 `severity` keys are rule ids or category names (`dead-code`, `duplication`,
 `circular-dependency`, `complexity`, `architecture`, `dependency-hygiene`, `type-health`, `security`).
-See `references/configuration.md` semantics in `docs/configuration.md` for `architecture` and `policies`.
+See `docs/configuration.md` for the full semantics of `architecture` and `policies`.
 
 ## LSP server
 `mollify lsp` runs a stdio Language Server (Content-Length framed JSON-RPC) that

@@ -3,8 +3,7 @@
     "mollify": {
       "type": "stdio",
       "command": "mollify",
-      "args": ["mcp"],
-      "env": { "MOLLIFY_LOG": "error" }
+      "args": ["mcp"]
     }
   }
 }

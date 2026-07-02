@@ -51,7 +51,7 @@ mollify:
     - mollify audit --format sarif > mollify.sarif
   artifacts:
     reports:
-      sast: mollify.sarif
+      sarif: mollify.sarif
 ```
 
 ## JSON for custom tooling

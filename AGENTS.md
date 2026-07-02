@@ -32,7 +32,7 @@ Acting / exploring:
 - "what imports / is imported by module M" -> `mollify trace <module>`
 - "evidence bundle for one file" -> `mollify inspect <file>`
 - "project metrics (LOC, counts, complexity dist.)" -> `mollify metrics --format json`
-- "module dependency graph"      -> `mollify graph [--mermaid] --format json`
+- "module dependency graph"      -> `mollify graph [--mermaid]` (no `--format`; emits DOT to stdout, or Mermaid with `--mermaid`)
 - "project topology"             -> `mollify list [entry-points|files|frameworks]`
 - "watch and re-audit on change" -> `mollify watch [--interval-ms]` (CLI-only)
 - "create a config"              -> `mollify init`

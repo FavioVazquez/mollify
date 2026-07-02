@@ -6,6 +6,96 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+Fix release from a full-repository code review (`docs/code-review-2026-07-01.md`):
+every crate was read end-to-end, and every fix below was verified against a
+reproduction before landing.
+
+### Breaking
+- **Fingerprints changed wholesale — regenerate baselines** (`--save-baseline`).
+  Fingerprints now hash the **root-relative** path (they no longer vary with
+  `--path` spelling or checkout location, so CI baselines finally transfer to
+  laptops), drop line numbers in favor of symbol/content identity plus an
+  occurrence index (edits above a finding no longer churn it), and use the
+  full 64-bit hash (16 hex chars).
+- CLI exit codes are stricter where CI trust demanded it: a failed
+  `--save-baseline` write exits 1 (was: success message + 0); a missing or
+  invalid `--baseline` with `--fail-on-regression` exits 1 (was: gate silently
+  disabled); a nonexistent `--path` exits 2 (was: clean 100/100 report);
+  `trace`/`inspect`/`list`/`metrics` reject formats they don't implement with
+  exit 2 (was: silent human output); `inspect` with no matching file exits 1.
+- `unresolved-import` is now `likely`, not `certain`: a relative import may
+  resolve to a C extension or build-generated module the `.py` walk can't see.
+
+### Fixed
+- **`fix --apply` corrupted Jupyter notebooks**: finding lines are relative to
+  the concatenated code cells, so notebook findings are no longer
+  auto-fixable (and the fix planner refuses non-`.py` files outright).
+- **`fix --apply` could delete live, dynamically-dispatched code**: a symbol
+  invoked from *another* module via `getattr(lib, "_handler_" + name)()` was
+  graded `certain`; a dynamic sink anywhere in the project now caps
+  unused-export confidence, mirroring `unused-file`.
+- `fix --apply` preserves CRLF line endings and no longer aborts the whole run
+  (losing the applied count) when one file fails I/O.
+- Dead-code false positives from resolver gaps: module constants used only in
+  function signatures (parameter defaults/annotations, return annotations,
+  lambda defaults); imports inside module-level `with`/`for`/`while`/`match`
+  suites; symbols used only via lazy in-function imports; sibling modules of a
+  root-level `__init__.py`; names shadowed by Python-3-scoped comprehension
+  targets; `__all__ += […]` / `.extend(…)` extensions.
+- Runtime imports in the `else` branch of an `if TYPE_CHECKING:` guard are no
+  longer treated as type-only (and `if not TYPE_CHECKING:` now works);
+  TYPE_CHECKING guard detection is exact instead of substring-based.
+- Decorated `def`/`class` line numbers point at the definition, not the first
+  decorator.
+- `cold-code` can now actually fire for imported modules: the `def` line —
+  executed at import time — no longer counts as evidence the body ran.
+- The duplication engine reads notebook **code cells**, not raw `.ipynb` JSON
+  (near-identical scaffolding produced bogus clone families).
+- Dependency hygiene: dev-group tools (black, mypy, pre-commit…) are exempt
+  from `unused-dependency` (deptry parity); `psycopg2`/`psycopg2-binary` and
+  friends are alternative providers instead of a forced alias (no more paired
+  unused+missing false positives); namespace tops (`google`, `azure`, …) are
+  never guessed as `missing-dependency` without an installed env; URL/VCS
+  requirement lines no longer produce mangled names (`#egg=` respected, pip
+  comment rules honored).
+- PEP 440: epochs compare correctly (`2!1.0` no longer parses as `2`), and
+  `.postN`/`.devN` order per spec instead of comparing equal to the release.
+  `specs_intersect` finds narrow gaps like (`>2.0`, `<2.0.1`).
+- Determinism: import→dist mapping and requirements/pins collection no longer
+  depend on filesystem `read_dir` order; hotspot/coverage/git fallback
+  matching is anchored at path-separator boundaries (`app.py` no longer claims
+  `myapp.py`'s churn, coverage, or diff hunks) with deterministic tie-breaks;
+  non-ASCII filenames survive git's `core.quotePath`.
+- `inspect <file>` matches path fragments at separator boundaries only
+  (inspecting `b.py` no longer returns `lib.py`'s findings).
+- Unconstrained declared deps (bare `flask`) are matched against advisories
+  again instead of being silently skipped.
+- MCP protocol: version negotiation no longer echoes arbitrary client
+  versions; malformed JSON gets a `-32700` response; requests without a
+  `method` get `-32600`; `mollify_fix` apply errors surface as tool errors.
+- LSP: unknown requests get `-32601` instead of hanging the client;
+  `didClose` clears stale diagnostics; diagnostic ranges are never reversed
+  and cover the final line; a malformed `Content-Length` header no longer
+  kills the server mid-session.
+- OSV `querybatch` pagination: truncated advisory sets are no longer cached
+  as authoritative.
+- `--save-baseline` keeps stdout pure JSON (status note moved to stderr, the
+  report is still emitted); `quality_score` is recomputed after
+  `--gate`/`--min-confidence`/`--baseline` filtering so the envelope is
+  internally consistent.
+- Update-check cache writes atomically (temp file + rename).
+
+### Changed
+- `mollify-types` contract enums are `#[non_exhaustive]` (adding a report
+  kind/category is no longer a breaking Rust change), and the load-bearing
+  `Confidence`/`Severity` orderings are documented and locked by tests.
+- Docs/CI hygiene: `AGENTS.md` no longer documents a nonexistent
+  `mollify graph --format` flag; the GitLab CI example uses
+  `artifacts:reports:sarif`; the advisory-database docs describe the actual
+  live-by-default behavior; `bump-version.sh` works on BSD/macOS sed;
+  Dependabot covers GitHub Actions and Cargo; the report hook can no longer
+  fail the action on malformed JSON.
+
 ## 0.1.3 - 2026-07-01
 
 Precision release: a real-world audit surfaced a cluster of false positives whose
