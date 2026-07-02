@@ -494,7 +494,8 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                 private_by_convention: is_private(f.name.as_str()),
                 name: f.name.to_string(),
                 kind: DefKind::Function,
-                line: line1(li, f.range().start()),
+                // The full range includes decorators; point `line` at the `def`.
+                line: line1(li, f.name.range().start()),
                 end_line: end_line1(li, f.range()),
                 decorators: f
                     .decorator_list
@@ -506,7 +507,7 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                 private_by_convention: is_private(c.name.as_str()),
                 name: c.name.to_string(),
                 kind: DefKind::Class,
-                line: line1(li, c.range().start()),
+                line: line1(li, c.name.range().start()),
                 end_line: end_line1(li, c.range()),
                 decorators: c
                     .decorator_list
@@ -560,17 +561,70 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                     }
                 }
             }
+            // `__all__ += [...]` extends the export list; a non-literal RHS
+            // makes it unknowable, so drop to None rather than keep a wrong
+            // partial list.
+            Stmt::AugAssign(a) => {
+                if let Expr::Name(t) = &*a.target {
+                    if t.id.as_str() == "__all__" {
+                        match string_list(&a.value) {
+                            Some(items) => {
+                                if let Some(all) = &mut m.dunder_all {
+                                    all.extend(items);
+                                }
+                            }
+                            None => m.dunder_all = None,
+                        }
+                    }
+                }
+            }
+            // `__all__.extend([...])` / `__all__.append('x')` — same policy.
+            Stmt::Expr(e) => {
+                if let Expr::Call(c) = &*e.value {
+                    match expr_path(&c.func).as_deref() {
+                        Some("__all__.extend") => {
+                            match c.arguments.args.first().and_then(string_list) {
+                                Some(items) => {
+                                    if let Some(all) = &mut m.dunder_all {
+                                        all.extend(items);
+                                    }
+                                }
+                                None => m.dunder_all = None,
+                            }
+                        }
+                        Some("__all__.append") => match c.arguments.args.first() {
+                            Some(Expr::StringLiteral(s)) => {
+                                if let Some(all) = &mut m.dunder_all {
+                                    all.push(s.value.to_str().to_string());
+                                }
+                            }
+                            _ => m.dunder_all = None,
+                        },
+                        _ => {}
+                    }
+                }
+            }
             // Recurse into top-level guards for conditional imports/defs.
             Stmt::If(i) => {
-                let tc = type_checking || is_type_checking_guard(&i.test);
+                // Only the if-body executes under `if TYPE_CHECKING:`; the
+                // elif/else clauses are the runtime branches. Conversely,
+                // `if not TYPE_CHECKING:` makes the *else* the type-only side.
+                let body_tc = type_checking || is_type_checking_guard(&i.test);
+                let else_tc = type_checking || is_not_type_checking_guard(&i.test);
                 let before = m.imports.len();
-                scan_top_level(&i.body, li, tc, m);
-                for clause in &i.elif_else_clauses {
-                    scan_top_level(&clause.body, li, tc, m);
-                }
-                if tc {
+                scan_top_level(&i.body, li, body_tc, m);
+                if body_tc {
                     for imp in m.imports[before..].iter_mut() {
                         imp.type_checking_only = true;
+                    }
+                }
+                for clause in &i.elif_else_clauses {
+                    let before = m.imports.len();
+                    scan_top_level(&clause.body, li, else_tc, m);
+                    if else_tc {
+                        for imp in m.imports[before..].iter_mut() {
+                            imp.type_checking_only = true;
+                        }
                     }
                 }
             }
@@ -582,6 +636,21 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                 }
                 scan_top_level(&t.orelse, li, type_checking, m);
                 scan_top_level(&t.finalbody, li, type_checking, m);
+            }
+            // These suites also execute at module import time.
+            Stmt::With(w) => scan_top_level(&w.body, li, type_checking, m),
+            Stmt::For(f) => {
+                scan_top_level(&f.body, li, type_checking, m);
+                scan_top_level(&f.orelse, li, type_checking, m);
+            }
+            Stmt::While(w) => {
+                scan_top_level(&w.body, li, type_checking, m);
+                scan_top_level(&w.orelse, li, type_checking, m);
+            }
+            Stmt::Match(mt) => {
+                for case in &mt.cases {
+                    scan_top_level(&case.body, li, type_checking, m);
+                }
             }
             _ => {}
         }
@@ -618,13 +687,24 @@ impl<'a> Visitor<'a> for NestedImportVisitor<'a> {
 }
 
 /// `if TYPE_CHECKING:` / `if typing.TYPE_CHECKING:` / `if False:` guard.
+/// Exact match only — `MY_TYPE_CHECKING_OVERRIDE` is not a guard.
 fn is_type_checking_guard(test: &Expr) -> bool {
     if let Expr::BooleanLiteral(b) = test {
         return !b.value; // `if False:`
     }
     expr_path(test)
-        .map(|p| p.contains("TYPE_CHECKING"))
+        .map(|p| p == "TYPE_CHECKING" || p.ends_with(".TYPE_CHECKING"))
         .unwrap_or(false)
+}
+
+/// `if not TYPE_CHECKING:` — the body is the runtime branch; the else clause
+/// is the type-only side.
+fn is_not_type_checking_guard(test: &Expr) -> bool {
+    if let Expr::UnaryOp(u) = test {
+        return matches!(u.op, ruff_python_ast::UnaryOp::Not)
+            && is_type_checking_guard(&u.operand);
+    }
+    false
 }
 
 fn parse_import(i: &StmtImport, li: &LineIndex, out: &mut Vec<Import>) {
@@ -711,7 +791,8 @@ fn function_complexity(f: &StmtFunctionDef, li: &LineIndex) -> FunctionComplexit
     }
     FunctionComplexity {
         name: f.name.to_string(),
-        line: line1(li, f.range().start()),
+        // The full range includes decorators; point `line` at the `def`.
+        line: line1(li, f.name.range().start()),
         end_line: end_line1(li, f.range()),
         cyclomatic: 1 + cv.count,
         cognitive: cog_stmts(&f.body, 0),
@@ -1005,7 +1086,8 @@ fn class_info(c: &StmtClassDef, li: &LineIndex) -> ClassInfo {
                 methods.push((f.name.to_string(), self_attrs(f)));
                 members.push(ClassMember {
                     name: f.name.to_string(),
-                    line: line1(li, f.range().start()),
+                    // The full range includes decorators; point at the `def`.
+                    line: line1(li, f.name.range().start()),
                     end_line: end_line1(li, f.range()),
                     is_method: true,
                     is_private: is_private(f.name.as_str()),
@@ -1043,7 +1125,8 @@ fn class_info(c: &StmtClassDef, li: &LineIndex) -> ClassInfo {
     });
     ClassInfo {
         name: c.name.to_string(),
-        line: line1(li, c.range().start()),
+        // The full range includes decorators; point `line` at the `class`.
+        line: line1(li, c.name.range().start()),
         end_line: end_line1(li, c.range()),
         is_private: is_private(c.name.as_str()),
         decorators: c
@@ -1193,18 +1276,37 @@ fn scan_type_leaks(body: &[Stmt], li: &LineIndex, out: &mut Vec<TypeLeak>) {
     }
 }
 
-/// Collect names bound to `TypeVar`/`ParamSpec`/`TypeVarTuple` (anywhere).
+/// Collect names bound to `TypeVar`/`ParamSpec`/`TypeVarTuple` (anywhere),
+/// including under `if TYPE_CHECKING:`-style guards and try blocks.
 fn collect_typevars(body: &[Stmt], out: &mut HashSet<String>) {
     for stmt in body {
-        if let Stmt::Assign(a) = stmt {
-            if let (Some(Expr::Name(t)), Expr::Call(c)) = (a.targets.first(), &*a.value) {
-                if let Some(p) = expr_path(&c.func) {
-                    let last = p.rsplit('.').next().unwrap_or(&p);
-                    if matches!(last, "TypeVar" | "ParamSpec" | "TypeVarTuple") {
-                        out.insert(t.id.as_str().to_string());
+        match stmt {
+            Stmt::Assign(a) => {
+                if let (Some(Expr::Name(t)), Expr::Call(c)) = (a.targets.first(), &*a.value) {
+                    if let Some(p) = expr_path(&c.func) {
+                        let last = p.rsplit('.').next().unwrap_or(&p);
+                        if matches!(last, "TypeVar" | "ParamSpec" | "TypeVarTuple") {
+                            out.insert(t.id.as_str().to_string());
+                        }
                     }
                 }
             }
+            Stmt::If(i) => {
+                collect_typevars(&i.body, out);
+                for clause in &i.elif_else_clauses {
+                    collect_typevars(&clause.body, out);
+                }
+            }
+            Stmt::Try(t) => {
+                collect_typevars(&t.body, out);
+                for h in &t.handlers {
+                    let ruff_python_ast::ExceptHandler::ExceptHandler(eh) = h;
+                    collect_typevars(&eh.body, out);
+                }
+                collect_typevars(&t.orelse, out);
+                collect_typevars(&t.finalbody, out);
+            }
+            _ => {}
         }
     }
 }
@@ -1246,7 +1348,8 @@ fn collect_fn_leaks(
         }
     }
     if let Some(r) = &f.returns {
-        push_leaks(r, line1(li, f.range().start()), true, out);
+        // Point at the `def` line, not the first decorator.
+        push_leaks(r, line1(li, f.name.range().start()), true, out);
     }
 }
 
@@ -1483,6 +1586,34 @@ impl Resolver {
             globals: bv.globals,
         });
     }
+
+    /// Parameter defaults and annotations (and the return annotation) evaluate
+    /// in the *enclosing* scope, before the function/lambda scope exists.
+    fn visit_signature_exprs(&mut self, params: &Parameters) {
+        for p in params
+            .posonlyargs
+            .iter()
+            .chain(params.args.iter())
+            .chain(params.kwonlyargs.iter())
+        {
+            if let Some(d) = &p.default {
+                self.visit_expr(d);
+            }
+            if let Some(a) = &p.parameter.annotation {
+                self.visit_expr(a);
+            }
+        }
+        if let Some(v) = &params.vararg {
+            if let Some(a) = &v.annotation {
+                self.visit_expr(a);
+            }
+        }
+        if let Some(k) = &params.kwarg {
+            if let Some(a) = &k.annotation {
+                self.visit_expr(a);
+            }
+        }
+    }
 }
 
 impl<'a> Visitor<'a> for Resolver {
@@ -1493,6 +1624,10 @@ impl<'a> Visitor<'a> for Resolver {
                 // current scope (visited before the function scope is pushed).
                 for d in &f.decorator_list {
                     self.visit_expr(&d.expression);
+                }
+                self.visit_signature_exprs(&f.parameters);
+                if let Some(r) = &f.returns {
+                    self.visit_expr(r);
                 }
                 self.enter_function(f);
                 for stmt in &f.body {
@@ -1531,6 +1666,8 @@ impl<'a> Visitor<'a> for Resolver {
             Expr::Lambda(l) => {
                 let mut locals = HashSet::new();
                 if let Some(params) = &l.parameters {
+                    // Defaults resolve in the enclosing scope, not the lambda's.
+                    self.visit_signature_exprs(params);
                     for p in param_names(params) {
                         locals.insert(p);
                     }
@@ -1583,7 +1720,14 @@ impl<'a> Visitor<'a> for BindingVisitor {
                 self.locals.insert(n.id.as_str().to_string());
             }
             // Don't descend into nested scopes: their bindings aren't ours.
-            Expr::Lambda(_) => {}
+            // Python 3 comprehensions have their own scope, so their targets
+            // are not locals here either. (Their iterables/conditions do
+            // evaluate in this scope, but they only load, never bind.)
+            Expr::Lambda(_)
+            | Expr::ListComp(_)
+            | Expr::SetComp(_)
+            | Expr::DictComp(_)
+            | Expr::Generator(_) => {}
             _ => walk_expr(self, expr),
         }
     }
@@ -1917,7 +2061,7 @@ fn security_call(c: &ruff_python_ast::ExprCall, f: &str, line: u32, m: &mut Pars
 
 fn security_imports(m: &mut ParsedModule) {
     let mut hits: Vec<SecurityHit> = Vec::new();
-    for imp in &m.imports {
+    for imp in m.imports.iter().chain(m.nested_imports.iter()) {
         let from_crypto = imp.module.contains("Crypto") || imp.module.contains("cryptography");
         if !from_crypto {
             continue;
@@ -1953,11 +2097,15 @@ fn security_imports(m: &mut ParsedModule) {
 }
 
 /// Parse a `# mollify: ignore[rule1,rule2]` comment into suppressed rule ids.
+/// Trailing text after the closing bracket (e.g. `-- reason`) is allowed.
 fn parse_ignore_comment(text: &str) -> Option<Vec<String>> {
     let t = text.trim_start_matches('#').trim();
     let rest = t.strip_prefix("mollify:")?.trim();
     let rest = rest.strip_prefix("ignore")?.trim();
-    if let Some(inner) = rest.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+    if let Some(inner) = rest
+        .strip_prefix('[')
+        .and_then(|r| r.find(']').map(|i| &r[..i]))
+    {
         let rules: Vec<String> = inner
             .split(',')
             .map(|s| s.trim().to_string())
@@ -2218,6 +2366,170 @@ mod tests {
             !m4.module_used.iter().any(|s| s == "counter"),
             "{:?}",
             m4.module_used
+        );
+    }
+
+    #[test]
+    fn scope_resolution_sees_defaults_and_annotations() {
+        // Defaults, parameter annotations, and return annotations evaluate in
+        // the enclosing (module) scope — they are genuine uses.
+        let m = parse("DEFAULT = 5\nMyType = int\ndef f(x=DEFAULT) -> MyType: ...\n");
+        assert!(
+            m.module_used.iter().any(|s| s == "DEFAULT"),
+            "{:?}",
+            m.module_used
+        );
+        assert!(
+            m.module_used.iter().any(|s| s == "MyType"),
+            "{:?}",
+            m.module_used
+        );
+        let m2 = parse("MyType = int\ndef g(x: MyType): ...\n");
+        assert!(
+            m2.module_used.iter().any(|s| s == "MyType"),
+            "{:?}",
+            m2.module_used
+        );
+        // Lambda parameter defaults too.
+        let m3 = parse("DEFAULT = 5\ng = lambda x=DEFAULT: x\n");
+        assert!(
+            m3.module_used.iter().any(|s| s == "DEFAULT"),
+            "{:?}",
+            m3.module_used
+        );
+    }
+
+    #[test]
+    fn imports_inside_module_level_suites_seen() {
+        let m = parse(
+            "from contextlib import suppress\n\
+             with suppress(ImportError):\n    import ujson\n\
+             for _i in range(1):\n    import for_mod\n\
+             while cond():\n    import while_mod\n\
+             match val:\n    case 1:\n        import match_mod\n",
+        );
+        for want in ["ujson", "for_mod", "while_mod", "match_mod"] {
+            assert!(
+                m.imports.iter().any(|i| i.module == want),
+                "missing {want}: {:?}",
+                m.imports
+            );
+        }
+    }
+
+    #[test]
+    fn type_checking_marks_body_not_else() {
+        let m = parse(
+            "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import a\nelse:\n    import b\n",
+        );
+        let a = m.imports.iter().find(|i| i.module == "a").unwrap();
+        let b = m.imports.iter().find(|i| i.module == "b").unwrap();
+        assert!(a.type_checking_only);
+        assert!(!b.type_checking_only, "else branch is the runtime branch");
+        // `if not TYPE_CHECKING:` inverts the branches.
+        let m2 = parse(
+            "from typing import TYPE_CHECKING\nif not TYPE_CHECKING:\n    import rt\nelse:\n    import tc\n",
+        );
+        let rt = m2.imports.iter().find(|i| i.module == "rt").unwrap();
+        let tc = m2.imports.iter().find(|i| i.module == "tc").unwrap();
+        assert!(!rt.type_checking_only);
+        assert!(tc.type_checking_only);
+    }
+
+    #[test]
+    fn type_checking_guard_is_exact() {
+        let fp = parse("if MY_TYPE_CHECKING_OVERRIDE:\n    from x import y\n");
+        assert!(
+            !fp.imports.iter().find(|i| i.module == "x").unwrap().type_checking_only,
+            "substring match must not treat this as a guard"
+        );
+        let ok = parse("import typing\nif typing.TYPE_CHECKING:\n    from x import y\n");
+        assert!(ok.imports.iter().find(|i| i.module == "x").unwrap().type_checking_only);
+    }
+
+    #[test]
+    fn comprehension_targets_are_not_function_locals() {
+        // Python 3 comprehensions have their own scope: `item` here does not
+        // shadow the module-level binding for the trailing `return item`.
+        let m = parse("item = 1\ndef f(items):\n    xs = [item for item in items]\n    return item\n");
+        assert!(
+            m.module_used.iter().any(|s| s == "item"),
+            "{:?}",
+            m.module_used
+        );
+    }
+
+    #[test]
+    fn dunder_all_mutations() {
+        let m = parse("__all__ = ['a']\n__all__ += ['b']\n");
+        assert_eq!(m.dunder_all, Some(vec!["a".into(), "b".into()]));
+        let m2 = parse("__all__ = ['a']\n__all__.extend(['b', 'c'])\n__all__.append('d')\n");
+        assert_eq!(
+            m2.dunder_all,
+            Some(vec!["a".into(), "b".into(), "c".into(), "d".into()])
+        );
+        // Non-literal mutations make the list unknowable — None, not a wrong
+        // partial list.
+        let m3 = parse("__all__ = ['a']\n__all__ += make()\n");
+        assert_eq!(m3.dunder_all, None);
+        let m4 = parse("__all__ = ['a']\n__all__.extend(names)\n");
+        assert_eq!(m4.dunder_all, None);
+        let m5 = parse("__all__ = ['a']\n__all__.append(name)\n");
+        assert_eq!(m5.dunder_all, None);
+    }
+
+    #[test]
+    fn decorated_def_line_points_at_def() {
+        let m = parse("import app\n\n@app.route('/x')\ndef view() -> _Priv:\n    return 1\n");
+        let d = m.definitions.iter().find(|d| d.name == "view").unwrap();
+        assert_eq!(d.line, 4, "decorator on line 3, def on line 4");
+        assert_eq!(d.end_line, 5, "end_line keeps the full range");
+        let f = m.functions.iter().find(|f| f.name == "view").unwrap();
+        assert_eq!(f.line, 4);
+        let leak = m.type_leaks.iter().find(|l| l.type_name == "_Priv").unwrap();
+        assert_eq!(leak.line, 4);
+        let m2 = parse("@decorate\nclass C:\n    @property\n    def p(self):\n        return 1\n");
+        let c = m2.classes.iter().find(|c| c.name == "C").unwrap();
+        assert_eq!(c.line, 2);
+        let p = c.members.iter().find(|mb| mb.name == "p").unwrap();
+        assert_eq!(p.line, 4);
+        let cd = m2.definitions.iter().find(|d| d.name == "C").unwrap();
+        assert_eq!(cd.line, 2);
+    }
+
+    #[test]
+    fn typevar_under_guard_not_a_leak() {
+        let m = parse(
+            "from typing import TYPE_CHECKING, TypeVar\nif TYPE_CHECKING:\n    _T = TypeVar('_T')\ndef f(x: _T) -> _T: ...\n",
+        );
+        assert!(m.type_leaks.is_empty(), "{:?}", m.type_leaks);
+        let m2 = parse(
+            "try:\n    _P = ParamSpec('_P')\nexcept ImportError:\n    pass\ndef g(x: _P): ...\n",
+        );
+        assert!(m2.type_leaks.is_empty(), "{:?}", m2.type_leaks);
+    }
+
+    #[test]
+    fn ignore_comment_allows_trailing_text() {
+        assert_eq!(
+            parse_ignore_comment("# mollify: ignore[dead-code]  -- migrating soon"),
+            Some(vec!["dead-code".into()])
+        );
+        assert_eq!(
+            parse_ignore_comment("# mollify: ignore[a, b] reason"),
+            Some(vec!["a".into(), "b".into()])
+        );
+        let m = parse("x = 1  # mollify: ignore[dead-code] -- reason\n");
+        assert!(m.ignores.contains(&(1, "dead-code".into())), "{:?}", m.ignores);
+    }
+
+    #[test]
+    fn nested_weak_cipher_import_flagged() {
+        let m = parse("def f():\n    from Crypto.Cipher import DES\n    return DES\n");
+        assert!(
+            m.security_hits.iter().any(|h| h.rule == "weak-cipher"),
+            "nested import must be scanned: {:?}",
+            m.security_hits
         );
     }
 }
