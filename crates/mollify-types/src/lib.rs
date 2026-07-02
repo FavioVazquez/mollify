@@ -21,8 +21,14 @@ pub const SCHEMA_VERSION: &str = "0.1";
 /// Confidence tier attached to every finding. This is the core honesty
 /// mechanism: Python dead-code detection is undecidable in general, so Mollify
 /// never claims boolean certainty.
+///
+/// The derived `Ord` is **load-bearing and inverted**: variants are declared
+/// most-confident first, so `Certain < Likely < Uncertain` — "smaller = more
+/// confident". `--min-confidence` filtering and the Certain-only auto-fix
+/// gate both rely on this order; do not reorder variants (a test locks it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Confidence {
     /// Syntactically provable (e.g. code after `return`, unused local with no
     /// dynamic sink in scope). Safe to auto-fix.
@@ -34,8 +40,12 @@ pub enum Confidence {
 }
 
 /// Severity controls CI exit behavior.
+///
+/// The derived `Ord` follows declaration order (`Error < Warn < Off`); a test
+/// locks it. Do not reorder variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Severity {
     /// Fails CI (non-zero exit) by default.
     Error,
@@ -58,6 +68,7 @@ pub enum Attribution {
 /// fallow's "never reduce it to a dead-code tool" rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum Category {
     DeadCode,
     Duplication,
@@ -71,7 +82,8 @@ pub enum Category {
     Security,
 }
 
-/// A source location, 1-based line/column, workspace-relative path.
+/// A source location: 1-based `line`; 1-based `column` where `0` means
+/// "no column information" (the zero sentinel is skipped on serialization).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Location {
     pub path: camino::Utf8PathBuf,
@@ -124,8 +136,12 @@ pub struct Finding {
 /// The kind-discriminated output envelope. `kind` lets clients switch on the
 /// result type and iterate `findings`.
 // `Eq` is intentionally omitted: `MetricsReport` carries `f64` fields.
+// `#[non_exhaustive]`: the contract promises additive minor bumps — adding a
+// report kind (or category above) must not be a breaking Rust change for
+// consumers matching on these enums.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum Report {
     /// Full unified report across all analysis areas.
     Audit(AuditReport),
@@ -296,6 +312,17 @@ mod tests {
             serde_json::to_string(&Confidence::Uncertain).unwrap(),
             "\"uncertain\""
         );
+    }
+
+    /// Locks the load-bearing derive order: smaller = more confident, and
+    /// `Error < Warn < Off`. `--min-confidence` filtering and the
+    /// Certain-only auto-fix gate silently invert if variants are reordered.
+    #[test]
+    fn confidence_and_severity_ordering_is_locked() {
+        assert!(Confidence::Certain < Confidence::Likely);
+        assert!(Confidence::Likely < Confidence::Uncertain);
+        assert!(Severity::Error < Severity::Warn);
+        assert!(Severity::Warn < Severity::Off);
     }
 
     #[test]
