@@ -124,4 +124,8 @@ language server in any LSP-capable editor (command: `mollify lsp`).
 
 ## Exit codes
 - `0` — no `error`-severity findings.
-- `1` — one or more `error`-severity findings, or a command error.
+- `1` — `error`-severity findings, or a failed/misconfigured gate
+  (`--save-baseline` write failure, or `--fail-on-regression` with a
+  missing/invalid `--baseline`).
+- `2` — a usage error: a nonexistent `--path`, or a `--format` the subcommand
+  doesn't implement.

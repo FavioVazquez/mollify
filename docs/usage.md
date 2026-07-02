@@ -169,9 +169,16 @@ toward dependency usage) without affecting module-scope `unused-import`.
 
 ## Exit codes
 
-`0` when there are no `error`-severity findings, `1` otherwise. Findings are
-`warn` by default; raise them to `error` in `.mollifyrc.json` to gate CI. See
-[configuration.md](configuration.md).
+- `0` — no `error`-severity findings (a clean gate).
+- `1` — `error`-severity findings, **or** a failed/misconfigured gate: a
+  `--save-baseline` write failure, or `--fail-on-regression` with a missing or
+  invalid `--baseline`.
+- `2` — a usage error: a `--path` that doesn't exist or isn't a directory, or a
+  `--format` the subcommand doesn't implement (`sarif`/`github`/`junit` on
+  `trace`/`inspect`/`list`/`metrics`).
+
+Findings are `warn` by default; raise them to `error` in `.mollifyrc.json` to
+gate CI. See [configuration.md](configuration.md).
 
 ## Suppressing a finding
 
