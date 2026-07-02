@@ -22,6 +22,9 @@ use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
+/// Protocol revisions this server can serve. The surface we implement
+/// (initialize / ping / tools) is identical across these revisions.
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
 const SERVER_NAME: &str = "mollify";
 
 /// Run the stdio server loop until EOF. Returns on clean stdin close.
@@ -34,14 +37,7 @@ pub fn run() -> std::io::Result<()> {
         if line.trim().is_empty() {
             continue;
         }
-        let req: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("mollify-mcp: bad JSON on stdin: {e}");
-                continue;
-            }
-        };
-        if let Some(resp) = dispatch(&req) {
+        if let Some(resp) = handle_line(&line) {
             let s = serde_json::to_string(&resp)?;
             out.write_all(s.as_bytes())?;
             out.write_all(b"\n")?;
@@ -51,27 +47,46 @@ pub fn run() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Parse one stdin line and produce the response, if any. Malformed JSON is a
+/// JSON-RPC Parse Error with a null id (per spec), not silence.
+pub fn handle_line(line: &str) -> Option<Value> {
+    match serde_json::from_str::<Value>(line) {
+        Ok(req) => dispatch(&req),
+        Err(e) => {
+            eprintln!("mollify-mcp: bad JSON on stdin: {e}");
+            Some(error(Value::Null, -32700, &format!("parse error: {e}")))
+        }
+    }
+}
+
 /// Pure request→response dispatch (testable). Returns `None` for notifications
 /// (messages without an `id`), which must not be answered.
 pub fn dispatch(req: &Value) -> Option<Value> {
     let id = req.get("id").cloned();
-    let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
     // Notifications (no id) get no response.
     let id = id?;
+
+    let Some(method) = req.get("method").and_then(|m| m.as_str()) else {
+        return Some(error(id, -32600, "invalid request: missing method"));
+    };
 
     match method {
         "initialize" => {
             let client_proto = req
                 .get("params")
                 .and_then(|p| p.get("protocolVersion"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(PROTOCOL_VERSION)
-                .to_string();
+                .and_then(|v| v.as_str());
+            // Version negotiation: echo the client's revision only if we can
+            // serve it; otherwise answer with ours (per MCP lifecycle spec).
+            let proto = match client_proto {
+                Some(v) if SUPPORTED_PROTOCOL_VERSIONS.contains(&v) => v,
+                _ => PROTOCOL_VERSION,
+            };
             Some(result(
                 id,
                 json!({
-                    "protocolVersion": client_proto,
+                    "protocolVersion": proto,
                     "capabilities": { "tools": {} },
                     "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") }
                 }),
@@ -169,6 +184,33 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
     let path = arg_str("path").unwrap_or(".");
     let root = Utf8PathBuf::from(path);
 
+    // Every tool but `mollify_explain` resolves files under `path`; analyzing a
+    // nonexistent root must be a visible tool error, never a clean empty report.
+    let uses_root = matches!(
+        name,
+        "mollify_audit"
+            | "mollify_dead_code"
+            | "mollify_deps"
+            | "mollify_arch"
+            | "mollify_complexity"
+            | "mollify_dupes"
+            | "mollify_types"
+            | "mollify_security"
+            | "mollify_coverage"
+            | "mollify_supply_chain"
+            | "mollify_trace"
+            | "mollify_inspect"
+            | "mollify_list"
+            | "mollify_metrics"
+            | "mollify_fix"
+    );
+    if uses_root && !root.is_dir() {
+        return tool_error(
+            id,
+            &format!("project root `{root}` does not exist or is not a directory"),
+        );
+    }
+
     use mollify_types::Report;
     let report_json = match name {
         "mollify_audit" => {
@@ -248,7 +290,12 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
                 })
                 .collect();
             let written = if do_apply {
-                mollify_core::fix::apply(&edits).unwrap_or(0)
+                match mollify_core::fix::apply(&edits) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        return tool_error(id, &format!("mollify_fix: applying fixes failed: {e}"))
+                    }
+                }
             } else {
                 0
             };
@@ -299,6 +346,15 @@ fn result(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
 
+/// Tool-execution failure: an `isError` result (so the model sees the failure
+/// text), not a protocol-level error — per the MCP tools spec.
+fn tool_error(id: Value, message: &str) -> Value {
+    result(
+        id,
+        json!({ "content": [ { "type": "text", "text": message } ], "isError": true }),
+    )
+}
+
 fn error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
@@ -314,6 +370,44 @@ mod tests {
         assert_eq!(resp["result"]["serverInfo"]["name"], "mollify");
         assert_eq!(resp["result"]["protocolVersion"], "2025-06-18");
         assert!(resp["result"]["capabilities"]["tools"].is_object());
+    }
+
+    #[test]
+    fn initialize_with_unknown_protocol_answers_with_server_version() {
+        let req = json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+            "params":{"protocolVersion":"1999-01-01"}});
+        let resp = dispatch(&req).unwrap();
+        assert_eq!(resp["result"]["protocolVersion"], PROTOCOL_VERSION);
+        // A known-but-older revision is echoed back.
+        let req = json!({"jsonrpc":"2.0","id":2,"method":"initialize",
+            "params":{"protocolVersion":"2024-11-05"}});
+        let resp = dispatch(&req).unwrap();
+        assert_eq!(resp["result"]["protocolVersion"], "2024-11-05");
+    }
+
+    #[test]
+    fn malformed_json_line_is_parse_error_with_null_id() {
+        let resp = handle_line("{ not json").unwrap();
+        assert_eq!(resp["error"]["code"], -32700);
+        assert!(resp["id"].is_null());
+    }
+
+    #[test]
+    fn missing_or_nonstring_method_is_invalid_request() {
+        let resp = dispatch(&json!({"jsonrpc":"2.0","id":5})).unwrap();
+        assert_eq!(resp["error"]["code"], -32600);
+        let resp = dispatch(&json!({"jsonrpc":"2.0","id":6,"method":42})).unwrap();
+        assert_eq!(resp["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn nonexistent_path_is_tool_error() {
+        let req = json!({"jsonrpc":"2.0","id":8,"method":"tools/call",
+            "params":{"name":"mollify_audit","arguments":{"path":"/no/such/mollify-root"}}});
+        let resp = dispatch(&req).unwrap();
+        assert_eq!(resp["result"]["isError"], true);
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("/no/such/mollify-root"), "got {text}");
     }
 
     #[test]

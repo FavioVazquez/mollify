@@ -61,10 +61,20 @@ fn doc_text(msg: &Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// The `textDocument.uri` of a request/notification's params.
+fn doc_uri(msg: &Value) -> Option<&str> {
+    msg.get("params")?
+        .get("textDocument")?
+        .get("uri")?
+        .as_str()
+}
+
 impl Server {
     /// Handle one incoming message, returning zero or more messages to send.
     fn handle(&mut self, msg: &Value) -> Vec<Value> {
-        let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let Some(method) = msg.get("method").and_then(|m| m.as_str()) else {
+            return vec![]; // a response (we send no requests) or garbage
+        };
         let id = msg.get("id").cloned();
         match method {
             "initialize" => {
@@ -89,20 +99,27 @@ impl Server {
             "textDocument/didOpen" | "textDocument/didSave" => self.diagnose(msg),
             // Change → fast file-local diagnostics from the live buffer.
             "textDocument/didChange" => self.diagnose_buffer(msg),
-            // initialized and other notifications: no response.
-            _ => vec![],
+            // Close → publish an empty set so the client drops stale diagnostics.
+            "textDocument/didClose" => match doc_uri(msg) {
+                Some(uri) => vec![notification(
+                    "textDocument/publishDiagnostics",
+                    json!({ "uri": uri, "diagnostics": [] }),
+                )],
+                None => vec![],
+            },
+            // initialized and other notifications: no response. Unknown
+            // *requests* (they carry an id) must be answered, not dropped.
+            _ => match id {
+                Some(id) => vec![error(id, -32601, &format!("method not found: {method}"))],
+                None => vec![],
+            },
         }
     }
 
     /// Run the audit for the workspace and publish diagnostics for the document
     /// referenced by the notification.
     fn diagnose(&self, msg: &Value) -> Vec<Value> {
-        let Some(uri) = msg
-            .get("params")
-            .and_then(|p| p.get("textDocument"))
-            .and_then(|d| d.get("uri"))
-            .and_then(|u| u.as_str())
-        else {
+        let Some(uri) = doc_uri(msg) else {
             return vec![];
         };
         let Some(file_abs) = uri_to_path(uri) else {
@@ -130,12 +147,7 @@ impl Server {
 impl Server {
     /// Live file-local diagnostics from the edited buffer (no disk read).
     fn diagnose_buffer(&self, msg: &Value) -> Vec<Value> {
-        let Some(uri) = msg
-            .get("params")
-            .and_then(|p| p.get("textDocument"))
-            .and_then(|d| d.get("uri"))
-            .and_then(|u| u.as_str())
-        else {
+        let Some(uri) = doc_uri(msg) else {
             return vec![];
         };
         let (Some(path), Some(text)) = (uri_to_path(uri), doc_text(msg)) else {
@@ -166,15 +178,21 @@ fn to_diagnostic(f: &Finding) -> Value {
         .end_line
         .unwrap_or(f.location.line)
         .saturating_sub(1);
+    // `column` is 1-based (0 = unknown) → 0-based. LSP counts UTF-16 code
+    // units; engines emit column 0 today, so no byte→UTF-16 mapping is needed.
+    let character = f.location.column.saturating_sub(1);
     let severity = match f.severity {
         Severity::Error => 1,
         Severity::Warn => 2,
-        Severity::Off => 4,
+        // `Off` and any future severity (#[non_exhaustive]) → Hint.
+        _ => 4,
     };
     json!({
         "range": {
-            "start": { "line": line, "character": f.location.column },
-            "end": { "line": end_line.max(line), "character": 0 }
+            "start": { "line": line, "character": character },
+            // End at the start of the line *after* the last finding line, so
+            // the last line's content is covered and the range never reverses.
+            "end": { "line": end_line.max(line) + 1, "character": 0 }
         },
         "severity": severity,
         "source": "mollify",
@@ -243,40 +261,54 @@ fn result(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
 
+fn error(id: Value, code: i64, message: &str) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+}
+
 fn notification(method: &str, params: Value) -> Value {
     json!({ "jsonrpc": "2.0", "method": method, "params": params })
 }
 
-/// Read one `Content-Length`-framed JSON-RPC message. `Ok(None)` at clean EOF.
+/// Read one `Content-Length`-framed JSON-RPC message. `Ok(None)` only at clean
+/// EOF; a header block without a parseable `Content-Length` is logged and
+/// skipped (an editor hiccup must not look like EOF and end the session).
 fn read_message<R: BufRead>(reader: &mut R) -> std::io::Result<Option<Value>> {
-    let mut content_length: Option<usize> = None;
     loop {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line)?;
-        if n == 0 {
-            return Ok(None); // EOF
+        let mut content_length: Option<usize> = None;
+        let mut saw_header = false;
+        loop {
+            let mut line = String::new();
+            let n = reader.read_line(&mut line)?;
+            if n == 0 {
+                return Ok(None); // clean EOF
+            }
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                if !saw_header {
+                    continue; // stray blank line between messages
+                }
+                break; // end of headers
+            }
+            saw_header = true;
+            if let Some(v) = trimmed
+                .strip_prefix("Content-Length:")
+                .or_else(|| trimmed.strip_prefix("content-length:"))
+            {
+                content_length = v.trim().parse().ok();
+            }
         }
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            break; // end of headers
-        }
-        if let Some(v) = trimmed
-            .strip_prefix("Content-Length:")
-            .or_else(|| trimmed.strip_prefix("content-length:"))
-        {
-            content_length = v.trim().parse().ok();
-        }
-    }
-    let Some(len) = content_length else {
-        return Ok(None);
-    };
-    let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf)?;
-    match serde_json::from_slice(&buf) {
-        Ok(v) => Ok(Some(v)),
-        Err(e) => {
-            eprintln!("mollify-lsp: bad JSON body: {e}");
-            Ok(Some(json!({})))
+        let Some(len) = content_length else {
+            eprintln!("mollify-lsp: header block without a valid Content-Length; skipping");
+            continue;
+        };
+        let mut buf = vec![0u8; len];
+        reader.read_exact(&mut buf)?;
+        match serde_json::from_slice(&buf) {
+            Ok(v) => return Ok(Some(v)),
+            Err(e) => {
+                eprintln!("mollify-lsp: bad JSON body: {e}");
+                return Ok(Some(json!({})));
+            }
         }
     }
 }
@@ -301,6 +333,74 @@ mod tests {
         assert_eq!(resp[0]["result"]["serverInfo"]["name"], "mollify");
         assert!(resp[0]["result"]["capabilities"]["textDocumentSync"].is_object());
         assert_eq!(s.root.as_deref().map(|p| p.as_str()), Some("/tmp/x"));
+    }
+
+    #[test]
+    fn unknown_request_gets_method_not_found_but_notifications_are_ignored() {
+        let mut s = Server::default();
+        let req = json!({"jsonrpc":"2.0","id":9,"method":"textDocument/hover","params":{}});
+        let resp = s.handle(&req);
+        assert_eq!(resp.len(), 1);
+        assert_eq!(resp[0]["id"], 9);
+        assert_eq!(resp[0]["error"]["code"], -32601);
+        let note = json!({"jsonrpc":"2.0","method":"$/setTrace","params":{}});
+        assert!(s.handle(&note).is_empty());
+        // A response-shaped message (no method) is also not answered.
+        let response = json!({"jsonrpc":"2.0","id":1,"result":{}});
+        assert!(s.handle(&response).is_empty());
+    }
+
+    #[test]
+    fn did_close_publishes_empty_diagnostics() {
+        let mut s = Server::default();
+        let note = json!({"jsonrpc":"2.0","method":"textDocument/didClose",
+            "params":{"textDocument":{"uri":"file:///tmp/x.py"}}});
+        let out = s.handle(&note);
+        assert_eq!(out[0]["method"], "textDocument/publishDiagnostics");
+        assert_eq!(out[0]["params"]["uri"], "file:///tmp/x.py");
+        assert!(out[0]["params"]["diagnostics"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn diagnostic_range_is_never_reversed_and_covers_last_line() {
+        let finding = |line: u32, column: u32, end_line: Option<u32>| Finding {
+            fingerprint: "r:0000".into(),
+            rule: "r".into(),
+            category: mollify_types::Category::DeadCode,
+            severity: Severity::Warn,
+            confidence: mollify_types::Confidence::Certain,
+            attribution: None,
+            reason: "test".into(),
+            location: mollify_types::Location {
+                path: "a.py".into(),
+                line,
+                column,
+                end_line,
+            },
+            actions: vec![],
+        };
+        // 1-based column 5 → 0-based character 4; end covers the whole line.
+        let d = to_diagnostic(&finding(3, 5, None));
+        assert_eq!(d["range"]["start"], json!({"line": 2, "character": 4}));
+        assert_eq!(d["range"]["end"], json!({"line": 3, "character": 0}));
+        // Unknown column (0) stays 0; multi-line end covers the final line.
+        let d = to_diagnostic(&finding(3, 0, Some(5)));
+        assert_eq!(d["range"]["start"], json!({"line": 2, "character": 0}));
+        assert_eq!(d["range"]["end"], json!({"line": 5, "character": 0}));
+        // end_line < line can never reverse the range.
+        let d = to_diagnostic(&finding(3, 0, Some(1)));
+        assert_eq!(d["range"]["end"], json!({"line": 3, "character": 0}));
+    }
+
+    #[test]
+    fn read_message_skips_malformed_headers_instead_of_eof() {
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"shutdown"}"#;
+        let stream = format!("X-Broken-Header: yes\r\n\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let mut reader = std::io::BufReader::new(stream.as_bytes());
+        let msg = read_message(&mut reader).unwrap().expect("must survive the bad header block");
+        assert_eq!(msg["method"], "shutdown");
+        // The stream end is still a clean EOF.
+        assert!(read_message(&mut reader).unwrap().is_none());
     }
 
     #[test]

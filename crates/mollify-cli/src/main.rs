@@ -421,10 +421,13 @@ fn main() {
         Command::Inspect(a) => run_inspect(&a),
         Command::List(a) => run_list(&a),
         Command::Metrics(a) => run_metrics(&a),
-        Command::Graph(a) => {
-            print!("{}", mollify_core::graph_export(&a.path, a.mermaid));
-            0
-        }
+        Command::Graph(a) => match validate_root(&a.path) {
+            Some(code) => code,
+            None => {
+                print!("{}", mollify_core::graph_export(&a.path, a.mermaid));
+                0
+            }
+        },
         Command::Init(a) => run_init(&a),
         Command::Mcp => match mollify_mcp::run() {
             Ok(()) => 0,
@@ -444,14 +447,50 @@ fn main() {
     std::process::exit(code);
 }
 
+/// Reject a `--path` that doesn't exist or isn't a directory. Analyzing a
+/// nonexistent root must never yield a clean empty report; exit 2 keeps it
+/// distinct from the findings gate's exit 1.
+fn validate_root(path: &camino::Utf8Path) -> Option<i32> {
+    if path.is_dir() {
+        None
+    } else {
+        eprintln!("error: project root `{path}` does not exist or is not a directory");
+        Some(2)
+    }
+}
+
+/// Reject `--format` values a command doesn't implement (exit 2) instead of
+/// silently falling through to human output.
+fn require_human_or_json(cmd: &str, format: Format) -> Option<i32> {
+    if matches!(format, Format::Human | Format::Json) {
+        None
+    } else {
+        eprintln!("error: unsupported format for this command (`{cmd}` supports human and json)");
+        Some(2)
+    }
+}
+
 /// Outcome of applying baseline options to a findings set.
 enum BaselineOutcome {
-    /// `--save-baseline` wrote a snapshot; the caller should print + exit 0.
+    /// `--save-baseline` wrote a snapshot; the note goes to stderr and the
+    /// report still prints (exit 0).
     Saved(Utf8PathBuf),
+    /// `--save-baseline` could not write the snapshot; the run must fail.
+    SaveFailed,
     /// `--baseline` filtered to findings new since the snapshot; `usize` is how many.
     Filtered(usize),
+    /// `--fail-on-regression` was set but the baseline is missing/invalid.
+    LoadFailed,
     /// No baseline options in effect.
     None,
+}
+
+/// Hard baseline failures abort the run before any report is emitted.
+fn baseline_failure_exit(outcome: &BaselineOutcome) -> Option<i32> {
+    match outcome {
+        BaselineOutcome::SaveFailed | BaselineOutcome::LoadFailed => Some(1),
+        _ => None,
+    }
 }
 
 /// Apply `--save-baseline` / `--baseline` to `findings`. With `--baseline`,
@@ -462,11 +501,20 @@ fn handle_baseline(s: &Scope, findings: &mut Vec<mollify_types::Finding>) -> Bas
         let b = Baseline::from_findings(findings);
         if let Err(e) = b.save(path) {
             eprintln!("error: could not write baseline {path}: {e}");
+            return BaselineOutcome::SaveFailed;
         }
         return BaselineOutcome::Saved(path.clone());
     }
     if let Some(path) = &s.baseline {
         let Some(b) = Baseline::load(path) else {
+            // A CI regression gate with no baseline must fail loudly, never
+            // degrade to "report everything, exit by severity".
+            if s.fail_on_regression {
+                eprintln!(
+                    "error: --fail-on-regression requires a readable baseline; {path} is missing or invalid"
+                );
+                return BaselineOutcome::LoadFailed;
+            }
             eprintln!("mollify: baseline {path} missing or invalid; reporting all findings.");
             return BaselineOutcome::None;
         };
@@ -487,6 +535,10 @@ fn gated_exit(s: &Scope, errors: usize, outcome: &BaselineOutcome) -> i32 {
     if s.brief {
         return 0;
     }
+    // `--save-baseline` is documented to exit 0: the snapshot is the product.
+    if let BaselineOutcome::Saved(_) = outcome {
+        return 0;
+    }
     if s.fail_on_regression {
         if let BaselineOutcome::Filtered(n) = outcome {
             if *n > 0 {
@@ -497,20 +549,35 @@ fn gated_exit(s: &Scope, errors: usize, outcome: &BaselineOutcome) -> i32 {
     exit_code(errors)
 }
 
+/// Recompute summary and quality score from the (possibly filtered) findings.
+/// `--gate`/`--min-confidence`/`--baseline` may have dropped findings, and the
+/// emitted score must reflect what is emitted.
+fn rescore_audit(report: &mut mollify_types::AuditReport) {
+    report.summary =
+        mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
+    report.quality_score =
+        mollify_core::quality_score(&report.findings, report.summary.files_analyzed);
+}
+
 fn run_audit(s: &Scope) -> i32 {
+    if let Some(code) = validate_root(&s.path) {
+        return code;
+    }
     let mut report = mollify_core::audit_report_with_includes(&s.path, &s.include);
     apply_gate(s, &mut report.findings);
     apply_min_confidence(s, &mut report.findings);
     let outcome = handle_baseline(s, &mut report.findings);
+    if let Some(code) = baseline_failure_exit(&outcome) {
+        return code;
+    }
     if let BaselineOutcome::Saved(p) = &outcome {
-        println!(
-            "Wrote baseline with {} fingerprint(s) to {p}",
+        // stderr, so `--format json` stdout stays pure protocol.
+        eprintln!(
+            "mollify: wrote baseline with {} fingerprint(s) to {p}",
             report.findings.len()
         );
-        return 0;
     }
-    report.summary =
-        mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
+    rescore_audit(&mut report);
     let errors = report.summary.errors;
     match s.format {
         Format::Json => println!(
@@ -544,16 +611,22 @@ fn run_findings(
     wrap: fn(mollify_types::FindingsReport) -> Report,
     label: &str,
 ) -> i32 {
+    if let Some(code) = validate_root(&s.path) {
+        return code;
+    }
     let mut report = f(&s.path, &s.include);
     apply_gate(s, &mut report.findings);
     apply_min_confidence(s, &mut report.findings);
     let outcome = handle_baseline(s, &mut report.findings);
+    if let Some(code) = baseline_failure_exit(&outcome) {
+        return code;
+    }
     if let BaselineOutcome::Saved(p) = &outcome {
-        println!(
-            "Wrote baseline with {} fingerprint(s) to {p}",
+        // stderr, so `--format json` stdout stays pure protocol.
+        eprintln!(
+            "mollify: wrote baseline with {} fingerprint(s) to {p}",
             report.findings.len()
         );
-        return 0;
     }
     report.summary =
         mollify_types::Summary::from_findings(&report.findings, report.summary.files_analyzed);
@@ -581,6 +654,9 @@ fn run_findings(
 }
 
 fn run_coverage(a: &CoverageArgs) -> i32 {
+    if let Some(code) = validate_root(&a.path) {
+        return code;
+    }
     let report = mollify_core::coverage_report(&a.path, &a.coverage_file);
     let errors = report.summary.errors;
     match a.format {
@@ -608,6 +684,9 @@ fn run_coverage(a: &CoverageArgs) -> i32 {
 }
 
 fn run_supply_chain(a: &SupplyChainArgs) -> i32 {
+    if let Some(code) = validate_root(&a.path) {
+        return code;
+    }
     let db = a
         .advisory_db
         .clone()
@@ -684,6 +763,9 @@ fn run_supply_chain(a: &SupplyChainArgs) -> i32 {
 }
 
 fn run_fix(a: &FixArgs) -> i32 {
+    if let Some(code) = validate_root(&a.path) {
+        return code;
+    }
     let edits = mollify_core::fix::plan(&a.path);
     if edits.is_empty() {
         println!("No auto-fixable findings (only `certain` unused symbols are auto-fixed). ✓");
@@ -742,6 +824,12 @@ fn run_explain(a: &ExplainArgs) -> i32 {
 }
 
 fn run_trace(a: &TraceArgs) -> i32 {
+    if let Some(code) = validate_root(&a.path) {
+        return code;
+    }
+    if let Some(code) = require_human_or_json("trace", a.format) {
+        return code;
+    }
     let graph = mollify_core::build_graph(&a.path);
     let Some(t) = mollify_core::trace::module(&graph, &a.module) else {
         eprintln!("No module matching `{}` found under {}.", a.module, a.path);
@@ -796,6 +884,9 @@ fn watch_signature(root: &camino::Utf8Path) -> Vec<(String, u64, u64)> {
 }
 
 fn run_watch(a: &WatchArgs) -> i32 {
+    if let Some(code) = validate_root(&a.path) {
+        return code;
+    }
     let scope = Scope {
         path: a.path.clone(),
         format: Format::Human,
@@ -826,7 +917,19 @@ fn run_watch(a: &WatchArgs) -> i32 {
 }
 
 fn run_inspect(a: &InspectArgs) -> i32 {
+    if let Some(code) = validate_root(&a.path) {
+        return code;
+    }
+    if let Some(code) = require_human_or_json("inspect", a.format) {
+        return code;
+    }
     let ins = mollify_core::inspect(&a.path, &a.file);
+    // No module and no findings means nothing in the project matched the
+    // argument — an error, like `trace` on an unknown module.
+    if ins.module.is_none() && ins.findings.is_empty() {
+        eprintln!("No file matching `{}` found under {}.", a.file, a.path);
+        return 1;
+    }
     match a.format {
         Format::Json => {
             let body = serde_json::json!({
@@ -858,6 +961,12 @@ fn run_inspect(a: &InspectArgs) -> i32 {
 }
 
 fn run_list(a: &ListArgs) -> i32 {
+    if let Some(code) = validate_root(&a.path) {
+        return code;
+    }
+    if let Some(code) = require_human_or_json("list", a.format) {
+        return code;
+    }
     let label = match a.kind {
         ListKind::EntryPoints => "entry-points",
         ListKind::Files => "files",
@@ -885,6 +994,12 @@ fn run_list(a: &ListArgs) -> i32 {
 }
 
 fn run_metrics(a: &MetricsArgs) -> i32 {
+    if let Some(code) = validate_root(&a.path) {
+        return code;
+    }
+    if let Some(code) = require_human_or_json("metrics", a.format) {
+        return code;
+    }
     let report = mollify_core::metrics::report(&a.path);
     match a.format {
         Format::Json => println!(
@@ -940,6 +1055,9 @@ const STARTER_RC: &str = r#"{
 "#;
 
 fn run_init(a: &InitArgs) -> i32 {
+    if let Some(code) = validate_root(&a.path) {
+        return code;
+    }
     // Agent-integration mode: install skills/rules/hooks/commands/workflows.
     if a.all || !a.agent.is_empty() {
         return run_init_agents(a);
@@ -1048,12 +1166,14 @@ fn print_findings_refs(findings: &[&Finding]) {
         let sev = match f.severity {
             Severity::Error => "error",
             Severity::Warn => "warn",
-            Severity::Off => "off",
+            // `Off` and any future severity (#[non_exhaustive]).
+            _ => "off",
         };
         let conf = match f.confidence {
             Confidence::Certain => "certain",
             Confidence::Likely => "likely",
-            Confidence::Uncertain => "uncertain",
+            // `Uncertain` and any future tier (#[non_exhaustive]).
+            _ => "uncertain",
         };
         let loc = &f.location;
         println!(
@@ -1076,6 +1196,167 @@ fn exit_code(errors: usize) -> i32 {
 mod tests {
     use super::*;
     use mollify_types::Severity;
+
+    /// A throwaway project dir with one entry point and one dead module.
+    fn temp_project(tag: &str) -> Utf8PathBuf {
+        let base = std::env::temp_dir().join(format!("mollify-cli-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = Utf8PathBuf::from_path_buf(base).unwrap();
+        std::fs::write(dir.join("__main__.py"), "print('hi')\n").unwrap();
+        std::fs::write(dir.join("lib.py"), "def dead():\n    return 1\n").unwrap();
+        dir
+    }
+
+    fn scope(path: Utf8PathBuf) -> Scope {
+        Scope {
+            path,
+            format: Format::Json,
+            gate: Gate::All,
+            base: None,
+            save_baseline: None,
+            baseline: None,
+            fail_on_regression: false,
+            brief: false,
+            min_confidence: None,
+            include: Vec::new(),
+        }
+    }
+
+    fn sample_finding(severity: Severity) -> Finding {
+        Finding {
+            fingerprint: "unused-export:0000".into(),
+            rule: "unused-export".into(),
+            category: mollify_types::Category::DeadCode,
+            severity,
+            confidence: Confidence::Certain,
+            attribution: None,
+            reason: "test".into(),
+            location: mollify_types::Location {
+                path: "a.py".into(),
+                line: 1,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![],
+        }
+    }
+
+    #[test]
+    fn nonexistent_path_is_exit_2_not_clean_report() {
+        let missing = Utf8PathBuf::from("/no/such/mollify-project");
+        assert_eq!(run_audit(&scope(missing.clone())), 2);
+        assert_eq!(
+            run_metrics(&MetricsArgs {
+                path: missing.clone(),
+                format: Format::Json
+            }),
+            2
+        );
+        assert_eq!(validate_root(&missing), Some(2));
+    }
+
+    #[test]
+    fn validate_root_rejects_files_and_accepts_dirs() {
+        let dir = temp_project("root");
+        assert_eq!(validate_root(&dir), None);
+        assert_eq!(validate_root(&dir.join("lib.py")), Some(2), "a file is not a root");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_baseline_write_failure_is_error_exit() {
+        let dir = temp_project("save-fail");
+        let mut s = scope(dir.clone());
+        // Writing a baseline *onto a directory* must fail.
+        s.save_baseline = Some(dir.clone());
+        let mut findings = vec![sample_finding(Severity::Warn)];
+        let outcome = handle_baseline(&s, &mut findings);
+        assert!(matches!(outcome, BaselineOutcome::SaveFailed));
+        assert_eq!(baseline_failure_exit(&outcome), Some(1));
+        assert_eq!(run_audit(&s), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_baseline_success_emits_report_and_exits_zero() {
+        let dir = temp_project("save-ok");
+        let mut s = scope(dir.clone());
+        s.save_baseline = Some(dir.join("baseline.json"));
+        assert_eq!(run_audit(&s), 0);
+        assert!(dir.join("baseline.json").exists());
+        // Even with error findings, `--save-baseline` is documented exit 0.
+        assert_eq!(gated_exit(&s, 3, &BaselineOutcome::Saved(dir.join("baseline.json"))), 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fail_on_regression_with_missing_baseline_is_error_exit() {
+        let dir = temp_project("regress");
+        let mut s = scope(dir.clone());
+        s.baseline = Some(dir.join("absent.json"));
+        s.fail_on_regression = true;
+        let mut findings = vec![sample_finding(Severity::Warn)];
+        let outcome = handle_baseline(&s, &mut findings);
+        assert!(matches!(outcome, BaselineOutcome::LoadFailed));
+        assert_eq!(run_audit(&s), 1);
+        // Without the CI gate the old warn-and-report behavior stands.
+        s.fail_on_regression = false;
+        let outcome = handle_baseline(&s, &mut findings);
+        assert!(matches!(outcome, BaselineOutcome::None));
+        assert_eq!(findings.len(), 1, "findings must be untouched");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rescore_audit_recomputes_score_from_filtered_findings() {
+        let mut report = mollify_types::AuditReport {
+            schema_version: mollify_types::SCHEMA_VERSION.into(),
+            quality_score: 40,
+            summary: Summary::from_findings(&[sample_finding(Severity::Error)], 1),
+            findings: vec![sample_finding(Severity::Error)],
+        };
+        report.findings.clear(); // as --min-confidence / --baseline would
+        rescore_audit(&mut report);
+        assert_eq!(report.quality_score, 100, "score must track emitted findings");
+        assert_eq!(report.summary.total, 0);
+    }
+
+    #[test]
+    fn unsupported_formats_are_usage_errors() {
+        let dir = temp_project("format");
+        for format in [Format::Sarif, Format::Github, Format::Junit] {
+            assert_eq!(
+                run_metrics(&MetricsArgs {
+                    path: dir.clone(),
+                    format
+                }),
+                2
+            );
+        }
+        assert_eq!(require_human_or_json("trace", Format::Json), None);
+        assert_eq!(require_human_or_json("trace", Format::Human), None);
+        assert_eq!(require_human_or_json("trace", Format::Sarif), Some(2));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn inspect_unknown_file_is_error_exit() {
+        let dir = temp_project("inspect");
+        let miss = InspectArgs {
+            file: "zzz_no_such_file.py".into(),
+            path: dir.clone(),
+            format: Format::Json,
+        };
+        assert_eq!(run_inspect(&miss), 1);
+        let hit = InspectArgs {
+            file: "lib.py".into(),
+            path: dir.clone(),
+            format: Format::Json,
+        };
+        assert_eq!(run_inspect(&hit), 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn starter_rc_is_valid_and_loads() {
