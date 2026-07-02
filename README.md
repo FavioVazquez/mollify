@@ -33,7 +33,7 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 > [PyPI](https://pypi.org/project/mollify/) and
 > [crates.io](https://crates.io/crates/mollify-cli)** (see the badges above for
 > the current version). The core analysis phases are implemented, tested
-> (140+ tests), and dogfooded; CI + CodeQL are green. See [`docs/adr/`](docs/adr)
+> (190+ tests), and dogfooded; CI + CodeQL are green. See [`docs/adr/`](docs/adr)
 > for design decisions and *Engineering notes* below for how it works.
 
 ## Why Mollify
