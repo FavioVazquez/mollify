@@ -6,9 +6,13 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+## 0.1.4 - 2026-07-02
+
 Fix release from a full-repository code review (`docs/code-review-2026-07-01.md`):
 every crate was read end-to-end, and every fix below was verified against a
-reproduction before landing.
+reproduction before landing. **Contains breaking changes** — fingerprints and
+several CLI exit codes changed; regenerate any saved baselines after upgrading
+(see *Breaking* below).
 
 ### Breaking
 - **Fingerprints changed wholesale — regenerate baselines** (`--save-baseline`).
