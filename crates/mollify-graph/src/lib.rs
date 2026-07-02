@@ -344,9 +344,12 @@ impl ModuleGraph {
                 .strip_prefix(root)
                 .map(Utf8Path::to_path_buf)
                 .unwrap_or_else(|_| path.clone());
+            // A module with an `if __name__ == "__main__":` guard is a
+            // runnable script — a reachability root even with no importer.
+            let is_entry = is_entry(&path) || pm.has_main_guard;
             modules.push(ModuleInfo {
                 id,
-                is_entry: is_entry(&path),
+                is_entry,
                 is_package,
                 rel,
                 path,
@@ -795,6 +798,30 @@ mod tests {
         assert!(
             g.unresolved_imports().is_empty(),
             "root-relative import wrongly unresolved"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn main_guard_scripts_are_entry_points() {
+        // A plain script with `if __name__ == "__main__":` is runnable — it
+        // and everything it imports must not be reported dead.
+        let d = temp("mainguard");
+        write(
+            &d,
+            "run.py",
+            "from lib import go\n\nif __name__ == \"__main__\":\n    go()\n",
+        );
+        write(&d, "lib.py", "def go():\n    return 1\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        assert!(
+            g.unused_files().is_empty(),
+            "script project wrongly dead: {:?}",
+            g.unused_files()
+                .iter()
+                .map(|m| m.dotted.as_str())
+                .collect::<Vec<_>>()
         );
         std::fs::remove_dir_all(&d).ok();
     }

@@ -213,6 +213,9 @@ pub struct ParsedModule {
     pub type_leaks: Vec<TypeLeak>,
     pub name_counts: HashMap<String, u32>,
     pub has_dynamic_sink: bool,
+    /// True if the module has a top-level `if __name__ == "__main__":` guard —
+    /// it's a runnable script, hence a reachability root.
+    pub has_main_guard: bool,
     pub halstead_volume: f64,
     had_errors: bool,
 }
@@ -257,6 +260,7 @@ impl PyParser {
             type_leaks: Vec::new(),
             name_counts: HashMap::new(),
             has_dynamic_sink: false,
+            has_main_guard: false,
             halstead_volume: 0.0,
             had_errors: false,
         };
@@ -606,6 +610,9 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
             }
             // Recurse into top-level guards for conditional imports/defs.
             Stmt::If(i) => {
+                if is_main_guard(&i.test) {
+                    m.has_main_guard = true;
+                }
                 // Only the if-body executes under `if TYPE_CHECKING:`; the
                 // elif/else clauses are the runtime branches. Conversely,
                 // `if not TYPE_CHECKING:` makes the *else* the type-only side.
@@ -684,6 +691,23 @@ impl<'a> Visitor<'a> for NestedImportVisitor<'a> {
             _ => walk_stmt(self, stmt),
         }
     }
+}
+
+/// `if __name__ == "__main__":` (either operand order) — the module is a
+/// runnable script.
+fn is_main_guard(test: &Expr) -> bool {
+    let Expr::Compare(c) = test else {
+        return false;
+    };
+    if c.ops.as_ref() != [ruff_python_ast::CmpOp::Eq] || c.comparators.len() != 1 {
+        return false;
+    }
+    let is_name = |e: &Expr| matches!(e, Expr::Name(n) if n.id.as_str() == "__name__");
+    let is_main_str = |e: &Expr| {
+        matches!(e, Expr::StringLiteral(s) if s.value.to_str() == "__main__")
+    };
+    (is_name(&c.left) && is_main_str(&c.comparators[0]))
+        || (is_main_str(&c.left) && is_name(&c.comparators[0]))
 }
 
 /// `if TYPE_CHECKING:` / `if typing.TYPE_CHECKING:` / `if False:` guard.
