@@ -70,7 +70,10 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
         }
     }
     let manifest_path = manifest;
-    let manifest_name = manifest_path.file_name().unwrap_or("pyproject.toml").to_string();
+    let manifest_name = manifest_path
+        .file_name()
+        .unwrap_or("pyproject.toml")
+        .to_string();
     // No manifest at all → nothing to check (avoid flagging every import as
     // "missing" in a project that simply doesn't declare dependencies here).
     if !has_manifest {
@@ -114,9 +117,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
                 },
                 actions: vec![Action {
                     kind: "remove-dependency".into(),
-                    description: format!(
-                        "Remove unused dependency `{dist}` from {manifest_name}"
-                    ),
+                    description: format!("Remove unused dependency `{dist}` from {manifest_name}"),
                     auto_fixable: false,
                     suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
                 }],
@@ -425,9 +426,11 @@ fn requirement_name(line: &str) -> Option<String> {
     // URL/VCS requirement: the `#egg=name` fragment IS the name — read it
     // before any comment stripping (the fragment starts with `#`).
     let lower = trimmed.to_ascii_lowercase();
-    if ["git+", "hg+", "svn+", "bzr+", "http://", "https://", "file:"]
-        .iter()
-        .any(|p| lower.starts_with(p))
+    if [
+        "git+", "hg+", "svn+", "bzr+", "http://", "https://", "file:",
+    ]
+    .iter()
+    .any(|p| lower.starts_with(p))
     {
         return trimmed.split_once("#egg=").and_then(|(_, rest)| {
             let name = rest.split(|c: char| c.is_whitespace() || c == '&').next()?;

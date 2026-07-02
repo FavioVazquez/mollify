@@ -871,7 +871,9 @@ mod tests {
         let g = ModuleGraph::build(&d, &files);
         let unresolved = g.unresolved_imports();
         assert!(
-            unresolved.iter().any(|u| u.display == ".helprs" && u.relative),
+            unresolved
+                .iter()
+                .any(|u| u.display == ".helprs" && u.relative),
             "typo'd in-function relative import not reported: {unresolved:?}"
         );
         std::fs::remove_dir_all(&d).ok();

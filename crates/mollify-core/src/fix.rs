@@ -182,7 +182,10 @@ mod tests {
         assert!(!edits.is_empty());
         apply(&edits).unwrap();
         let after = std::fs::read_to_string(&lib).unwrap();
-        assert!(after.contains("def keep():\r\n"), "CRLF rewritten: {after:?}");
+        assert!(
+            after.contains("def keep():\r\n"),
+            "CRLF rewritten: {after:?}"
+        );
         assert!(!after.contains('\n') || !after.replace("\r\n", "").contains('\n'));
         std::fs::remove_dir_all(&d).ok();
     }

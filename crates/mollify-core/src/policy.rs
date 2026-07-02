@@ -40,14 +40,7 @@ pub fn analyze(graph: &ModuleGraph, policies: &[Policy]) -> Vec<Finding> {
                     if matches_prefix(&imp.module, banned) {
                         let what = format!("import of `{}`", imp.module);
                         let occurrence = occ.next(&format!("{}\u{1f}{what}", pol.id));
-                        findings.push(violation(
-                            pol,
-                            m,
-                            imp.line,
-                            &what,
-                            banned,
-                            &occurrence,
-                        ));
+                        findings.push(violation(pol, m, imp.line, &what, banned, &occurrence));
                     }
                 }
             }
@@ -56,14 +49,7 @@ pub fn analyze(graph: &ModuleGraph, policies: &[Policy]) -> Vec<Finding> {
                     if matches_prefix(&call.callee, banned) {
                         let what = format!("call to `{}`", call.callee);
                         let occurrence = occ.next(&format!("{}\u{1f}{what}", pol.id));
-                        findings.push(violation(
-                            pol,
-                            m,
-                            call.line,
-                            &what,
-                            banned,
-                            &occurrence,
-                        ));
+                        findings.push(violation(pol, m, call.line, &what, banned, &occurrence));
                     }
                 }
             }

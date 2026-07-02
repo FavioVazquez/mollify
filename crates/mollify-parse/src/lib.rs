@@ -703,9 +703,8 @@ fn is_main_guard(test: &Expr) -> bool {
         return false;
     }
     let is_name = |e: &Expr| matches!(e, Expr::Name(n) if n.id.as_str() == "__name__");
-    let is_main_str = |e: &Expr| {
-        matches!(e, Expr::StringLiteral(s) if s.value.to_str() == "__main__")
-    };
+    let is_main_str =
+        |e: &Expr| matches!(e, Expr::StringLiteral(s) if s.value.to_str() == "__main__");
     (is_name(&c.left) && is_main_str(&c.comparators[0]))
         || (is_main_str(&c.left) && is_name(&c.comparators[0]))
 }
@@ -725,8 +724,7 @@ fn is_type_checking_guard(test: &Expr) -> bool {
 /// is the type-only side.
 fn is_not_type_checking_guard(test: &Expr) -> bool {
     if let Expr::UnaryOp(u) = test {
-        return matches!(u.op, ruff_python_ast::UnaryOp::Not)
-            && is_type_checking_guard(&u.operand);
+        return matches!(u.op, ruff_python_ast::UnaryOp::Not) && is_type_checking_guard(&u.operand);
     }
     false
 }
@@ -2464,18 +2462,29 @@ mod tests {
     fn type_checking_guard_is_exact() {
         let fp = parse("if MY_TYPE_CHECKING_OVERRIDE:\n    from x import y\n");
         assert!(
-            !fp.imports.iter().find(|i| i.module == "x").unwrap().type_checking_only,
+            !fp.imports
+                .iter()
+                .find(|i| i.module == "x")
+                .unwrap()
+                .type_checking_only,
             "substring match must not treat this as a guard"
         );
         let ok = parse("import typing\nif typing.TYPE_CHECKING:\n    from x import y\n");
-        assert!(ok.imports.iter().find(|i| i.module == "x").unwrap().type_checking_only);
+        assert!(
+            ok.imports
+                .iter()
+                .find(|i| i.module == "x")
+                .unwrap()
+                .type_checking_only
+        );
     }
 
     #[test]
     fn comprehension_targets_are_not_function_locals() {
         // Python 3 comprehensions have their own scope: `item` here does not
         // shadow the module-level binding for the trailing `return item`.
-        let m = parse("item = 1\ndef f(items):\n    xs = [item for item in items]\n    return item\n");
+        let m =
+            parse("item = 1\ndef f(items):\n    xs = [item for item in items]\n    return item\n");
         assert!(
             m.module_used.iter().any(|s| s == "item"),
             "{:?}",
@@ -2510,7 +2519,11 @@ mod tests {
         assert_eq!(d.end_line, 5, "end_line keeps the full range");
         let f = m.functions.iter().find(|f| f.name == "view").unwrap();
         assert_eq!(f.line, 4);
-        let leak = m.type_leaks.iter().find(|l| l.type_name == "_Priv").unwrap();
+        let leak = m
+            .type_leaks
+            .iter()
+            .find(|l| l.type_name == "_Priv")
+            .unwrap();
         assert_eq!(leak.line, 4);
         let m2 = parse("@decorate\nclass C:\n    @property\n    def p(self):\n        return 1\n");
         let c = m2.classes.iter().find(|c| c.name == "C").unwrap();
@@ -2544,7 +2557,11 @@ mod tests {
             Some(vec!["a".into(), "b".into()])
         );
         let m = parse("x = 1  # mollify: ignore[dead-code] -- reason\n");
-        assert!(m.ignores.contains(&(1, "dead-code".into())), "{:?}", m.ignores);
+        assert!(
+            m.ignores.contains(&(1, "dead-code".into())),
+            "{:?}",
+            m.ignores
+        );
     }
 
     #[test]

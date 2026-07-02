@@ -9,8 +9,8 @@
 use camino::Utf8Path;
 use mollify_graph::{discover_python_files_with, ModuleGraph};
 use mollify_types::{
-    sort_findings, AuditReport, Category, Confidence, Finding, FindingsReport, Severity,
-    Summary, SCHEMA_VERSION,
+    sort_findings, AuditReport, Category, Confidence, Finding, FindingsReport, Severity, Summary,
+    SCHEMA_VERSION,
 };
 
 pub mod agents;
@@ -319,7 +319,10 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
             )
         };
         findings.push(Finding {
-            fingerprint: fingerprint::fingerprint(rule, &[path.as_str(), &s.name, &occ.next(&s.name)]),
+            fingerprint: fingerprint::fingerprint(
+                rule,
+                &[path.as_str(), &s.name, &occ.next(&s.name)],
+            ),
             rule: rule.into(),
             category: Category::DeadCode,
             severity: Severity::Warn,

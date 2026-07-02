@@ -213,7 +213,9 @@ pub fn path_is_changed(
     // `myapp.py`).
     if let Some(name) = finding_path.file_name() {
         let suffix = format!("/{name}");
-        return changed.iter().any(|c| c.as_str() == name || c.ends_with(&suffix));
+        return changed
+            .iter()
+            .any(|c| c.as_str() == name || c.ends_with(&suffix));
     }
     false
 }

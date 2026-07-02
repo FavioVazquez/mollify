@@ -63,10 +63,7 @@ fn doc_text(msg: &Value) -> Option<String> {
 
 /// The `textDocument.uri` of a request/notification's params.
 fn doc_uri(msg: &Value) -> Option<&str> {
-    msg.get("params")?
-        .get("textDocument")?
-        .get("uri")?
-        .as_str()
+    msg.get("params")?.get("textDocument")?.get("uri")?.as_str()
 }
 
 impl Server {
@@ -358,7 +355,10 @@ mod tests {
         let out = s.handle(&note);
         assert_eq!(out[0]["method"], "textDocument/publishDiagnostics");
         assert_eq!(out[0]["params"]["uri"], "file:///tmp/x.py");
-        assert!(out[0]["params"]["diagnostics"].as_array().unwrap().is_empty());
+        assert!(out[0]["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -395,9 +395,14 @@ mod tests {
     #[test]
     fn read_message_skips_malformed_headers_instead_of_eof() {
         let body = r#"{"jsonrpc":"2.0","id":1,"method":"shutdown"}"#;
-        let stream = format!("X-Broken-Header: yes\r\n\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let stream = format!(
+            "X-Broken-Header: yes\r\n\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
         let mut reader = std::io::BufReader::new(stream.as_bytes());
-        let msg = read_message(&mut reader).unwrap().expect("must survive the bad header block");
+        let msg = read_message(&mut reader)
+            .unwrap()
+            .expect("must survive the bad header block");
         assert_eq!(msg["method"], "shutdown");
         // The stream end is still a clean EOF.
         assert!(read_message(&mut reader).unwrap().is_none());

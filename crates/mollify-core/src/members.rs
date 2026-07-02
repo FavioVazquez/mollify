@@ -64,7 +64,15 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
             if c.is_enum {
                 enum_members(m, c, &attr_accessed, dynamic, &mut occ, &mut out);
             } else {
-                class_members(m, c, &attr_accessed, &referenced, dynamic, &mut occ, &mut out);
+                class_members(
+                    m,
+                    c,
+                    &attr_accessed,
+                    &referenced,
+                    dynamic,
+                    &mut occ,
+                    &mut out,
+                );
             }
         }
     }

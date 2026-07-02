@@ -227,8 +227,8 @@ pub fn specs_intersect(a: &str, b: &str) -> bool {
     for bnd in &bounds {
         candidates.push(bnd.clone());
         candidates.push(format!("{bnd}.1")); // strictly just above this boundary
-        // Even closer above: lands inside narrow gaps like (>2.0, <2.0.1),
-        // where `{bnd}.1` collides with the other spec's own boundary.
+                                             // Even closer above: lands inside narrow gaps like (>2.0, <2.0.1),
+                                             // where `{bnd}.1` collides with the other spec's own boundary.
         candidates.push(format!("{bnd}.0.1"));
         if let Some(inc) = incr_last(bnd) {
             candidates.push(inc);

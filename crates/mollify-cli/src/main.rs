@@ -1260,7 +1260,11 @@ mod tests {
     fn validate_root_rejects_files_and_accepts_dirs() {
         let dir = temp_project("root");
         assert_eq!(validate_root(&dir), None);
-        assert_eq!(validate_root(&dir.join("lib.py")), Some(2), "a file is not a root");
+        assert_eq!(
+            validate_root(&dir.join("lib.py")),
+            Some(2),
+            "a file is not a root"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1286,7 +1290,10 @@ mod tests {
         assert_eq!(run_audit(&s), 0);
         assert!(dir.join("baseline.json").exists());
         // Even with error findings, `--save-baseline` is documented exit 0.
-        assert_eq!(gated_exit(&s, 3, &BaselineOutcome::Saved(dir.join("baseline.json"))), 0);
+        assert_eq!(
+            gated_exit(&s, 3, &BaselineOutcome::Saved(dir.join("baseline.json"))),
+            0
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1318,7 +1325,10 @@ mod tests {
         };
         report.findings.clear(); // as --min-confidence / --baseline would
         rescore_audit(&mut report);
-        assert_eq!(report.quality_score, 100, "score must track emitted findings");
+        assert_eq!(
+            report.quality_score, 100,
+            "score must track emitted findings"
+        );
         assert_eq!(report.summary.total, 0);
     }
 
