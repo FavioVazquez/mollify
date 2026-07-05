@@ -780,7 +780,11 @@ def view():
             "blueprints.py",
             "from sansio import BlueprintSetupState as BlueprintSetupState\nfrom sansio import Blueprint as SansioBlueprint\n\nclass Blueprint(SansioBlueprint):\n    pass\n",
         );
-        write(&d, "sansio.py", "class Blueprint:\n    pass\n\nclass BlueprintSetupState:\n    pass\n");
+        write(
+            &d,
+            "sansio.py",
+            "class Blueprint:\n    pass\n\nclass BlueprintSetupState:\n    pass\n",
+        );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&g);
@@ -828,7 +832,11 @@ def view():
         let d = temp("consumer");
         write(&d, "__main__.py", "import user\n");
         write(&d, "compat.py", "import json\n");
-        write(&d, "user.py", "from compat import json\nprint(json.dumps({}))\n");
+        write(
+            &d,
+            "user.py",
+            "from compat import json\nprint(json.dumps({}))\n",
+        );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&g);

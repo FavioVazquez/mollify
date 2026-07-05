@@ -2648,17 +2648,9 @@ mod tests {
         assert_eq!(state.redundant, vec![true]);
         let aliased = m.imports.iter().find(|i| i.bindings == ["Sansio"]).unwrap();
         assert_eq!(aliased.redundant, vec![false]);
-        let probe = m
-            .imports
-            .iter()
-            .find(|i| i.module == "fast_json")
-            .unwrap();
+        let probe = m.imports.iter().find(|i| i.module == "fast_json").unwrap();
         assert!(probe.in_try, "try-body import not marked: {probe:?}");
-        let fallback = m
-            .imports
-            .iter()
-            .find(|i| i.module == "json")
-            .unwrap();
+        let fallback = m.imports.iter().find(|i| i.module == "json").unwrap();
         assert!(fallback.in_try, "except-handler import not marked");
         let plain = m.imports.iter().find(|i| i.module == "os").unwrap();
         assert!(!plain.in_try);
