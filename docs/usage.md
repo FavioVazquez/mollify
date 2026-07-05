@@ -66,6 +66,16 @@ and `--include <dir>` (repeatable) to scan a directory despite the builtin
 exclude list, `.mollifyrc.json`'s `exclude_dirs`, or `.gitignore` — see
 [configuration.md](configuration.md#exclude_dirs).
 
+Every `location.path` in a report is **relative to the analysis root**, no
+matter how `--path` was spelled — identical trees produce byte-identical
+reports across machines, and `.mollifyrc` path patterns and shared baselines
+match the same strings everywhere.
+
+Security candidates found in test, docs, or example trees are capped at
+`uncertain` confidence (and tagged in the reason): their risk model assumes
+production code, so they must not drown a report — filter them out entirely
+with `--min-confidence likely` if desired.
+
 ## Editor integration (LSP)
 
 `mollify lsp` runs a Language Server over stdio that publishes mollify diagnostics

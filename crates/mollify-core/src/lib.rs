@@ -65,13 +65,15 @@ pub fn build_graph_with_includes(root: &Utf8Path, includes: &[String]) -> Module
     graph
 }
 
-/// Sort, apply inline `# mollify: ignore[...]` suppressions and `.mollifyrc`
-/// (severity overrides + ignore), then summarize.
+/// Relativize, sort, apply inline `# mollify: ignore[...]` suppressions and
+/// `.mollifyrc` (severity overrides + ignore), then summarize.
 fn finalize(
+    root: &Utf8Path,
     cfg: &config::Config,
     graph: &ModuleGraph,
     mut findings: Vec<Finding>,
 ) -> FindingsReport {
+    relativize_paths(root, &mut findings);
     apply_suppressions(graph, &mut findings);
     config::apply(cfg, &mut findings);
     sort_findings(&mut findings);
@@ -82,15 +84,31 @@ fn finalize(
     }
 }
 
+/// Rewrite every `location.path` to be **relative to the analysis root**.
+/// Identical input must yield byte-identical output no matter how the root was
+/// spelled (`.` vs an absolute path) or where the checkout lives — and
+/// root-relative paths are what `.mollifyrc` patterns, baselines shared across
+/// machines, and CI diffs expect.
+fn relativize_paths(root: &Utf8Path, findings: &mut Vec<Finding>) {
+    for f in findings {
+        if let Ok(rel) = f.location.path.strip_prefix(root) {
+            if !rel.as_str().is_empty() {
+                f.location.path = rel.to_owned();
+            }
+        }
+    }
+}
+
 /// Drop findings silenced by an inline `# mollify: ignore[<rule>]` comment on
 /// the finding's line (or a bare `# mollify: ignore` matching any rule).
+/// Expects relativized findings (`location.path` keyed by module `rel`).
 pub fn apply_suppressions(graph: &ModuleGraph, findings: &mut Vec<Finding>) {
     use rustc_hash::FxHashMap;
     // (path, line) -> set of suppressed rules ("*" = all).
     let mut sup: FxHashMap<(&str, u32), Vec<&str>> = FxHashMap::default();
     for m in &graph.modules {
         for (line, rule) in &m.parsed.ignores {
-            sup.entry((m.path.as_str(), *line))
+            sup.entry((m.rel.as_str(), *line))
                 .or_default()
                 .push(rule.as_str());
         }
@@ -122,7 +140,7 @@ pub fn dead_code_report_with_includes(root: &Utf8Path, includes: &[String]) -> F
     );
     findings.extend(members::analyze(&graph));
     findings.extend(commented::analyze(&graph));
-    finalize(&config::load(root), &graph, findings)
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// `mollify deps` — dependency hygiene.
@@ -135,7 +153,7 @@ pub fn deps_report_with_includes(root: &Utf8Path, includes: &[String]) -> Findin
     let graph = build_graph_with_includes(root, includes);
     let mut findings = deps::analyze(root, &graph);
     findings.extend(deps::unresolved(&graph));
-    finalize(&config::load(root), &graph, findings)
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// `mollify arch` — circular dependencies (boundary presets later).
@@ -152,7 +170,7 @@ pub fn arch_report_with_includes(root: &Utf8Path, includes: &[String]) -> Findin
     findings.extend(arch::analyze_contracts(&graph, &cfg.contracts));
     findings.extend(arch::private_imports(&graph));
     findings.extend(policy::analyze(&graph, &cfg.policies));
-    finalize(&cfg, &graph, findings)
+    finalize(root, &cfg, &graph, findings)
 }
 
 /// `mollify complexity` / `mollify health` — complexity hotspots.
@@ -167,7 +185,7 @@ pub fn complexity_report_with_includes(root: &Utf8Path, includes: &[String]) -> 
     let mut findings = complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive);
     findings.extend(hotspots::analyze(root, &graph));
     findings.extend(cohesion::analyze(&graph));
-    finalize(&cfg, &graph, findings)
+    finalize(root, &cfg, &graph, findings)
 }
 
 /// `mollify dupes` — duplication / clone families.
@@ -180,7 +198,7 @@ pub fn dupes_report_with_includes(root: &Utf8Path, includes: &[String]) -> Findi
     let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
     let findings = dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines);
-    finalize(&cfg, &graph, findings)
+    finalize(root, &cfg, &graph, findings)
 }
 
 /// `mollify types` — type-annotation health + API-hygiene (private-type leaks).
@@ -193,7 +211,7 @@ pub fn types_report_with_includes(root: &Utf8Path, includes: &[String]) -> Findi
     let graph = build_graph_with_includes(root, includes);
     let mut findings = typehealth::analyze(&graph);
     findings.extend(apihygiene::analyze(&graph));
-    finalize(&config::load(root), &graph, findings)
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// `mollify security` — security candidates (deterministic; review before acting).
@@ -204,14 +222,19 @@ pub fn security_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`security_report`], honoring the CLI's `--include` override.
 pub fn security_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
-    finalize(&config::load(root), &graph, security::analyze(&graph))
+    finalize(
+        root,
+        &config::load(root),
+        &graph,
+        security::analyze(&graph, &paths::pytest_testpaths(root)),
+    )
 }
 
 /// `mollify coverage` — cold-path analysis from a coverage.py JSON report.
 pub fn coverage_report(root: &Utf8Path, coverage_path: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
     let findings = coverage::analyze(root, &graph, coverage_path);
-    finalize(&config::load(root), &graph, findings)
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// `mollify supply-chain` — match pinned/locked dependency versions against a
@@ -230,7 +253,7 @@ pub fn supply_chain_report_with(
 ) -> FindingsReport {
     let graph = build_graph(root);
     let findings = supplychain::analyze(root, advisories);
-    finalize(&config::load(root), &graph, findings)
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// The default advisory DB path checked by `audit` when present.
@@ -417,7 +440,7 @@ pub fn list_topology(root: &Utf8Path, kind: &str) -> Vec<String> {
         "files" => graph
             .modules
             .iter()
-            .map(|m| format!("{}\t{}", m.dotted, m.path))
+            .map(|m| format!("{}\t{}", m.dotted, m.rel))
             .collect(),
         "frameworks" => {
             let mut fw: std::collections::BTreeSet<String> = Default::default();
@@ -436,7 +459,7 @@ pub fn list_topology(root: &Utf8Path, kind: &str) -> Vec<String> {
             .modules
             .iter()
             .filter(|m| m.is_entry)
-            .map(|m| format!("{}\t{}", m.dotted, m.path))
+            .map(|m| format!("{}\t{}", m.dotted, m.rel))
             .collect(),
     };
     rows.sort();
@@ -480,7 +503,7 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
     ));
     findings.extend(typehealth::analyze(&graph));
     findings.extend(apihygiene::analyze(&graph));
-    findings.extend(security::analyze(&graph));
+    findings.extend(security::analyze(&graph, &paths::pytest_testpaths(root)));
     findings.extend(hotspots::analyze(root, &graph));
     findings.extend(cohesion::analyze(&graph));
     // Supply-chain runs only when a local advisory DB is present (keeps audit
@@ -489,6 +512,7 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
     if let Some(advisories) = supplychain::load_db(&db_path) {
         findings.extend(supplychain::analyze(root, &advisories));
     }
+    relativize_paths(root, &mut findings);
     apply_suppressions(&graph, &mut findings);
     config::apply(&cfg, &mut findings);
     sort_findings(&mut findings);
@@ -548,6 +572,84 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         Utf8PathBuf::from_path_buf(base).unwrap()
+    }
+
+    #[test]
+    fn noqa_suppresses_unused_import_end_to_end() {
+        // The WSGI entry-point idiom from flask's test apps: the import is the
+        // module's entire purpose and the author already said so with noqa.
+        let d = temp("noqa");
+        std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
+        std::fs::write(d.join("hello.py"), "app = object()\n").unwrap();
+        std::fs::write(d.join("wsgi.py"), "from hello import app  # noqa: F401\n").unwrap();
+        let r = dead_code_report(&d);
+        assert!(
+            !r.findings
+                .iter()
+                .any(|f| f.rule == "unused-import" && f.location.path.as_str().contains("wsgi")),
+            "noqa'd import leaked: {:?}",
+            r.findings
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn report_paths_are_root_relative_regardless_of_root_spelling() {
+        // Identical input must yield byte-identical output whether the root
+        // was `.`, `sub/dir`, or absolute — so location paths must never echo
+        // the caller's spelling, and machine-specific prefixes must not leak.
+        let d = temp("relpath");
+        std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
+        std::fs::write(d.join("lib.py"), "import os\n").unwrap();
+        let abs = dead_code_report(&d);
+        let f = abs
+            .findings
+            .iter()
+            .find(|f| f.rule == "unused-import")
+            .expect("unused-import finding");
+        assert_eq!(f.location.path.as_str(), "lib.py", "got {:?}", f.location);
+        // Same tree via a different spelling of the root (`…/x/.`): the
+        // serialized findings must be identical byte for byte.
+        let respelled = dead_code_report(&d.join("."));
+        assert_eq!(
+            serde_json::to_string(&abs.findings).unwrap(),
+            serde_json::to_string(&respelled.findings).unwrap(),
+            "root spelling changed the output"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn security_confidence_capped_in_dev_trees() {
+        let d = temp("devtree");
+        std::fs::create_dir_all(d.join("src")).unwrap();
+        std::fs::create_dir_all(d.join("tests")).unwrap();
+        std::fs::write(d.join("src/app.py"), "import requests\nrequests.get(url)\n").unwrap();
+        std::fs::write(
+            d.join("tests/test_app.py"),
+            "import subprocess\nsubprocess.run(c, shell=True)\n",
+        )
+        .unwrap();
+        let r = security_report(&d);
+        let test_hit = r
+            .findings
+            .iter()
+            .find(|f| f.location.path.as_str().starts_with("tests/"))
+            .expect("test-tree security candidate");
+        assert_eq!(test_hit.confidence, Confidence::Uncertain);
+        assert!(
+            test_hit.reason.contains("test/docs/example code"),
+            "reason not tagged: {}",
+            test_hit.reason
+        );
+        // Production hits keep their per-rule confidence (shell=True → Likely).
+        let src_hit = r
+            .findings
+            .iter()
+            .find(|f| f.location.path.as_str().starts_with("src/"))
+            .expect("src security candidate");
+        assert!(!src_hit.reason.contains("test/docs/example"));
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

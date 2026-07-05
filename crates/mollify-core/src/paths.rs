@@ -26,6 +26,21 @@ pub fn is_test_module(path: &Utf8Path, test_dirs: &[String]) -> bool {
     })
 }
 
+/// True if a module lives in a non-production tree: test code (per
+/// [`is_test_module`]) or documentation/example/benchmark directories. Used to
+/// down-weight findings whose risk model assumes production code — a missing
+/// request timeout in a test or a doc snippet is evidence of a very different
+/// weight than one on a serving path.
+pub fn is_dev_tree(path: &Utf8Path, test_dirs: &[String]) -> bool {
+    if is_test_module(path, test_dirs) {
+        return true;
+    }
+    let p = path.as_str();
+    ["docs", "doc", "examples", "example", "benchmarks"]
+        .iter()
+        .any(|d| p.starts_with(&format!("{d}/")) || p.contains(&format!("/{d}/")))
+}
+
 /// True if a top-level name is a pytest collection root: a `test_*` function or
 /// a `Test*` class. Such symbols are invoked by the test runner, not by in-repo
 /// callers, so they must not be reported as `unused-export` inside test modules.

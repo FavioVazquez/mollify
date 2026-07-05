@@ -574,6 +574,17 @@ impl ModuleGraph {
             .any(|(_, b)| *b == module)
     }
 
+    /// True if any other module imports `name` **from** `module` (`from m
+    /// import name`, or `from m import *`). This is the re-export consumer
+    /// signal: an import binding with zero in-module uses is still live when a
+    /// downstream module pulls it out of this one (compat/shim modules,
+    /// package `__init__` surfaces).
+    pub fn name_imported_by_others(&self, module: FileId, name: &str) -> bool {
+        self.imported_symbols
+            .get(&module)
+            .is_some_and(|s| s.contains(name) || s.contains("*"))
+    }
+
     /// Whether a symbol defined in `module` is referenced internally or by any
     /// importer of that module. `defs_named` is how many top-level defs share
     /// the name (to discount the definition site in the internal count).

@@ -219,3 +219,8 @@ the line, e.g.:
 def legacy_entrypoint():  # mollify: ignore[unused-export]
     ...
 ```
+
+Existing flake8-style `# noqa` comments are honored for the rules they map to:
+a blanket `# noqa` (or `# noqa: F401`) silences `unused-import` on that line,
+and `# noqa: F841` silences `unused-variable`. Other flake8 codes belong to
+other tools and are not interpreted.

@@ -32,7 +32,8 @@ pub fn plan(root: &Utf8Path) -> Vec<FixEdit> {
         .map(|f| FixEdit {
             start_line: f.location.line,
             end_line: f.location.end_line.unwrap_or(f.location.line),
-            path: f.location.path,
+            // Report paths are root-relative; edits need the on-disk path.
+            path: root.join(&f.location.path),
             description: f
                 .actions
                 .into_iter()

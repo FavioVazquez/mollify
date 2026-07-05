@@ -6,6 +6,34 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+Calibration and portability fixes from the first real-world corpus evaluation
+(all engines run against pinned checkouts of requests, flask, rich,
+MediaCrawler, and MoneyPrinterTurbo; fingerprints are unaffected — baselines
+survive, though report *bytes* change where paths/confidences did).
+
+### Fixed
+- **`unused-import` no longer grades deliberate imports `certain` +
+  auto-fixable** — `mollify fix --apply` could previously delete them (found
+  live on flask). Now: redundant-alias re-exports (`import x as x`,
+  `from m import y as y` — PEP 484) and names another module imports *from*
+  the flagging module (compat/shim re-exports) are treated as used; imports
+  inside `try`/`except` (availability probes) and `__init__.py` re-exports cap
+  at `uncertain` and are never auto-fixed.
+- flake8-style **`# noqa` comments are honored** for the rules they map to:
+  blanket `# noqa` / `# noqa: F401` silences `unused-import` on that line,
+  `# noqa: F841` silences `unused-variable`. Other codes are not interpreted.
+- **`location.path` (and action descriptions) are now root-relative** in every
+  report: output no longer varies with how `--path` was spelled, absolute
+  machine-specific paths no longer leak into JSON/SARIF, and `.mollifyrc`
+  `ignore` patterns match the same strings on every machine.
+
+### Changed
+- **Security candidates in test/docs/example trees are capped at `uncertain`**
+  confidence and tagged in the reason. On the corpus, non-production code
+  dominated security output (116 of requests' 130 findings were
+  `request-without-timeout`, mostly in its own test suite); the candidates
+  remain in the report but no longer survive `--min-confidence likely`.
+
 ## 0.1.4 - 2026-07-02
 
 Fix release from a full-repository code review (`docs/code-review-2026-07-01.md`):

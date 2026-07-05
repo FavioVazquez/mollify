@@ -168,7 +168,11 @@ fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
 /// is `certain` + auto-fixable (the line can be deleted). A *partially*-unused
 /// `from x import a, b` (some names used) reports each unused name as `likely`
 /// (not auto-fixed — rewriting the line precisely is left to the human). Skips
-/// `import *`, `__init__.py` re-exports (downgraded), and dynamic-sink modules.
+/// `import *` and dynamic-sink modules. Deliberate-import idioms are honored:
+/// a redundant alias (`import x as x`, PEP 484 re-export) and a binding that
+/// another module imports *from* here (`from m import name`) count as used;
+/// `__init__.py` re-exports and try/except availability probes are downgraded
+/// to `uncertain` (never auto-fixed).
 fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
     for m in &graph.modules {
         let local: FxHashSet<&str> = m.parsed.local_uses.iter().map(|s| s.as_str()).collect();
@@ -193,19 +197,32 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
             if imp.module == "__future__" {
                 continue; // future imports have a compiler effect; never "unused"
             }
-            let is_used = |b: &String| {
-                local.contains(b.as_str()) || dunder_all.is_some_and(|all| all.contains(b))
+            let is_used = |i: usize, b: &String| {
+                local.contains(b.as_str())
+                    || dunder_all.is_some_and(|all| all.contains(b))
+                    // `import x as x` / `from m import y as y`: explicit re-export.
+                    || imp.redundant.get(i).copied().unwrap_or(false)
+                    // Another module does `from <here> import <b>` — the binding
+                    // is this module's export surface (compat/shim idiom).
+                    || graph.name_imported_by_others(m.id, b)
             };
-            let unused: Vec<&String> = imp.bindings.iter().filter(|b| !is_used(b)).collect();
+            let unused: Vec<&String> = imp
+                .bindings
+                .iter()
+                .enumerate()
+                .filter(|(i, b)| !is_used(*i, b))
+                .map(|(_, b)| b)
+                .collect();
             if unused.is_empty() {
                 continue;
             }
             let whole = unused.len() == imp.bindings.len();
             let rule = "unused-import";
             if whole {
-                // Entire statement unused → safe to delete the line.
+                // Entire statement unused → safe to delete the line, unless a
+                // deliberate-import idiom means deletion could change behavior.
                 let what = format!("`{}`", imp.bindings.join("`, `"));
-                let confidence = if is_init || m.parsed.has_dynamic_sink {
+                let confidence = if is_init || imp.in_try || m.parsed.has_dynamic_sink {
                     Confidence::Uncertain
                 } else {
                     Confidence::Certain
@@ -223,7 +240,13 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                     severity: Severity::Warn,
                     confidence,
                     attribution: None,
-                    reason: format!("import {what} is never used in this module"),
+                    reason: if imp.in_try {
+                        format!(
+                            "import {what} is never used in this module (inside try/except — may be an availability probe)"
+                        )
+                    } else {
+                        format!("import {what} is never used in this module")
+                    },
                     location: Location {
                         path: m.path.clone(),
                         line: imp.line,
@@ -241,7 +264,7 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                 // Some names still used: report each unused name (not auto-fixed,
                 // since rewriting a shared import line precisely is risky).
                 for (i, name) in imp.bindings.iter().enumerate() {
-                    if is_used(name) {
+                    if is_used(i, name) {
                         continue;
                     }
                     out.push(Finding {
@@ -314,7 +337,9 @@ fn unused_files(graph: &ModuleGraph, out: &mut Vec<Finding>) {
             },
             actions: vec![Action {
                 kind: "remove-file".into(),
-                description: format!("Delete unused module `{}`", m.path),
+                // `rel`, not `path`: descriptions are part of the output
+                // contract too, and must not echo the root's spelling.
+                description: format!("Delete unused module `{}`", m.rel),
                 auto_fixable: false, // file deletion is never auto-applied
                 suppression_comment: Some("# mollify: ignore[unused-file]".into()),
             }],
@@ -740,6 +765,79 @@ def view():
         assert!(dict.is_some(), "got {f:?}");
         assert!(!dict.unwrap().actions[0].auto_fixable);
         assert!(!f.iter().any(|x| x.reason.contains("`List`")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn redundant_alias_is_an_explicit_reexport_never_flagged() {
+        // PEP 484 convention, distilled from flask/src/flask/blueprints.py:
+        // `from x import Y as Y` declares a re-export; deleting it breaks the
+        // public API even with zero in-module uses.
+        let d = temp("xasx");
+        write(&d, "__main__.py", "import blueprints\n");
+        write(
+            &d,
+            "blueprints.py",
+            "from sansio import BlueprintSetupState as BlueprintSetupState\nfrom sansio import Blueprint as SansioBlueprint\n\nclass Blueprint(SansioBlueprint):\n    pass\n",
+        );
+        write(&d, "sansio.py", "class Blueprint:\n    pass\n\nclass BlueprintSetupState:\n    pass\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-import" && x.reason.contains("BlueprintSetupState")),
+            "X-as-X re-export wrongly flagged: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn try_except_probe_import_is_never_certain() {
+        // Distilled from requests/tests/compat.py: both arms of an
+        // availability probe bind the name; removing either changes behavior.
+        let d = temp("tryimp");
+        write(&d, "__main__.py", "print('hi')\n");
+        write(
+            &d,
+            "compat.py",
+            "try:\n    import StringIO\nexcept ImportError:\n    import io as StringIO\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let imps: Vec<_> = f.iter().filter(|x| x.rule == "unused-import").collect();
+        for imp in &imps {
+            assert_ne!(
+                imp.confidence,
+                Confidence::Certain,
+                "try/except probe import graded certain: {imp:?}"
+            );
+            assert!(
+                !imp.actions[0].auto_fixable,
+                "try/except probe import auto-fixable: {imp:?}"
+            );
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn import_consumed_by_downstream_module_counts_as_used() {
+        // Distilled from requests: tests/compat.py binds a name only so that
+        // sibling modules can `from .compat import` it — a re-export shim.
+        let d = temp("consumer");
+        write(&d, "__main__.py", "import user\n");
+        write(&d, "compat.py", "import json\n");
+        write(&d, "user.py", "from compat import json\nprint(json.dumps({}))\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter().any(|x| {
+                x.rule == "unused-import" && x.location.path.as_str().ends_with("compat.py")
+            }),
+            "re-export shim import wrongly flagged: {f:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

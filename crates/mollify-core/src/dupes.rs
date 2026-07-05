@@ -152,7 +152,7 @@ pub fn analyze_with(graph: &ModuleGraph, min_tokens: usize, min_lines: u32) -> V
 
         let locs: Vec<String> = instances
             .iter()
-            .map(|(mi, s, _e)| format!("{}:{}", graph.modules[*mi].path, s))
+            .map(|(mi, s, _e)| format!("{}:{}", graph.modules[*mi].rel, s))
             .collect();
         let rule = "duplication";
         let (first_mi, first_s, first_e) = instances[0];

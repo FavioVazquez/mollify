@@ -13,8 +13,11 @@ pub fn text(rule: &str) -> Option<&'static str> {
         "unused-import" => {
             "An imported name that is never referenced outside its own import in \
             the module. Confidence: certain in a regular module with no dynamic \
-            sink (auto-fixable); uncertain in `__init__.py` (likely a re-export). \
-            `__future__` imports are never flagged (they have a compiler effect). \
+            sink (auto-fixable); uncertain in `__init__.py` (likely a re-export) \
+            and inside `try`/`except` (availability probe). Never flagged: \
+            `__future__` imports (compiler effect), redundant-alias re-exports \
+            (`import x as x`, PEP 484), names another module imports from here, \
+            and lines suppressed with `# noqa` / `# noqa: F401`. \
             Action: remove the import."
         }
         "unused-variable" => {
