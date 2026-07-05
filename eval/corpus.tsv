@@ -1,0 +1,26 @@
+# Mollify evaluation corpus — tab-separated: tier <TAB> name <TAB> clone URL.
+# Tiers (see eval/README.md):
+#   1 = small mature libraries (baseline: expect quiet, precise output)
+#   2 = medium mature, modern typing/packaging (stress types/dead-code on re-exports)
+#   3 = large mature applications (scale, dynamic-dispatch false-positive traps)
+#   4 = trending / less mature apps (where real dead code and duplication live)
+# Clones land in eval/corpus/<name> (gitignored). Commits are pinned in corpus.lock.
+1	requests	https://github.com/psf/requests.git
+1	click	https://github.com/pallets/click.git
+1	httpx	https://github.com/encode/httpx.git
+1	attrs	https://github.com/python-attrs/attrs.git
+2	flask	https://github.com/pallets/flask.git
+2	pydantic	https://github.com/pydantic/pydantic.git
+2	rich	https://github.com/Textualize/rich.git
+2	fastapi	https://github.com/fastapi/fastapi.git
+2	black	https://github.com/psf/black.git
+3	django	https://github.com/django/django.git
+3	pandas	https://github.com/pandas-dev/pandas.git
+3	airflow	https://github.com/apache/airflow.git
+3	home-assistant	https://github.com/home-assistant/core.git
+3	zulip	https://github.com/zulip/zulip.git
+4	moneyprinterturbo	https://github.com/harry0703/MoneyPrinterTurbo.git
+4	mediacrawler	https://github.com/NanmiCoder/MediaCrawler.git
+4	strix	https://github.com/usestrix/strix.git
+4	supervision	https://github.com/roboflow/supervision.git
+4	lmcache	https://github.com/LMCache/LMCache.git

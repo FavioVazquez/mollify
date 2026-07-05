@@ -24,3 +24,8 @@ __pycache__/
 # Local Testing
 /local_testing/
 /image_gen/
+
+# Evaluation corpus: cloned third-party repos and raw run outputs
+# (manifest, lock file, and curated report in eval/ ARE committed)
+/eval/corpus/
+/eval/results/
