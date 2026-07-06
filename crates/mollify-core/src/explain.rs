@@ -5,6 +5,13 @@
 /// Return the explanation for a rule id, or `None` if unknown.
 pub fn text(rule: &str) -> Option<&'static str> {
     let t = match rule {
+        "engine-panic" => {
+            "An analysis engine crashed while producing this report; its findings \
+            are missing. The rest of the report is complete and trustworthy — \
+            engines are isolated so one failure cannot corrupt the others' output. \
+            Confidence: certain (the crash observably happened). Action: file a \
+            bug with the reason text; nothing in your code needs to change."
+        }
         "unused-file" => {
             "A module that nothing reachable from an entry point imports. \
             Confidence: certain when there is no dynamic import sink in the project. \
@@ -242,6 +249,7 @@ pub fn text(rule: &str) -> Option<&'static str> {
 
 /// Every rule id mollify can emit, for `mollify explain` with no argument.
 pub const RULES: &[&str] = &[
+    "engine-panic",
     "unused-file",
     "unused-export",
     "unused-import",

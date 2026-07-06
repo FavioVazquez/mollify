@@ -18,3 +18,6 @@ def password_hash(p):           # weak hash (security)
     return hashlib.md5(p.encode()).hexdigest()
 
 
+
+if __name__ == "__main__":
+    main(100)

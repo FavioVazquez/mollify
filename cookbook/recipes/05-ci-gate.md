@@ -19,10 +19,10 @@ mollify audit --save-baseline .mollify/baseline.json
 
 ```text
 Mollify audit — .
-Quality score: 80/100
-21 finding(s) across 7 file(s) — 0 error, 21 warn
+Quality score: 84/100
+16 finding(s) across 7 file(s) — 0 error, 16 warn
   …
-mollify: wrote baseline with 21 fingerprint(s) to .mollify/baseline.json
+mollify: wrote baseline with 16 fingerprint(s) to .mollify/baseline.json
 ```
 
 **2. In CI, compare against it and fail on regressions:**
@@ -38,14 +38,14 @@ adds one dead function — here we append `def _brand_new_dead(): ...` and re-ru
 Mollify audit — .
 Quality score: 99/100
 1 finding(s) across 7 file(s) — 0 error, 1 warn
-  ./billing/app.py:21 [warn/certain] unused-export — function `_brand_new_dead` has no reachable references in the project  (unused-export:026db265e8eaea13)
+  billing/app.py:25 [warn/certain] unused-export — function `_brand_new_dead` has no reachable references in the project  (unused-export:026db265e8eaea13)
 ```
 
 ```bash
 echo $?    # → 1
 ```
 
-The other 21 findings are filtered out as known debt; CI flags **only the one
+The other 16 findings are filtered out as known debt; CI flags **only the one
 thing this PR introduced**, and exits non-zero. That's a review comment a
 developer will actually read.
 

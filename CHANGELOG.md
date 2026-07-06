@@ -19,6 +19,8 @@ survive, though report *bytes* change where paths/confidences did).
 - **Windows path hardening.** The test/dev/fixture path heuristics normalize
   `\` separators before matching, so they classify correctly on Windows
   paths instead of silently never matching.
+- **`mollify explain engine-panic`** documents the new engine-isolation
+  finding; `metrics` output paths are root-relative like every other report.
 - **Chaos + fuzz test suites.** A generated hostile-input corpus (deep
   nesting, NUL bytes, latin-1, BOM/CRLF, unterminated strings, symlink
   loops, unicode identifiers) that every engine must survive, plus

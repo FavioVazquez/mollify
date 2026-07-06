@@ -13,14 +13,14 @@ mollify metrics
 
 ```text
 Mollify metrics — .
-7 file(s), 42 LOC (33 SLOC), 6 function(s); mean MI 81.2
-  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  ./billing/__init__.py
-  [A] MI  57.9  cc(max  1, sum   3)  12 sloc  ./billing/app.py
-  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  ./billing/domain/__init__.py
-  [A] MI  77.1  cc(max  1, sum   1)  3 sloc  ./billing/domain/money.py
-  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  ./billing/services/__init__.py
-  [A] MI  57.1  cc(max  7, sum   7)  12 sloc  ./billing/services/invoice.py
-  [A] MI  76.4  cc(max  1, sum   1)  3 sloc  ./billing/services/ledger.py
+7 file(s), 44 LOC (35 SLOC), 6 function(s); mean MI 80.9
+  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  billing/__init__.py
+  [A] MI  56.0  cc(max  1, sum   3)  14 sloc  billing/app.py
+  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  billing/domain/__init__.py
+  [A] MI  77.1  cc(max  1, sum   1)  3 sloc  billing/domain/money.py
+  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  billing/services/__init__.py
+  [A] MI  57.1  cc(max  7, sum   7)  12 sloc  billing/services/invoice.py
+  [A] MI  76.4  cc(max  1, sum   1)  3 sloc  billing/services/ledger.py
 ```
 
 **MI** is the Maintainability Index (0–100, higher is better); **cc** is
@@ -36,7 +36,7 @@ mollify complexity
 ```text
 Mollify complexity — .
 1 finding(s) across 7 file(s) — 0 error, 1 warn
-  ./billing/services/invoice.py:6 [warn/certain] high-complexity — function `create_invoice` is complex (cyclomatic 7, cognitive 21); thresholds 10/15  (high-complexity:1cbe4ffa6ee8ed1d)
+  billing/services/invoice.py:6 [warn/certain] high-complexity — function `create_invoice` is complex (cyclomatic 7, cognitive 21); thresholds 10/15  (high-complexity:1cbe4ffa6ee8ed1d)
 ```
 
 Mollify tracks **both** cyclomatic complexity (branch count) and **cognitive**

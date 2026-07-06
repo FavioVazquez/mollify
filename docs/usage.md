@@ -76,6 +76,15 @@ Security candidates found in test, docs, or example trees are capped at
 production code, so they must not drown a report — filter them out entirely
 with `--min-confidence likely` if desired.
 
+Engines are **isolated**: if one analysis engine crashes, the report still
+completes and carries a single `engine-panic` finding (severity `error`)
+naming the engine, instead of the whole run dying. See
+`mollify explain engine-panic`.
+
+Known limitation: source files that are not valid UTF-8 (e.g. latin-1 with a
+PEP 263 coding cookie) are currently skipped and do not appear in
+`files_analyzed`.
+
 ## Editor integration (LSP)
 
 `mollify lsp` runs a Language Server over stdio that publishes mollify diagnostics
