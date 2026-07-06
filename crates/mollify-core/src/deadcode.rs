@@ -809,6 +809,30 @@ def view():
     }
 
     #[test]
+    fn quoted_cast_type_argument_counts_as_use() {
+        // Distilled from lmcache: `cast("dict[int, Iface]", x)` uses `Iface`
+        // inside a string type expression; `fix --apply` deleting the import
+        // introduced real F821s there (caught by the apply-then-verify pass).
+        let d = temp("caststr");
+        write(&d, "__main__.py", "import lib\n");
+        write(
+            &d,
+            "lib.py",
+            "from typing import cast\nfrom iface import Iface\n\ndef f(x):\n    return cast(\"dict[int, Iface]\", x)\n",
+        );
+        write(&d, "iface.py", "class Iface:\n    pass\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-import" && x.reason.contains("Iface")),
+            "quoted cast type wrongly flagged: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
     fn redundant_alias_is_an_explicit_reexport_never_flagged() {
         // PEP 484 convention, distilled from flask/src/flask/blueprints.py:
         // `from x import Y as Y` declares a re-export; deleting it breaks the

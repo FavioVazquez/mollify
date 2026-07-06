@@ -1532,6 +1532,19 @@ impl<'a> Visitor<'a> for LocalUseVisitor {
                 self.uses.push(a.attr.as_str().to_string());
                 self.attrs.push(a.attr.as_str().to_string());
             }
+            // `cast("dict[int, Foo]", x)`: the string is a type expression
+            // referencing `Foo` — removing Foo's import breaks type checking.
+            // Found live on lmcache, where `fix --apply` introduced four F821s.
+            Expr::Call(c) => {
+                let is_cast = expr_path(&c.func)
+                    .map(|p| p == "cast" || p.ends_with(".cast"))
+                    .unwrap_or(false);
+                if is_cast {
+                    if let Some(first) = c.arguments.args.first() {
+                        collect_annotation_strings(first, &mut self.uses);
+                    }
+                }
+            }
             _ => {}
         }
         walk_expr(self, expr);

@@ -44,6 +44,11 @@ survive, though report *bytes* change where paths/confidences did).
   reachability alone is not enough) now cap `unused-import`/`unused-export`
   at `likely`; the file-level `unused-file` finding remains the actionable
   evidence.
+- **Names in quoted `cast()` type arguments count as uses.**
+  `cast("dict[int, Iface]", x)` references `Iface` in a string type
+  expression; `fix --apply` deleting that import introduced real undefined
+  names on lmcache — caught by the new apply-then-verify protocol (ruff
+  F821 before/after) and fixed like the TypeAlias case.
 - **Names in quoted `TypeAlias` values count as uses.**
   `_P: TypeAlias = 'partial[Any] | partialmethod[Any]'` (pydantic) no longer
   yields a certain + auto-fixable unused-import for `partial`/`partialmethod`
