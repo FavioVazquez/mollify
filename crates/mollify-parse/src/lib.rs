@@ -2625,6 +2625,33 @@ mod tests {
     }
 
     #[test]
+    fn comment_parsers_fuzz_no_panic() {
+        // Deterministic xorshift64 fuzz over the hand-written comment parsers
+        // (multi-byte chars land at arbitrary offsets — slicing must never
+        // panic on a char boundary).
+        let mut state = 0x0123_4567_89AB_CDEFu64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet: &[&str] = &[
+            "#", "n", "o", "q", "a", "N", "Q", "A", ":", ",", " ", "F", "4", "0", "1", "8",
+            "mollify", "ignore", "[", "]", "ß", "é", "—", "\t",
+        ];
+        for _ in 0..4000u32 {
+            let len = (next() % 40) as usize;
+            let mut s = String::from("#");
+            for _ in 0..len {
+                s.push_str(alphabet[(next() as usize) % alphabet.len()]);
+            }
+            let _ = parse_noqa_comment(&s);
+            let _ = parse_ignore_comment(&s);
+        }
+    }
+
+    #[test]
     fn noqa_comments_map_to_unused_binding_rules() {
         // Blanket noqa silences both unused-binding rules on that line.
         assert_eq!(

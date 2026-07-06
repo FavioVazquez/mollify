@@ -125,6 +125,57 @@ pub fn apply_suppressions(graph: &ModuleGraph, findings: &mut Vec<Finding>) {
     });
 }
 
+/// Run one engine with panic isolation: a bug in a single engine must degrade
+/// to an `engine-panic` finding, not kill the whole report. (A real blowup in
+/// the dupes engine previously took `audit` down with it on three corpus
+/// repos.) This catches panics only — resource exhaustion that ends in an OOM
+/// kill is a process-level signal nothing in-process can intercept.
+///
+/// The findings the engine produced before panicking are lost by design:
+/// partial engine output would silently change summary counts run-to-run.
+fn run_engine<F>(name: &str, category: Category, out: &mut Vec<Finding>, f: F)
+where
+    F: FnOnce() -> Vec<Finding>,
+{
+    // Engines only read the graph/config; nothing they touch is observable
+    // after a panic, so unwinding across them is safe to assert.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(findings) => out.extend(findings),
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".into());
+            out.push(Finding {
+                fingerprint: crate::fingerprint::fingerprint("engine-panic", &[name]),
+                rule: "engine-panic".into(),
+                category,
+                severity: Severity::Error,
+                confidence: Confidence::Certain,
+                attribution: None,
+                reason: format!(
+                    "the {name} engine panicked ({msg}); its findings are missing from this report — please file a bug"
+                ),
+                location: mollify_types::Location {
+                    path: ".".into(),
+                    line: 1,
+                    column: 0,
+                    end_line: None,
+                },
+                actions: vec![mollify_types::Action {
+                    kind: "report-bug".into(),
+                    description: format!(
+                        "Report the {name} engine panic to the mollify issue tracker"
+                    ),
+                    auto_fixable: false,
+                    suppression_comment: None,
+                }],
+            });
+        }
+    }
+}
+
 /// `mollify dead-code` — reachability-based unused files/symbols.
 pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
     dead_code_report_with_includes(root, &[])
@@ -133,13 +184,20 @@ pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`dead_code_report`], honoring the CLI's `--include` override.
 pub fn dead_code_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
-    let mut findings = deadcode::analyze_with(
-        &graph,
-        &paths::pytest_testpaths(root),
-        &deps::entry_point_symbols(root),
-    );
-    findings.extend(members::analyze(&graph));
-    findings.extend(commented::analyze(&graph));
+    let mut findings = Vec::new();
+    run_engine("dead-code", Category::DeadCode, &mut findings, || {
+        deadcode::analyze_with(
+            &graph,
+            &paths::pytest_testpaths(root),
+            &deps::entry_point_symbols(root),
+        )
+    });
+    run_engine("members", Category::DeadCode, &mut findings, || {
+        members::analyze(&graph)
+    });
+    run_engine("commented-code", Category::DeadCode, &mut findings, || {
+        commented::analyze(&graph)
+    });
     finalize(root, &config::load(root), &graph, findings)
 }
 
@@ -151,8 +209,16 @@ pub fn deps_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`deps_report`], honoring the CLI's `--include` override.
 pub fn deps_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
-    let mut findings = deps::analyze(root, &graph);
-    findings.extend(deps::unresolved(&graph));
+    let mut findings = Vec::new();
+    run_engine("deps", Category::DependencyHygiene, &mut findings, || {
+        deps::analyze(root, &graph)
+    });
+    run_engine(
+        "unresolved-imports",
+        Category::DependencyHygiene,
+        &mut findings,
+        || deps::unresolved(&graph),
+    );
     finalize(root, &config::load(root), &graph, findings)
 }
 
@@ -165,11 +231,17 @@ pub fn arch_report(root: &Utf8Path) -> FindingsReport {
 pub fn arch_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
-    let mut findings = arch::analyze(&graph);
-    findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
-    findings.extend(arch::analyze_contracts(&graph, &cfg.contracts));
-    findings.extend(arch::private_imports(&graph));
-    findings.extend(policy::analyze(&graph, &cfg.policies));
+    let mut findings = Vec::new();
+    run_engine("arch", Category::Architecture, &mut findings, || {
+        let mut f = arch::analyze(&graph);
+        f.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
+        f.extend(arch::analyze_contracts(&graph, &cfg.contracts));
+        f.extend(arch::private_imports(&graph));
+        f
+    });
+    run_engine("policy", Category::Architecture, &mut findings, || {
+        policy::analyze(&graph, &cfg.policies)
+    });
     finalize(root, &cfg, &graph, findings)
 }
 
@@ -182,9 +254,16 @@ pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
 pub fn complexity_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
-    let mut findings = complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive);
-    findings.extend(hotspots::analyze(root, &graph));
-    findings.extend(cohesion::analyze(&graph));
+    let mut findings = Vec::new();
+    run_engine("complexity", Category::Complexity, &mut findings, || {
+        complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive)
+    });
+    run_engine("hotspots", Category::Complexity, &mut findings, || {
+        hotspots::analyze(root, &graph)
+    });
+    run_engine("cohesion", Category::Complexity, &mut findings, || {
+        cohesion::analyze(&graph)
+    });
     finalize(root, &cfg, &graph, findings)
 }
 
@@ -197,7 +276,10 @@ pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
 pub fn dupes_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
-    let findings = dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines);
+    let mut findings = Vec::new();
+    run_engine("dupes", Category::Duplication, &mut findings, || {
+        dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines)
+    });
     finalize(root, &cfg, &graph, findings)
 }
 
@@ -209,8 +291,13 @@ pub fn types_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`types_report`], honoring the CLI's `--include` override.
 pub fn types_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
-    let mut findings = typehealth::analyze(&graph);
-    findings.extend(apihygiene::analyze(&graph));
+    let mut findings = Vec::new();
+    run_engine("type-health", Category::TypeHealth, &mut findings, || {
+        typehealth::analyze(&graph)
+    });
+    run_engine("api-hygiene", Category::TypeHealth, &mut findings, || {
+        apihygiene::analyze(&graph)
+    });
     finalize(root, &config::load(root), &graph, findings)
 }
 
@@ -222,12 +309,11 @@ pub fn security_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`security_report`], honoring the CLI's `--include` override.
 pub fn security_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
-    finalize(
-        root,
-        &config::load(root),
-        &graph,
-        security::analyze(&graph, &paths::pytest_testpaths(root)),
-    )
+    let mut findings = Vec::new();
+    run_engine("security", Category::Security, &mut findings, || {
+        security::analyze(&graph, &paths::pytest_testpaths(root))
+    });
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// `mollify coverage` — cold-path analysis from a coverage.py JSON report.
@@ -477,40 +563,65 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
     let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
     let mut findings: Vec<Finding> = Vec::new();
-    findings.extend(deadcode::analyze_with(
-        &graph,
-        &paths::pytest_testpaths(root),
-        &deps::entry_point_symbols(root),
-    ));
-    findings.extend(members::analyze(&graph));
-    findings.extend(commented::analyze(&graph));
-    findings.extend(deps::analyze(root, &graph));
-    findings.extend(deps::unresolved(&graph));
-    findings.extend(arch::analyze(&graph));
-    findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
-    findings.extend(arch::analyze_contracts(&graph, &cfg.contracts));
-    findings.extend(arch::private_imports(&graph));
-    findings.extend(policy::analyze(&graph, &cfg.policies));
-    findings.extend(complexity::analyze_with(
-        &graph,
-        cfg.max_cyclomatic,
-        cfg.max_cognitive,
-    ));
-    findings.extend(dupes::analyze_with(
-        &graph,
-        cfg.dup_min_tokens,
-        cfg.dup_min_lines,
-    ));
-    findings.extend(typehealth::analyze(&graph));
-    findings.extend(apihygiene::analyze(&graph));
-    findings.extend(security::analyze(&graph, &paths::pytest_testpaths(root)));
-    findings.extend(hotspots::analyze(root, &graph));
-    findings.extend(cohesion::analyze(&graph));
+    run_engine("dead-code", Category::DeadCode, &mut findings, || {
+        deadcode::analyze_with(
+            &graph,
+            &paths::pytest_testpaths(root),
+            &deps::entry_point_symbols(root),
+        )
+    });
+    run_engine("members", Category::DeadCode, &mut findings, || {
+        members::analyze(&graph)
+    });
+    run_engine("commented-code", Category::DeadCode, &mut findings, || {
+        commented::analyze(&graph)
+    });
+    run_engine("deps", Category::DependencyHygiene, &mut findings, || {
+        let mut f = deps::analyze(root, &graph);
+        f.extend(deps::unresolved(&graph));
+        f
+    });
+    run_engine("arch", Category::Architecture, &mut findings, || {
+        let mut f = arch::analyze(&graph);
+        f.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
+        f.extend(arch::analyze_contracts(&graph, &cfg.contracts));
+        f.extend(arch::private_imports(&graph));
+        f
+    });
+    run_engine("policy", Category::Architecture, &mut findings, || {
+        policy::analyze(&graph, &cfg.policies)
+    });
+    run_engine("complexity", Category::Complexity, &mut findings, || {
+        complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive)
+    });
+    run_engine("dupes", Category::Duplication, &mut findings, || {
+        dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines)
+    });
+    run_engine("type-health", Category::TypeHealth, &mut findings, || {
+        typehealth::analyze(&graph)
+    });
+    run_engine("api-hygiene", Category::TypeHealth, &mut findings, || {
+        apihygiene::analyze(&graph)
+    });
+    run_engine("security", Category::Security, &mut findings, || {
+        security::analyze(&graph, &paths::pytest_testpaths(root))
+    });
+    run_engine("hotspots", Category::Complexity, &mut findings, || {
+        hotspots::analyze(root, &graph)
+    });
+    run_engine("cohesion", Category::Complexity, &mut findings, || {
+        cohesion::analyze(&graph)
+    });
     // Supply-chain runs only when a local advisory DB is present (keeps audit
     // offline + deterministic; no implicit network).
     let db_path = root.join(DEFAULT_ADVISORY_DB);
     if let Some(advisories) = supplychain::load_db(&db_path) {
-        findings.extend(supplychain::analyze(root, &advisories));
+        run_engine(
+            "supply-chain",
+            Category::DependencyHygiene,
+            &mut findings,
+            || supplychain::analyze(root, &advisories),
+        );
     }
     relativize_paths(root, &mut findings);
     apply_suppressions(&graph, &mut findings);
@@ -572,6 +683,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         Utf8PathBuf::from_path_buf(base).unwrap()
+    }
+
+    #[test]
+    fn engine_panic_degrades_to_finding() {
+        // One sick engine must not kill the report: the dupes OOM previously
+        // took `audit` down with it on three corpus repos.
+        let mut findings = Vec::new();
+        run_engine("boom", Category::Duplication, &mut findings, || {
+            panic!("synthetic engine failure")
+        });
+        run_engine("fine", Category::DeadCode, &mut findings, Vec::new);
+        assert_eq!(findings.len(), 1, "got {findings:?}");
+        let f = &findings[0];
+        assert_eq!(f.rule, "engine-panic");
+        assert_eq!(f.severity, Severity::Error);
+        assert!(f.reason.contains("boom") && f.reason.contains("synthetic"));
     }
 
     #[test]

@@ -351,6 +351,68 @@ mod tests {
         Utf8PathBuf::from_path_buf(base).unwrap()
     }
 
+    /// xorshift64 — a tiny deterministic PRNG so the fuzz test is exactly
+    /// reproducible (no `Math.random`-style flakiness in CI).
+    fn xorshift(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+
+    #[test]
+    fn tokenizer_fuzz_no_panic_bounded_and_deterministic() {
+        // Weighted alphabet biased toward tokenizer edge cases: quotes,
+        // escapes, prefixes, comments, unicode identifiers, CR/LF.
+        let alphabet: &[&str] = &[
+            "a", "b", "_", "1", "0", "\"", "'", "\\", "#", "\n", "\r", " ", "\t", "(", ")", ".",
+            ",", "f", "r", "b", "=", "ß", "ü", "Ŀ", "—", "🎉", "\"\"\"", "'''",
+        ];
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        for case in 0..4000u32 {
+            let len = (xorshift(&mut state) % 120) as usize;
+            let mut src = String::new();
+            for _ in 0..len {
+                src.push_str(alphabet[(xorshift(&mut state) as usize) % alphabet.len()]);
+            }
+            let t1 = tokenize(&src);
+            // Progress bound: every token consumes at least one char, so a
+            // zero-advance loop (the D3 OOM) trips this immediately.
+            assert!(
+                t1.len() <= src.chars().count(),
+                "case {case}: runaway token stream ({} tokens) on {src:?}",
+                t1.len()
+            );
+            // Determinism: same input, same stream.
+            assert_eq!(
+                t1.len(),
+                tokenize(&src).len(),
+                "case {case}: nondeterministic on {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn consume_string_fuzz_always_progresses() {
+        let mut state = 0xDEAD_BEEF_CAFE_F00Du64;
+        let bytes: &[u8] = &[b'"', b'\'', b'\\', b'\n', b'a', 0xC3, 0x9F, b'#', b'\r'];
+        for case in 0..4000u32 {
+            let len = 1 + (xorshift(&mut state) % 60) as usize;
+            let mut b = vec![b'"']; // consume_string requires b[0] == quote
+            for _ in 0..len {
+                b.push(bytes[(xorshift(&mut state) as usize) % bytes.len()]);
+            }
+            let (consumed, _lines) = consume_string(&b, '"');
+            assert!(
+                consumed >= 1 && consumed <= b.len(),
+                "case {case}: consumed {consumed} of {} — caller would loop or overrun",
+                b.len()
+            );
+        }
+    }
+
     #[test]
     fn unicode_identifiers_tokenize_without_diverging() {
         // Distilled from attrs' unicode tests (`c.ß`, `clsname = "ü"`): a

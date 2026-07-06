@@ -11,6 +11,20 @@ Calibration and portability fixes from the first real-world corpus evaluation
 MediaCrawler, and MoneyPrinterTurbo; fingerprints are unaffected — baselines
 survive, though report *bytes* change where paths/confidences did).
 
+### Added
+- **Engine panic isolation.** Every report runs each engine under
+  `catch_unwind`; a panicking engine degrades to a single `engine-panic`
+  finding (severity `error`) instead of killing the whole report. Motivated
+  by the dupes OOM taking `audit` down with it on three corpus repos.
+- **Windows path hardening.** The test/dev/fixture path heuristics normalize
+  `\` separators before matching, so they classify correctly on Windows
+  paths instead of silently never matching.
+- **Chaos + fuzz test suites.** A generated hostile-input corpus (deep
+  nesting, NUL bytes, latin-1, BOM/CRLF, unterminated strings, symlink
+  loops, unicode identifiers) that every engine must survive, plus
+  deterministic xorshift fuzz tests over the hand-written tokenizer,
+  string consumer, and comment parsers.
+
 ### Fixed
 - **The dupes engine no longer OOMs on non-ASCII identifiers.** Its tokenizer
   walked bytes and re-interpreted UTF-8 lead bytes as chars; a Unicode
