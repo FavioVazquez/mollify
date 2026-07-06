@@ -36,8 +36,12 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "unused-parameter" => {
             "A function parameter never used in the body. Confidence: uncertain \
-            (it may satisfy an interface/override/callback signature). Action: \
-            remove it or prefix with `_`."
+            (it may satisfy an interface/override/callback signature). Interface-bound \
+            parameters are never flagged: dunder methods, `@abstractmethod`/`@overload`/\
+            `@override` methods, overrides of an in-project base-class method, methods \
+            of classes with external bases, and decorated top-level functions (their \
+            signature may be dictated by the framework). Action: remove it or prefix \
+            with `_`."
         }
         "unused-export" => {
             "A top-level function/class never referenced outside its own \
@@ -170,7 +174,11 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "untyped-function" | "untyped-public" => {
             "A public function with no parameter or \
-            return type annotations. Action: add type hints to harden the public surface."
+            return type annotations. When a top-level package is deliberately untyped \
+            (20+ eligible public functions, 60%+ of them untyped) the package gets one \
+            `likely` package-level finding and its per-function findings are demoted to \
+            `uncertain` — evidence preserved, default reports stay readable. Action: add \
+            type hints to harden the public surface."
         }
         "respect-policy" | "policy-violation" => {
             "A declarative `.mollifyrc` policy was \

@@ -12,6 +12,23 @@ MediaCrawler, and MoneyPrinterTurbo; fingerprints are unaffected — baselines
 survive, though report *bytes* change where paths/confidences did).
 
 ### Added
+- **`untyped-function` package rollup.** A top-level package where 60%+ of
+  20+ eligible public functions are untyped is *deliberately* untyped
+  (327 per-function findings on requests carry one bit of information).
+  Such a package now gets a single `likely` package-level finding anchored
+  on its `__init__.py`, and its per-function findings are demoted to
+  `uncertain` — evidence preserved, default reports stay readable. The
+  rollup fingerprint is keyed by package name, so it is stable as files
+  move within the package.
+- **`unused-parameter` interface-bound suppression.** Parameters whose
+  signature the author doesn't control are no longer flagged: dunder
+  methods (`__exit__` takes three arguments whether you use them or not),
+  `@abstractmethod`/`@overload`/`@override` methods, overrides of a method
+  an in-project base class declares, methods of classes with external
+  (unresolvable) bases, and decorated top-level functions (an
+  `@app.errorhandler` handler must accept the error argument). Found live
+  on flask, where 100 corpus `unused-parameter` hits were override or
+  callback signatures.
 - **Engine panic isolation.** Every report runs each engine under
   `catch_unwind`; a panicking engine degrades to a single `engine-panic`
   finding (severity `error`) instead of killing the whole report. Motivated
