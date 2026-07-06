@@ -22,4 +22,4 @@ camino.workspace = true
 anyhow.workspace = true
 # Live supply-chain advisory fetch (OSV). Kept out of mollify-core so the
 # analysis core stays pure/offline/deterministic; the CLI does the network I/O.
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3", features = ["json"] }
