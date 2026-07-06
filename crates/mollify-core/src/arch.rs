@@ -318,8 +318,16 @@ mod tests {
             1,
             "only the cross-package private import, got {f:?}"
         );
+        // Engine-level paths are as-spelled (relativization happens in
+        // finalize), so normalize separators for a Windows-safe assertion.
         assert!(
-            f[0].reason.contains("_secret") && f[0].location.path.as_str().contains("app/main.py")
+            f[0].reason.contains("_secret")
+                && f[0]
+                    .location
+                    .path
+                    .as_str()
+                    .replace('\\', "/")
+                    .contains("app/main.py")
         );
         std::fs::remove_dir_all(&d).ok();
     }

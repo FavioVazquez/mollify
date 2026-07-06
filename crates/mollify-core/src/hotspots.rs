@@ -22,12 +22,11 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     let mut scored: Vec<(f64, u32, u32, &str, &mollify_graph::ModuleInfo)> = Vec::new();
     for m in &graph.modules {
         let complexity: u32 = m.parsed.functions.iter().map(|f| f.cyclomatic).sum();
-        let rel = m
-            .path
-            .strip_prefix(root)
-            .unwrap_or(&m.path)
-            .as_str()
-            .trim_start_matches("./");
+        // `rel` is the identity spelling (`/`-separated) — the same shape as
+        // `git log --name-only` churn keys on every OS. Recomputing it from
+        // the as-spelled path broke the lookup on Windows (`\` vs `/`),
+        // silently disabling hotspot detection there.
+        let rel = m.rel.as_str().trim_start_matches("./");
         let c = churn
             .get(rel)
             .copied()

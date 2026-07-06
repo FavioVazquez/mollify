@@ -27,7 +27,12 @@ pub fn analyze(graph: &ModuleGraph, policies: &[Policy]) -> Vec<Finding> {
     }
     let mut findings = Vec::new();
     for m in &graph.modules {
-        let path = m.path.as_str();
+        // Scope-match against the identity spelling (`rel`: root-relative,
+        // `/`-separated), not the as-spelled path: `in_paths: ["domain/"]`
+        // must match `domain\core.py` on Windows, and must NOT match a
+        // directory named `domain/` sitting *above* the analysis root when
+        // `--path` is absolute.
+        let path = m.rel.as_str();
         // Occurrence over repeated identical violations in a module keeps
         // fingerprints line-independent yet unique.
         let mut occ = crate::fingerprint::Occurrences::default();
