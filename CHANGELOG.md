@@ -12,6 +12,28 @@ MediaCrawler, and MoneyPrinterTurbo; fingerprints are unaffected — baselines
 survive, though report *bytes* change where paths/confidences did).
 
 ### Fixed
+- **The dupes engine no longer OOMs on non-ASCII identifiers.** Its tokenizer
+  walked bytes and re-interpreted UTF-8 lead bytes as chars; a Unicode
+  identifier (`c.ß` — legal Python 3) made the identifier scanner consume
+  zero bytes and push empty tokens until the OOM killer fired (~16 GB).
+  Found live: attrs', black's, and django's unicode tests killed `dupes`
+  and `audit`. The tokenizer is now UTF-8-aware and keeps Unicode
+  identifiers intact.
+- **Nothing inside an unreachable module or a fixture/data tree is
+  `certain`/auto-fixable anymore.** A `.py` that nothing imports is often
+  tool fixture data — black's formatter test cases and pydantic's mypy
+  golden inputs were full of technically-correct `certain` unused-imports
+  that `fix --apply` would have "fixed", corrupting both projects' test
+  suites. Unreachable modules and recognized fixture trees
+  (`data/`, `fixtures/`, `testdata/`, `golden/`, `snapshots/` path segments
+  — sample code with a `__main__` guard reads as an entry point, so
+  reachability alone is not enough) now cap `unused-import`/`unused-export`
+  at `likely`; the file-level `unused-file` finding remains the actionable
+  evidence.
+- **Names in quoted `TypeAlias` values count as uses.**
+  `_P: TypeAlias = 'partial[Any] | partialmethod[Any]'` (pydantic) no longer
+  yields a certain + auto-fixable unused-import for `partial`/`partialmethod`
+  — type checkers (and pydantic itself) evaluate that string.
 - **`unused-import` no longer grades deliberate imports `certain` +
   auto-fixable** — `mollify fix --apply` could previously delete them (found
   live on flask). Now: redundant-alias re-exports (`import x as x`,

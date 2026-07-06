@@ -1496,6 +1496,16 @@ impl<'a> Visitor<'a> for LocalUseVisitor {
         // String forward-ref annotations: extract identifier tokens.
         if let Stmt::AnnAssign(a) = stmt {
             collect_annotation_strings(&a.annotation, &mut self.uses);
+            // A quoted TypeAlias *value* is type syntax too:
+            // `_P: TypeAlias = 'partial[Any] | partialmethod[Any]'` uses
+            // `partial`/`partialmethod` (type checkers — and pydantic at
+            // runtime — evaluate the string). Found live on pydantic, where
+            // the import was wrongly certain + auto-fixable.
+            if is_type_alias_annotation(&a.annotation) {
+                if let Some(v) = &a.value {
+                    collect_annotation_strings(v, &mut self.uses);
+                }
+            }
         }
         if let Stmt::FunctionDef(f) = stmt {
             if let Some(r) = &f.returns {
@@ -1526,6 +1536,14 @@ impl<'a> Visitor<'a> for LocalUseVisitor {
         }
         walk_expr(self, expr);
     }
+}
+
+/// `TypeAlias` / `typing.TypeAlias` / `typing_extensions.TypeAlias` as an
+/// AnnAssign annotation — marks the assigned value as type syntax.
+fn is_type_alias_annotation(e: &Expr) -> bool {
+    expr_path(e)
+        .map(|p| p == "TypeAlias" || p.ends_with(".TypeAlias"))
+        .unwrap_or(false)
 }
 
 /// Pull identifier-like tokens out of any string literal inside an annotation

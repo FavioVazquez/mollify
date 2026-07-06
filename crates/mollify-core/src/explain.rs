@@ -12,12 +12,14 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "unused-import" => {
             "An imported name that is never referenced outside its own import in \
-            the module. Confidence: certain in a regular module with no dynamic \
-            sink (auto-fixable); uncertain in `__init__.py` (likely a re-export) \
-            and inside `try`/`except` (availability probe). Never flagged: \
-            `__future__` imports (compiler effect), redundant-alias re-exports \
-            (`import x as x`, PEP 484), names another module imports from here, \
-            and lines suppressed with `# noqa` / `# noqa: F401`. \
+            the module. Confidence: certain in a reachable module with no dynamic \
+            sink (auto-fixable); likely when the module itself is unreachable \
+            (often fixture/data files — never auto-edited); uncertain in \
+            `__init__.py` (likely a re-export) and inside `try`/`except` \
+            (availability probe). Never flagged: `__future__` imports (compiler \
+            effect), redundant-alias re-exports (`import x as x`, PEP 484), \
+            names another module imports from here, names in quoted TypeAlias \
+            values, and lines suppressed with `# noqa` / `# noqa: F401`. \
             Action: remove the import."
         }
         "unused-variable" => {
@@ -33,7 +35,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
         "unused-export" => {
             "A top-level function/class never referenced outside its own \
             module and not listed in `__all__`. Confidence: likely (dynamic access via \
-            getattr downgrades it). Reachability roots are exempt: framework-registered \
+            getattr downgrades it; private symbols are certain only in reachable \
+            modules — unreachable files are often fixture data and never \
+            auto-edited). Reachability roots are exempt: framework-registered \
             symbols, pytest `test_*`/`Test*` in test paths (honoring \
             `[tool.pytest.ini_options].testpaths`), and functions named by a \
             `[project.scripts]` entry point. Action: remove it or make it private."

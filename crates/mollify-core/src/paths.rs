@@ -41,6 +41,26 @@ pub fn is_dev_tree(path: &Utf8Path, test_dirs: &[String]) -> bool {
         .any(|d| p.starts_with(&format!("{d}/")) || p.contains(&format!("/{d}/")))
 }
 
+/// True if a module lives in a fixture/data tree — `.py` files that are tool
+/// *inputs* (formatter test cases, mypy golden files, snapshots), not code.
+/// Findings there are often technically correct but must never be auto-fixed:
+/// editing black's `tests/data/cases/*.py` "fixes" the fixtures and breaks the
+/// suite. Reachability alone can't catch these (sample code may contain a
+/// `__main__` guard, which reads as an entry point).
+pub fn is_fixture_tree(path: &Utf8Path) -> bool {
+    let p = path.as_str();
+    [
+        "data",
+        "fixtures",
+        "testdata",
+        "test_data",
+        "golden",
+        "snapshots",
+    ]
+    .iter()
+    .any(|d| p.starts_with(&format!("{d}/")) || p.contains(&format!("/{d}/")))
+}
+
 /// True if a top-level name is a pytest collection root: a `test_*` function or
 /// a `Test*` class. Such symbols are invoked by the test runner, not by in-repo
 /// callers, so they must not be reported as `unused-export` inside test modules.

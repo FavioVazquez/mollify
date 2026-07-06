@@ -221,9 +221,14 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
             if whole {
                 // Entire statement unused → safe to delete the line, unless a
                 // deliberate-import idiom means deletion could change behavior.
+                // Unreachable modules (often fixture/data files — black's
+                // formatter cases, pydantic's mypy golden inputs) are never
+                // certain: editing a file nothing imports can't be verified.
                 let what = format!("`{}`", imp.bindings.join("`, `"));
                 let confidence = if is_init || imp.in_try || m.parsed.has_dynamic_sink {
                     Confidence::Uncertain
+                } else if !graph.module_reachable(m.id) || crate::paths::is_fixture_tree(&m.rel) {
+                    Confidence::Likely
                 } else {
                     Confidence::Certain
                 };
@@ -405,9 +410,14 @@ fn unused_symbols(
             // Confidence tiering. A dynamic sink (getattr/eval/importlib)
             // anywhere in the project can reference this symbol across module
             // boundaries, so it caps confidence exactly as in `unused_files`.
+            // Unreachable modules are never certain (fixture/data hazard —
+            // see `unused_imports`).
             let confidence = if m.parsed.has_dynamic_sink || graph.global_dynamic {
                 Confidence::Uncertain
-            } else if d.private_by_convention {
+            } else if d.private_by_convention
+                && graph.module_reachable(m.id)
+                && !crate::paths::is_fixture_tree(&m.rel)
+            {
                 Confidence::Certain
             } else {
                 Confidence::Likely
@@ -578,8 +588,13 @@ mod tests {
     #[test]
     fn private_unused_is_certain_and_autofixable() {
         let d = temp("priv");
-        write(&d, "__main__.py", "print('hi')\n");
-        write(&d, "lib.py", "def _dead():\n    return 2\n");
+        // lib must be reachable: unreachable modules are fixture-hazard-capped.
+        write(&d, "__main__.py", "import lib\nlib.used()\n");
+        write(
+            &d,
+            "lib.py",
+            "def used():\n    return 1\n\ndef _dead():\n    return 2\n",
+        );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&g);
@@ -621,7 +636,9 @@ def view():
     #[test]
     fn flags_unused_import_and_respects_usage_and_aliases() {
         let d = temp("imp");
-        write(&d, "__main__.py", "print('hi')\n");
+        // lib must be reachable: unreachable modules are fixture-hazard-capped
+        // below certain (never auto-fixable).
+        write(&d, "__main__.py", "import lib\nlib.f(None)\n");
         write(
             &d,
             "lib.py",
@@ -765,6 +782,29 @@ def view():
         assert!(dict.is_some(), "got {f:?}");
         assert!(!dict.unwrap().actions[0].auto_fixable);
         assert!(!f.iter().any(|x| x.reason.contains("`List`")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn quoted_type_alias_value_counts_as_use() {
+        // Distilled from pydantic/functional_serializers.py: names inside a
+        // quoted TypeAlias value are type syntax evaluated by checkers (and
+        // by pydantic at runtime) — removing the import breaks them.
+        let d = temp("typealias");
+        write(&d, "__main__.py", "import lib\n");
+        write(
+            &d,
+            "lib.py",
+            "from functools import partial, partialmethod\nfrom typing import Any, TypeAlias\n\n_Partial: TypeAlias = 'partial[Any] | partialmethod[Any]'\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-import" && x.reason.contains("partial")),
+            "quoted TypeAlias use wrongly flagged: {f:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

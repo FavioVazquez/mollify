@@ -216,14 +216,20 @@ fn tokenize(src: &str) -> Vec<Tok> {
     let mut line = 1u32;
     let mut out = Vec::new();
     while i < b.len() {
-        let c = b[i] as char;
+        // Decode the real char: Python 3 identifiers may be non-ASCII (`ß`,
+        // `ü`), and reinterpreting a UTF-8 lead byte as a char both
+        // mis-classifies it and — if the scanner then advances by ASCII rules
+        // only — consumes zero bytes, looping forever. Found live: attrs',
+        // black's, and django's unicode-identifier tests OOM'd the engine.
+        let c = src[i..].chars().next().unwrap_or('\u{FFFD}');
+        let clen = c.len_utf8().max(1);
         if c == '\n' {
             line += 1;
             i += 1;
             continue;
         }
         if c.is_whitespace() {
-            i += 1;
+            i += clen;
             continue;
         }
         if c == '#' {
@@ -254,8 +260,14 @@ fn tokenize(src: &str) -> Vec<Tok> {
         }
         if c.is_alphabetic() || c == '_' {
             let start = i;
-            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
-                i += 1;
+            i += clen;
+            while i < b.len() {
+                let ch = src[i..].chars().next().unwrap_or('\u{FFFD}');
+                if ch.is_alphanumeric() || ch == '_' {
+                    i += ch.len_utf8();
+                } else {
+                    break;
+                }
             }
             // String prefix (r"...", f"..."): fold into a STR token.
             if i < b.len() && (b[i] == b'"' || b[i] == b'\'') {
@@ -279,7 +291,7 @@ fn tokenize(src: &str) -> Vec<Tok> {
             norm: c.to_string(),
             line,
         });
-        i += 1;
+        i += clen;
     }
     out
 }
@@ -337,6 +349,24 @@ mod tests {
             std::env::temp_dir().join(format!("mollify-core-dup-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         Utf8PathBuf::from_path_buf(base).unwrap()
+    }
+
+    #[test]
+    fn unicode_identifiers_tokenize_without_diverging() {
+        // Distilled from attrs' unicode tests (`c.ß`, `clsname = "ü"`): a
+        // non-ASCII identifier used to make the byte-walking tokenizer push
+        // empty tokens forever without advancing — OOM-killing the engine on
+        // attrs, black, and django. The stream must be finite and keep real
+        // identifiers intact.
+        let toks = tokenize("assert 1 == c.ß\nüname = Ŀ_2\nx — y\n");
+        assert!(toks.len() < 32, "runaway token stream: {}", toks.len());
+        let names: Vec<&str> = toks.iter().map(|t| t.norm.as_str()).collect();
+        assert!(names.contains(&"ß"), "got {names:?}");
+        assert!(names.contains(&"üname"), "got {names:?}");
+        assert!(names.contains(&"Ŀ_2"), "got {names:?}");
+        assert!(names.contains(&"—"), "got {names:?}");
+        // And line tracking survives multi-byte chars.
+        assert_eq!(toks.iter().map(|t| t.line).max(), Some(3));
     }
     fn write(dir: &Utf8Path, rel: &str, src: &str) {
         let p = dir.join(rel);

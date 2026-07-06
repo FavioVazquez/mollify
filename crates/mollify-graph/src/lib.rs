@@ -574,6 +574,17 @@ impl ModuleGraph {
             .any(|(_, b)| *b == module)
     }
 
+    /// Whether the module is an entry point or reachable from one. An
+    /// unreachable `.py` is often not code at all but tool fixture data
+    /// (formatter test cases, mypy golden inputs) — in-file edits there can't
+    /// be verified as behavior-preserving, so nothing inside one may be
+    /// graded certain/auto-fixable; the file-level `unused-file` finding is
+    /// the actionable evidence.
+    pub fn module_reachable(&self, id: FileId) -> bool {
+        let m = self.module(id);
+        m.is_entry || self.reachable.contains(&id)
+    }
+
     /// True if any other module imports `name` **from** `module` (`from m
     /// import name`, or `from m import *`). This is the re-export consumer
     /// signal: an import binding with zero in-module uses is still live when a
