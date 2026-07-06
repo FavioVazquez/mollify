@@ -156,12 +156,13 @@ fn refresh_bounded(path: PathBuf, cache: UpdateCache) {
 
 /// GET the PyPI JSON for `mollify` and return `info.version`. Tight timeouts.
 fn fetch_latest_version() -> Option<String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(1))
-        .timeout(Duration::from_secs(2))
-        .build();
-    let resp = agent.get(PYPI_JSON_URL).call().ok()?;
-    let json: serde_json::Value = resp.into_json().ok()?;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(1)))
+        .timeout_global(Some(Duration::from_secs(2)))
+        .build()
+        .into();
+    let mut resp = agent.get(PYPI_JSON_URL).call().ok()?;
+    let json: serde_json::Value = resp.body_mut().read_json().ok()?;
     json.get("info")?
         .get("version")?
         .as_str()

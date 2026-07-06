@@ -14,16 +14,16 @@ const OSV_QUERYBATCH: &str = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN: &str = "https://api.osv.dev/v1/vulns/";
 
 fn build_agent() -> ureq::Agent {
-    let mut b = ureq::AgentBuilder::new().timeout(Duration::from_secs(20));
+    let mut b = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20)));
     // Honor a corporate/CI proxy if one is configured.
     if let Ok(p) = std::env::var("HTTPS_PROXY").or_else(|_| std::env::var("https_proxy")) {
         if !p.is_empty() {
             if let Ok(proxy) = ureq::Proxy::new(&p) {
-                b = b.proxy(proxy);
+                b = b.proxy(Some(proxy));
             }
         }
     }
-    b.build()
+    b.build().into()
 }
 
 /// Query OSV for each distinct `(package, version)` pin and return advisories.
@@ -66,10 +66,10 @@ pub fn fetch_for_pins(pins: &[PinnedDep]) -> anyhow::Result<Vec<Advisory>> {
                 q
             })
             .collect();
-        let resp = agent
+        let mut resp = agent
             .post(OSV_QUERYBATCH)
             .send_json(serde_json::json!({ "queries": queries }))?;
-        let val: Value = resp.into_json()?;
+        let val: Value = resp.body_mut().read_json()?;
         pending = merge_batch_page(&pending, &val, &mut vuln_ids);
     }
 
@@ -141,10 +141,10 @@ fn merge_batch_page(
 /// Best-effort: returns empty strings on any failure.
 fn fetch_vuln_detail(agent: &ureq::Agent, id: &str) -> (String, Vec<String>) {
     let url = format!("{OSV_VULN}{id}");
-    let Ok(resp) = agent.get(&url).call() else {
+    let Ok(mut resp) = agent.get(&url).call() else {
         return (String::new(), Vec::new());
     };
-    let Ok(v) = resp.into_json::<Value>() else {
+    let Ok(v) = resp.body_mut().read_json::<Value>() else {
         return (String::new(), Vec::new());
     };
     let summary = v
