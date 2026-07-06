@@ -153,7 +153,7 @@ later offline runs. `mollify audit` never touches the network — it folds in
 supply-chain findings from the local DB only, when the file exists. Seed or
 regenerate the DB with `scripts/fetch-advisories.py` (OSV.dev / safety-db), and
 override its path with `mollify supply-chain --advisory-db <path>`. See
-`examples/advisories.sample.json`.
+`cookbook/advisories.sample.json`.
 
 ## `ignore`
 

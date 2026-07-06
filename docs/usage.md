@@ -144,7 +144,7 @@ advisory DB. Flags:
 
 The DB uses the `mollify-advisories/1` schema; regenerate/seed it with
 `scripts/fetch-advisories.py` (OSV.dev export, falling back to pyup safety-db).
-A small real-CVE sample lives at `examples/advisories.sample.json`.
+A small real-CVE sample lives at `cookbook/advisories.sample.json`.
 
 **`mollify audit` stays offline and deterministic** — it folds in supply-chain
 findings only from the local DB (`.mollify/advisories.json`) when present, never
@@ -163,6 +163,21 @@ The **quality score** (`mollify audit`) weights each finding's penalty by its
 confidence — `uncertain` candidates count least, `certain` most — so a report
 dominated by low-confidence review items isn't punished like one full of proven
 defects. The score is still deterministic.
+
+Some signals are calibrated rather than tiered:
+
+- **`unused-parameter` skips interface-bound signatures entirely** — dunder
+  methods, `@abstractmethod`/`@overload`/`@override` methods, overrides of an
+  in-project base-class method, methods of classes with external bases, and
+  decorated top-level functions (an `@app.errorhandler` handler must accept
+  the error argument).
+- **`untyped-function` rolls up deliberately-untyped packages** — when 60%+ of
+  20+ eligible public functions in a top-level package are untyped, the
+  package gets one `likely` package-level finding and its per-function
+  findings demote to `uncertain`.
+- **Security candidates in test/docs/example trees are capped at `uncertain`**
+  and tagged in the reason — a missing request timeout in a test carries a
+  different risk than one on a serving path.
 
 ## What counts as reachable
 
