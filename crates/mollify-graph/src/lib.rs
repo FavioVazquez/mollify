@@ -1161,7 +1161,8 @@ import b
         let files = discover_python_files(&d);
         let rel: Vec<String> = files
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
         std::fs::remove_dir_all(&d).ok();
@@ -1176,7 +1177,8 @@ import b
         let files = discover_python_files_excluding(&d, &["vendor".to_string()]);
         let rel: Vec<String> = files
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
         std::fs::remove_dir_all(&d).ok();
@@ -1196,7 +1198,8 @@ import b
         );
         let mut rel: Vec<String> = files
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         rel.sort();
         assert_eq!(
@@ -1222,7 +1225,8 @@ import b
         let plain = discover_python_files(&d);
         let plain_rel: Vec<String> = plain
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(
             plain_rel,
@@ -1234,7 +1238,8 @@ import b
         let files = discover_python_files_with(&d, &[], &["node_modules".to_string()]);
         let mut rel: Vec<String> = files
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         rel.sort();
         assert_eq!(
@@ -1260,7 +1265,8 @@ import b
         let files = discover_python_files_with(&d, &[], &["vendor".to_string()]);
         let rel: Vec<String> = files
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
         std::fs::remove_dir_all(&d).ok();
