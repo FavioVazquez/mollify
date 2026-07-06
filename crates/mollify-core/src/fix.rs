@@ -32,7 +32,8 @@ pub fn plan(root: &Utf8Path) -> Vec<FixEdit> {
         .map(|f| FixEdit {
             start_line: f.location.line,
             end_line: f.location.end_line.unwrap_or(f.location.line),
-            path: f.location.path,
+            // Report paths are root-relative; edits need the on-disk path.
+            path: root.join(&f.location.path),
             description: f
                 .actions
                 .into_iter()
@@ -116,8 +117,10 @@ mod tests {
     #[test]
     fn plan_targets_only_certain_unused() {
         let d = temp("plan");
-        std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
-        // _priv is private+unused => certain+autofixable; pub is likely (not in plan).
+        // lib must be reachable: unreachable modules are fixture-hazard-capped
+        // below certain and never enter the plan.
+        std::fs::write(d.join("__main__.py"), "import lib\nlib.pub()\n").unwrap();
+        // _priv is private+unused => certain+autofixable; pub is used.
         std::fs::write(
             d.join("lib.py"),
             "def _priv():\n    return 1\n\ndef pub():\n    return 2\n",
@@ -171,7 +174,7 @@ mod tests {
     #[test]
     fn apply_preserves_crlf_line_endings() {
         let d = temp("crlf");
-        std::fs::write(d.join("__main__.py"), "print('hi')\r\n").unwrap();
+        std::fs::write(d.join("__main__.py"), "import lib\r\nlib.keep()\r\n").unwrap();
         let lib = d.join("lib.py");
         std::fs::write(
             &lib,
@@ -216,7 +219,7 @@ mod tests {
     #[test]
     fn apply_removes_the_symbol() {
         let d = temp("apply");
-        std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
+        std::fs::write(d.join("__main__.py"), "import lib\nlib.keep()\n").unwrap();
         let lib = d.join("lib.py");
         std::fs::write(
             &lib,
@@ -229,6 +232,40 @@ mod tests {
         let after = std::fs::read_to_string(&lib).unwrap();
         assert!(!after.contains("_priv"), "after: {after:?}");
         assert!(after.contains("keep"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn unreachable_fixture_files_are_never_planned() {
+        // Distilled from black (tests/data formatter cases) and pydantic
+        // (tests/mypy golden inputs): a .py that nothing imports is often
+        // tool fixture data — auto-editing it corrupts the fixtures even
+        // though every finding in it is technically correct.
+        let d = temp("fixture");
+        std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
+        std::fs::create_dir_all(d.join("tests/data/cases")).unwrap();
+        std::fs::write(
+            d.join("tests/data/cases/collections.py"),
+            "import core\nimport time\n\ndef _case():\n    return 1\n",
+        )
+        .unwrap();
+        // Sample code inside a fixture may contain a `__main__` guard (black's
+        // comments5.py does), which reads as an entry point and defeats the
+        // reachability guard — the fixture-tree path check must still hold.
+        std::fs::write(
+            d.join("tests/data/cases/comments5.py"),
+            "import sys\n\nif __name__ == \"__main__\":\n    print('hi')\n",
+        )
+        .unwrap();
+        let report = dead_code_report(&d);
+        for f in report.findings.iter().filter(|f| {
+            f.location.path.as_str().starts_with("tests/data")
+                && (f.rule == "unused-import" || f.rule == "unused-export")
+        }) {
+            assert_ne!(f.confidence, Confidence::Certain, "fixture certain: {f:?}");
+            assert!(!f.actions[0].auto_fixable, "fixture auto-fixable: {f:?}");
+        }
+        assert!(plan(&d).is_empty(), "fixture edits planned: {:?}", plan(&d));
         std::fs::remove_dir_all(&d).ok();
     }
 }

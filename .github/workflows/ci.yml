@@ -19,7 +19,11 @@ env:
 jobs:
   test:
     name: build · test · clippy · fmt
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -33,7 +37,22 @@ jobs:
       - name: Test
         run: cargo test --all
       - name: Version consistency (workspace / crate deps)
+        shell: bash
         run: ./scripts/check-versions.sh
+      # The cross-platform report contract: identical trees must produce the
+      # identical fingerprint set with `/`-separated paths on every OS — this
+      # is what makes baselines portable between Linux CI and dev laptops.
+      - name: Cross-platform report contract (sample project)
+        shell: bash
+        run: |
+          cargo run -q -p mollify-cli -- audit --path cookbook/sample-project --format json > sample.json
+          if jq -r '.findings[].location.path' sample.json | grep -qF '\'; then
+            echo "::error::backslash leaked into location.path"; exit 1
+          fi
+          jq -r '.findings[].fingerprint' sample.json | sort > got.txt
+          diff -u cookbook/sample-project/expected-fingerprints.txt got.txt \
+            || { echo "::error::fingerprint set drifted from the golden list — if the change is intentional, regenerate cookbook/sample-project/expected-fingerprints.txt"; exit 1; }
+          echo "$(wc -l < got.txt) fingerprints match the golden set"
 
   self-audit:
     name: mollify audits a sample project (dogfood)

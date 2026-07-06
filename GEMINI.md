@@ -44,7 +44,7 @@ delete, or whether dependencies are unused/missing.
   `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`,
   `weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`,
   `flask-debug-true`, `jinja2-autoescape-false`, `try-except-pass`,
-  `vulnerable-dependency`, `policy-violation`, plus custom policy ids. Categories: `dead-code`,
+  `vulnerable-dependency`, `policy-violation`, `engine-panic` (an isolated engine crash; the rest of the report is complete), plus custom policy ids. Categories: `dead-code`,
   `dependency-hygiene`, `circular-dependency`, `complexity`, `architecture`,
   `duplication`, `type-health`, `security`.
 - Read the JSON envelope by its top-level `kind` (`audit` | `dead-code` | `deps` |

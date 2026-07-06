@@ -55,7 +55,7 @@ to target a subproject.
 `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`, `weak-hash`,
 `weak-cipher`, `insecure-random`, `request-without-timeout`,
 `flask-debug-true`, `jinja2-autoescape-false`, `try-except-pass`,
-`vulnerable-dependency`, plus custom policy ids from `.mollifyrc.json`
+`vulnerable-dependency`, `engine-panic`, plus custom policy ids from `.mollifyrc.json`
 `policies`. Categories: `dead-code`, `dependency-hygiene`, `circular-dependency`,
 `complexity`, `architecture`, `duplication`, `type-health`, `security`.
 

@@ -1,0 +1,4 @@
+# Analysis inputs must be byte-identical on every OS: a CRLF-rewritten
+# checkout would shift the sample project's content (and any content-derived
+# evidence) out from under the cross-platform golden-fingerprint contract in CI.
+*.py text eol=lf

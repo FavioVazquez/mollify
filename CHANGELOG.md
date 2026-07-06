@@ -6,6 +6,100 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+Calibration and portability fixes from the first real-world corpus evaluation
+(all engines run against pinned checkouts of requests, flask, rich,
+MediaCrawler, and MoneyPrinterTurbo; fingerprints are unaffected — baselines
+survive, though report *bytes* change where paths/confidences did).
+
+### Added
+- **`untyped-function` package rollup.** A top-level package where 60%+ of
+  20+ eligible public functions are untyped is *deliberately* untyped
+  (327 per-function findings on requests carry one bit of information).
+  Such a package now gets a single `likely` package-level finding anchored
+  on its `__init__.py`, and its per-function findings are demoted to
+  `uncertain` — evidence preserved, default reports stay readable. The
+  rollup fingerprint is keyed by package name, so it is stable as files
+  move within the package.
+- **`unused-parameter` interface-bound suppression.** Parameters whose
+  signature the author doesn't control are no longer flagged: dunder
+  methods (`__exit__` takes three arguments whether you use them or not),
+  `@abstractmethod`/`@overload`/`@override` methods, overrides of a method
+  an in-project base class declares, methods of classes with external
+  (unresolvable) bases, and decorated top-level functions (an
+  `@app.errorhandler` handler must accept the error argument). Found live
+  on flask, where 100 corpus `unused-parameter` hits were override or
+  callback signatures.
+- **Engine panic isolation.** Every report runs each engine under
+  `catch_unwind`; a panicking engine degrades to a single `engine-panic`
+  finding (severity `error`) instead of killing the whole report. Motivated
+  by the dupes OOM taking `audit` down with it on three corpus repos.
+- **Cross-platform path identity.** `rel`, dotted module names, and every
+  serialized `location.path` are normalized to `/` separators on all OSes at
+  construction time, so fingerprints and baselines saved on Linux CI match a
+  Windows checkout and `/`-style `.mollifyrc` patterns match everywhere; CI
+  now runs the test job on a Linux + Windows matrix and pins the sample
+  project's fingerprint set as a cross-OS golden contract.
+- **Windows path hardening.** The test/dev/fixture path heuristics normalize
+  `\` separators before matching, so they classify correctly on Windows
+  paths instead of silently never matching.
+- **`mollify explain engine-panic`** documents the new engine-isolation
+  finding; `metrics` output paths are root-relative like every other report.
+- **Chaos + fuzz test suites.** A generated hostile-input corpus (deep
+  nesting, NUL bytes, latin-1, BOM/CRLF, unterminated strings, symlink
+  loops, unicode identifiers) that every engine must survive, plus
+  deterministic xorshift fuzz tests over the hand-written tokenizer,
+  string consumer, and comment parsers.
+
+### Fixed
+- **The dupes engine no longer OOMs on non-ASCII identifiers.** Its tokenizer
+  walked bytes and re-interpreted UTF-8 lead bytes as chars; a Unicode
+  identifier (`c.ß` — legal Python 3) made the identifier scanner consume
+  zero bytes and push empty tokens until the OOM killer fired (~16 GB).
+  Found live: attrs', black's, and django's unicode tests killed `dupes`
+  and `audit`. The tokenizer is now UTF-8-aware and keeps Unicode
+  identifiers intact.
+- **Nothing inside an unreachable module or a fixture/data tree is
+  `certain`/auto-fixable anymore.** A `.py` that nothing imports is often
+  tool fixture data — black's formatter test cases and pydantic's mypy
+  golden inputs were full of technically-correct `certain` unused-imports
+  that `fix --apply` would have "fixed", corrupting both projects' test
+  suites. Unreachable modules and recognized fixture trees
+  (`data/`, `fixtures/`, `testdata/`, `golden/`, `snapshots/` path segments
+  — sample code with a `__main__` guard reads as an entry point, so
+  reachability alone is not enough) now cap `unused-import`/`unused-export`
+  at `likely`; the file-level `unused-file` finding remains the actionable
+  evidence.
+- **Names in quoted `cast()` type arguments count as uses.**
+  `cast("dict[int, Iface]", x)` references `Iface` in a string type
+  expression; `fix --apply` deleting that import introduced real undefined
+  names on lmcache — caught by the new apply-then-verify protocol (ruff
+  F821 before/after) and fixed like the TypeAlias case.
+- **Names in quoted `TypeAlias` values count as uses.**
+  `_P: TypeAlias = 'partial[Any] | partialmethod[Any]'` (pydantic) no longer
+  yields a certain + auto-fixable unused-import for `partial`/`partialmethod`
+  — type checkers (and pydantic itself) evaluate that string.
+- **`unused-import` no longer grades deliberate imports `certain` +
+  auto-fixable** — `mollify fix --apply` could previously delete them (found
+  live on flask). Now: redundant-alias re-exports (`import x as x`,
+  `from m import y as y` — PEP 484) and names another module imports *from*
+  the flagging module (compat/shim re-exports) are treated as used; imports
+  inside `try`/`except` (availability probes) and `__init__.py` re-exports cap
+  at `uncertain` and are never auto-fixed.
+- flake8-style **`# noqa` comments are honored** for the rules they map to:
+  blanket `# noqa` / `# noqa: F401` silences `unused-import` on that line,
+  `# noqa: F841` silences `unused-variable`. Other codes are not interpreted.
+- **`location.path` (and action descriptions) are now root-relative** in every
+  report: output no longer varies with how `--path` was spelled, absolute
+  machine-specific paths no longer leak into JSON/SARIF, and `.mollifyrc`
+  `ignore` patterns match the same strings on every machine.
+
+### Changed
+- **Security candidates in test/docs/example trees are capped at `uncertain`**
+  confidence and tagged in the reason. On the corpus, non-production code
+  dominated security output (116 of requests' 130 findings were
+  `request-without-timeout`, mostly in its own test suite); the candidates
+  remain in the report but no longer survive `--min-confidence likely`.
+
 ## 0.1.4 - 2026-07-02
 
 Fix release from a full-repository code review (`docs/code-review-2026-07-01.md`):

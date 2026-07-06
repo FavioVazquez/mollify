@@ -152,7 +152,7 @@ pub fn analyze_with(graph: &ModuleGraph, min_tokens: usize, min_lines: u32) -> V
 
         let locs: Vec<String> = instances
             .iter()
-            .map(|(mi, s, _e)| format!("{}:{}", graph.modules[*mi].path, s))
+            .map(|(mi, s, _e)| format!("{}:{}", graph.modules[*mi].rel, s))
             .collect();
         let rule = "duplication";
         let (first_mi, first_s, first_e) = instances[0];
@@ -216,14 +216,20 @@ fn tokenize(src: &str) -> Vec<Tok> {
     let mut line = 1u32;
     let mut out = Vec::new();
     while i < b.len() {
-        let c = b[i] as char;
+        // Decode the real char: Python 3 identifiers may be non-ASCII (`ß`,
+        // `ü`), and reinterpreting a UTF-8 lead byte as a char both
+        // mis-classifies it and — if the scanner then advances by ASCII rules
+        // only — consumes zero bytes, looping forever. Found live: attrs',
+        // black's, and django's unicode-identifier tests OOM'd the engine.
+        let c = src[i..].chars().next().unwrap_or('\u{FFFD}');
+        let clen = c.len_utf8().max(1);
         if c == '\n' {
             line += 1;
             i += 1;
             continue;
         }
         if c.is_whitespace() {
-            i += 1;
+            i += clen;
             continue;
         }
         if c == '#' {
@@ -254,8 +260,14 @@ fn tokenize(src: &str) -> Vec<Tok> {
         }
         if c.is_alphabetic() || c == '_' {
             let start = i;
-            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
-                i += 1;
+            i += clen;
+            while i < b.len() {
+                let ch = src[i..].chars().next().unwrap_or('\u{FFFD}');
+                if ch.is_alphanumeric() || ch == '_' {
+                    i += ch.len_utf8();
+                } else {
+                    break;
+                }
             }
             // String prefix (r"...", f"..."): fold into a STR token.
             if i < b.len() && (b[i] == b'"' || b[i] == b'\'') {
@@ -279,7 +291,7 @@ fn tokenize(src: &str) -> Vec<Tok> {
             norm: c.to_string(),
             line,
         });
-        i += 1;
+        i += clen;
     }
     out
 }
@@ -337,6 +349,86 @@ mod tests {
             std::env::temp_dir().join(format!("mollify-core-dup-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         Utf8PathBuf::from_path_buf(base).unwrap()
+    }
+
+    /// xorshift64 — a tiny deterministic PRNG so the fuzz test is exactly
+    /// reproducible (no `Math.random`-style flakiness in CI).
+    fn xorshift(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+
+    #[test]
+    fn tokenizer_fuzz_no_panic_bounded_and_deterministic() {
+        // Weighted alphabet biased toward tokenizer edge cases: quotes,
+        // escapes, prefixes, comments, unicode identifiers, CR/LF.
+        let alphabet: &[&str] = &[
+            "a", "b", "_", "1", "0", "\"", "'", "\\", "#", "\n", "\r", " ", "\t", "(", ")", ".",
+            ",", "f", "r", "b", "=", "ß", "ü", "Ŀ", "—", "🎉", "\"\"\"", "'''",
+        ];
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        for case in 0..4000u32 {
+            let len = (xorshift(&mut state) % 120) as usize;
+            let mut src = String::new();
+            for _ in 0..len {
+                src.push_str(alphabet[(xorshift(&mut state) as usize) % alphabet.len()]);
+            }
+            let t1 = tokenize(&src);
+            // Progress bound: every token consumes at least one char, so a
+            // zero-advance loop (the D3 OOM) trips this immediately.
+            assert!(
+                t1.len() <= src.chars().count(),
+                "case {case}: runaway token stream ({} tokens) on {src:?}",
+                t1.len()
+            );
+            // Determinism: same input, same stream.
+            assert_eq!(
+                t1.len(),
+                tokenize(&src).len(),
+                "case {case}: nondeterministic on {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn consume_string_fuzz_always_progresses() {
+        let mut state = 0xDEAD_BEEF_CAFE_F00Du64;
+        let bytes: &[u8] = &[b'"', b'\'', b'\\', b'\n', b'a', 0xC3, 0x9F, b'#', b'\r'];
+        for case in 0..4000u32 {
+            let len = 1 + (xorshift(&mut state) % 60) as usize;
+            let mut b = vec![b'"']; // consume_string requires b[0] == quote
+            for _ in 0..len {
+                b.push(bytes[(xorshift(&mut state) as usize) % bytes.len()]);
+            }
+            let (consumed, _lines) = consume_string(&b, '"');
+            assert!(
+                consumed >= 1 && consumed <= b.len(),
+                "case {case}: consumed {consumed} of {} — caller would loop or overrun",
+                b.len()
+            );
+        }
+    }
+
+    #[test]
+    fn unicode_identifiers_tokenize_without_diverging() {
+        // Distilled from attrs' unicode tests (`c.ß`, `clsname = "ü"`): a
+        // non-ASCII identifier used to make the byte-walking tokenizer push
+        // empty tokens forever without advancing — OOM-killing the engine on
+        // attrs, black, and django. The stream must be finite and keep real
+        // identifiers intact.
+        let toks = tokenize("assert 1 == c.ß\nüname = Ŀ_2\nx — y\n");
+        assert!(toks.len() < 32, "runaway token stream: {}", toks.len());
+        let names: Vec<&str> = toks.iter().map(|t| t.norm.as_str()).collect();
+        assert!(names.contains(&"ß"), "got {names:?}");
+        assert!(names.contains(&"üname"), "got {names:?}");
+        assert!(names.contains(&"Ŀ_2"), "got {names:?}");
+        assert!(names.contains(&"—"), "got {names:?}");
+        // And line tracking survives multi-byte chars.
+        assert_eq!(toks.iter().map(|t| t.line).max(), Some(3));
     }
     fn write(dir: &Utf8Path, rel: &str, src: &str) {
         let p = dir.join(rel);

@@ -33,7 +33,7 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 > [PyPI](https://pypi.org/project/mollify/) and
 > [crates.io](https://crates.io/crates/mollify-cli)** (see the badges above for
 > the current version). The core analysis phases are implemented, tested
-> (190+ tests), and dogfooded; CI + CodeQL are green. See [`docs/adr/`](docs/adr)
+> (210+ tests), and dogfooded; CI + CodeQL are green. See [`docs/adr/`](docs/adr)
 > for design decisions and *Engineering notes* below for how it works.
 
 ## Why Mollify
@@ -182,7 +182,7 @@ python3 scripts/fetch-advisories.py .mollify/advisories.json   # seed/refresh th
 
 | Tier | Meaning | Auto-fixable |
 |---|---|---|
-| `certain` | Provable (e.g. a private unused symbol, no dynamic dispatch in scope) | ✅ |
+| `certain` | Provable (e.g. a private unused symbol in reachable, non-fixture code; no dynamic dispatch in scope) | ✅ |
 | `likely` | Strong static signal, small residual dynamic risk | — |
 | `uncertain` | Public surface, or near `getattr`/`eval`/`importlib` | — |
 

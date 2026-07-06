@@ -16,6 +16,6 @@ high-complexity, duplication, untyped-function, private-type-leak, cold-code, ho
 low-cohesion, dangerous-eval, subprocess-shell-true, sql-injection, unsafe-yaml-load,
 unsafe-deserialization, tls-verify-disabled, hardcoded-secret, weak-hash,
 weak-cipher, insecure-random, request-without-timeout, flask-debug-true,
-jinja2-autoescape-false, try-except-pass, vulnerable-dependency,
+jinja2-autoescape-false, try-except-pass, vulnerable-dependency, engine-panic,
 plus custom policy ids.
 """

@@ -22,9 +22,9 @@ mollify fix
   ./billing/services/invoice.py:3-3  Remove the unused import `ledger`
 ```
 
-Notice what's **not** in that list. The audit found ~13 dead-code findings, but
+Notice what's **not** in that list. The dead-code engines report 8 findings, but
 `fix` offers only **5** — every one `certain`. The `likely` ones (the public
-`main`, the unused module files) are left for you to judge. **Mollify removes
+`password_hash`, the unused local) are left for you to judge. **Mollify removes
 only what it can prove; it never guesses with your code.**
 
 ## Apply when you're ready
@@ -50,7 +50,7 @@ reached by reflection. Two ways to silence it:
 **1. Inline suppression** — drop the finding's suppression comment on the line:
 
 ```python
-def main(amount: int) -> None:   # mollify: ignore[unused-export]
+def password_hash(p):   # mollify: ignore[unused-export]
     ...
 ```
 

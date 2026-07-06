@@ -5,6 +5,13 @@
 /// Return the explanation for a rule id, or `None` if unknown.
 pub fn text(rule: &str) -> Option<&'static str> {
     let t = match rule {
+        "engine-panic" => {
+            "An analysis engine crashed while producing this report; its findings \
+            are missing. The rest of the report is complete and trustworthy — \
+            engines are isolated so one failure cannot corrupt the others' output. \
+            Confidence: certain (the crash observably happened). Action: file a \
+            bug with the reason text; nothing in your code needs to change."
+        }
         "unused-file" => {
             "A module that nothing reachable from an entry point imports. \
             Confidence: certain when there is no dynamic import sink in the project. \
@@ -12,9 +19,14 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "unused-import" => {
             "An imported name that is never referenced outside its own import in \
-            the module. Confidence: certain in a regular module with no dynamic \
-            sink (auto-fixable); uncertain in `__init__.py` (likely a re-export). \
-            `__future__` imports are never flagged (they have a compiler effect). \
+            the module. Confidence: certain in a reachable module with no dynamic \
+            sink (auto-fixable); likely when the module itself is unreachable \
+            (often fixture/data files — never auto-edited); uncertain in \
+            `__init__.py` (likely a re-export) and inside `try`/`except` \
+            (availability probe). Never flagged: `__future__` imports (compiler \
+            effect), redundant-alias re-exports (`import x as x`, PEP 484), \
+            names another module imports from here, names in quoted TypeAlias \
+            values, and lines suppressed with `# noqa` / `# noqa: F401`. \
             Action: remove the import."
         }
         "unused-variable" => {
@@ -24,13 +36,19 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "unused-parameter" => {
             "A function parameter never used in the body. Confidence: uncertain \
-            (it may satisfy an interface/override/callback signature). Action: \
-            remove it or prefix with `_`."
+            (it may satisfy an interface/override/callback signature). Interface-bound \
+            parameters are never flagged: dunder methods, `@abstractmethod`/`@overload`/\
+            `@override` methods, overrides of an in-project base-class method, methods \
+            of classes with external bases, and decorated top-level functions (their \
+            signature may be dictated by the framework). Action: remove it or prefix \
+            with `_`."
         }
         "unused-export" => {
             "A top-level function/class never referenced outside its own \
             module and not listed in `__all__`. Confidence: likely (dynamic access via \
-            getattr downgrades it). Reachability roots are exempt: framework-registered \
+            getattr downgrades it; private symbols are certain only in reachable \
+            modules — unreachable files are often fixture data and never \
+            auto-edited). Reachability roots are exempt: framework-registered \
             symbols, pytest `test_*`/`Test*` in test paths (honoring \
             `[tool.pytest.ini_options].testpaths`), and functions named by a \
             `[project.scripts]` entry point. Action: remove it or make it private."
@@ -156,7 +174,11 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "untyped-function" | "untyped-public" => {
             "A public function with no parameter or \
-            return type annotations. Action: add type hints to harden the public surface."
+            return type annotations. When a top-level package is deliberately untyped \
+            (20+ eligible public functions, 60%+ of them untyped) the package gets one \
+            `likely` package-level finding and its per-function findings are demoted to \
+            `uncertain` — evidence preserved, default reports stay readable. Action: add \
+            type hints to harden the public surface."
         }
         "respect-policy" | "policy-violation" => {
             "A declarative `.mollifyrc` policy was \
@@ -235,6 +257,7 @@ pub fn text(rule: &str) -> Option<&'static str> {
 
 /// Every rule id mollify can emit, for `mollify explain` with no argument.
 pub const RULES: &[&str] = &[
+    "engine-panic",
     "unused-file",
     "unused-export",
     "unused-import",

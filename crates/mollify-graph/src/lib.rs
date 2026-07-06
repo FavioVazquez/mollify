@@ -282,11 +282,25 @@ pub fn read_source(path: &Utf8Path) -> Option<String> {
     Some(src)
 }
 
+/// Normalize a root-relative path into mollify's **identity spelling**:
+/// `/`-separated on every OS. `rel` feeds fingerprints, baselines, serialized
+/// `location.path`s, and `.mollifyrc` patterns — all of which must compare
+/// equal between a Linux CI run and a Windows checkout, so the native `\`
+/// separator must never leak into it. (A literal `\` inside a Unix filename is
+/// technically legal but can never name a Python module, so identity wins.)
+fn identity_path(p: Utf8PathBuf) -> Utf8PathBuf {
+    if p.as_str().contains('\\') {
+        Utf8PathBuf::from(p.as_str().replace('\\', "/"))
+    } else {
+        p
+    }
+}
+
 /// Compute a module's dotted name relative to a source root. `src/` is treated
 /// as a source root if present; otherwise the project root is used.
 fn dotted_name(root: &Utf8Path, path: &Utf8Path) -> String {
     let rel = path.strip_prefix(root).unwrap_or(path);
-    let mut rel = rel.to_owned();
+    let mut rel = identity_path(rel.to_owned());
     // src-layout: drop a leading `src/` segment.
     if rel.starts_with("src") {
         if let Ok(stripped) = rel.strip_prefix("src") {
@@ -340,10 +354,11 @@ impl ModuleGraph {
             global_dynamic |= pm.has_dynamic_sink;
             by_dotted.entry(dotted.clone()).or_insert(id);
             let is_package = path.file_name() == Some("__init__.py");
-            let rel = path
-                .strip_prefix(root)
-                .map(Utf8Path::to_path_buf)
-                .unwrap_or_else(|_| path.clone());
+            let rel = identity_path(
+                path.strip_prefix(root)
+                    .map(Utf8Path::to_path_buf)
+                    .unwrap_or_else(|_| path.clone()),
+            );
             // A module with an `if __name__ == "__main__":` guard is a
             // runnable script — a reachability root even with no importer.
             let is_entry = is_entry(&path) || pm.has_main_guard;
@@ -574,6 +589,28 @@ impl ModuleGraph {
             .any(|(_, b)| *b == module)
     }
 
+    /// Whether the module is an entry point or reachable from one. An
+    /// unreachable `.py` is often not code at all but tool fixture data
+    /// (formatter test cases, mypy golden inputs) — in-file edits there can't
+    /// be verified as behavior-preserving, so nothing inside one may be
+    /// graded certain/auto-fixable; the file-level `unused-file` finding is
+    /// the actionable evidence.
+    pub fn module_reachable(&self, id: FileId) -> bool {
+        let m = self.module(id);
+        m.is_entry || self.reachable.contains(&id)
+    }
+
+    /// True if any other module imports `name` **from** `module` (`from m
+    /// import name`, or `from m import *`). This is the re-export consumer
+    /// signal: an import binding with zero in-module uses is still live when a
+    /// downstream module pulls it out of this one (compat/shim modules,
+    /// package `__init__` surfaces).
+    pub fn name_imported_by_others(&self, module: FileId, name: &str) -> bool {
+        self.imported_symbols
+            .get(&module)
+            .is_some_and(|s| s.contains(name) || s.contains("*"))
+    }
+
     /// Whether a symbol defined in `module` is referenced internally or by any
     /// importer of that module. `defs_named` is how many top-level defs share
     /// the name (to discount the definition site in the internal count).
@@ -761,6 +798,28 @@ fn resolve_relative(importer_dotted: &str, dots: u8, module: &str, is_package: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_paths_are_separator_normalized() {
+        // `rel` and `dotted` are identity strings, not OS paths: a baseline
+        // saved on Linux CI must match a Windows checkout, so the native `\`
+        // must never reach fingerprints or serialized paths.
+        assert_eq!(
+            identity_path(Utf8PathBuf::from(r"pkg\sub\mod.py")).as_str(),
+            "pkg/sub/mod.py"
+        );
+        assert_eq!(
+            identity_path(Utf8PathBuf::from("pkg/sub/mod.py")).as_str(),
+            "pkg/sub/mod.py"
+        );
+        // dotted names normalize too (they derive from the same rel string).
+        // Empty root: strip_prefix is a no-op on every OS, so this exercises
+        // the normalization itself rather than OS-specific prefix semantics.
+        assert_eq!(
+            dotted_name(Utf8Path::new(""), Utf8Path::new(r"pkg\mod.py")),
+            "pkg.mod"
+        );
+    }
 
     fn write(dir: &Utf8Path, rel: &str, src: &str) {
         let p = dir.join(rel);
@@ -1102,7 +1161,8 @@ import b
         let files = discover_python_files(&d);
         let rel: Vec<String> = files
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
         std::fs::remove_dir_all(&d).ok();
@@ -1117,7 +1177,8 @@ import b
         let files = discover_python_files_excluding(&d, &["vendor".to_string()]);
         let rel: Vec<String> = files
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
         std::fs::remove_dir_all(&d).ok();
@@ -1137,7 +1198,8 @@ import b
         );
         let mut rel: Vec<String> = files
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         rel.sort();
         assert_eq!(
@@ -1163,7 +1225,8 @@ import b
         let plain = discover_python_files(&d);
         let plain_rel: Vec<String> = plain
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(
             plain_rel,
@@ -1175,7 +1238,8 @@ import b
         let files = discover_python_files_with(&d, &[], &["node_modules".to_string()]);
         let mut rel: Vec<String> = files
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         rel.sort();
         assert_eq!(
@@ -1201,7 +1265,8 @@ import b
         let files = discover_python_files_with(&d, &[], &["vendor".to_string()]);
         let rel: Vec<String> = files
             .iter()
-            .map(|f| f.strip_prefix(&d).unwrap().to_string())
+            // Discovery returns native OS paths; normalize for the assertion.
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
         std::fs::remove_dir_all(&d).ok();

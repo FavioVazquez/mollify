@@ -11,13 +11,13 @@ switch on `kind` and iterate `findings[]`:
 
 ```json
 {
-  "kind": "audit", "schema_version": "0.1", "quality_score": 80,
-  "summary": { "total": 21, "errors": 0, "warnings": 21, "files_analyzed": 7 },
+  "kind": "audit", "schema_version": "0.1", "quality_score": 84,
+  "summary": { "total": 16, "errors": 0, "warnings": 16, "files_analyzed": 7 },
   "findings": [{
     "fingerprint": "unused-export:b3454f8f0092acf5", "rule": "unused-export",
     "category": "dead-code", "severity": "warn", "confidence": "certain",
     "reason": "function `_legacy_helper` has no reachable references in the project",
-    "location": { "path": "./billing/app.py", "line": 12, "end_line": 14 },
+    "location": { "path": "billing/app.py", "line": 12, "end_line": 14 },
     "actions": [{ "type": "remove-symbol",
                   "description": "Delete unused function `_legacy_helper`",
                   "auto_fixable": true,
@@ -42,11 +42,11 @@ mollify dead-code --format json \
 ```
 
 ```text
-{"rule":"unused-import","path":"./billing/app.py","line":1}
-{"rule":"unused-export","path":"./billing/app.py","line":12}
-{"rule":"unused-import","path":"./billing/services/invoice.py","line":1}
-{"rule":"unused-import","path":"./billing/services/invoice.py","line":2}
-{"rule":"unused-import","path":"./billing/services/invoice.py","line":3}
+{"rule":"unused-import","path":"billing/app.py","line":1}
+{"rule":"unused-export","path":"billing/app.py","line":12}
+{"rule":"unused-import","path":"billing/services/invoice.py","line":1}
+{"rule":"unused-import","path":"billing/services/invoice.py","line":2}
+{"rule":"unused-import","path":"billing/services/invoice.py","line":3}
 ```
 
 Other handy one-liners:

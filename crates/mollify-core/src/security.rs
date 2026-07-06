@@ -47,10 +47,11 @@ fn cwe_for(rule: &str) -> Option<&'static str> {
     })
 }
 
-pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
+pub fn analyze(graph: &ModuleGraph, test_dirs: &[String]) -> Vec<Finding> {
     let mut findings = Vec::new();
     for m in &graph.modules {
-        findings.extend(analyze_parsed_ids(&m.path, &m.rel, &m.parsed));
+        let dev_tree = crate::paths::is_dev_tree(&m.rel, test_dirs);
+        findings.extend(analyze_parsed_ids(&m.path, &m.rel, &m.parsed, dev_tree));
     }
     findings
 }
@@ -61,32 +62,45 @@ pub fn analyze_parsed(
     path: &camino::Utf8Path,
     parsed: &mollify_parse::ParsedModule,
 ) -> Vec<Finding> {
-    analyze_parsed_ids(path, path, parsed)
+    analyze_parsed_ids(path, path, parsed, crate::paths::is_dev_tree(path, &[]))
 }
 
 /// `path` is what findings display; `rel` (root-relative) is the stable
 /// fingerprint identity. The hit's detail text anchors the fingerprint, so
-/// unrelated edits above it don't churn baselines.
+/// unrelated edits above it don't churn baselines. `dev_tree` caps confidence
+/// at `uncertain` — a security candidate in tests/docs/examples is still
+/// evidence, but its risk model assumes production code, so it must not
+/// dominate reports or `--min-confidence likely` runs.
 fn analyze_parsed_ids(
     path: &camino::Utf8Path,
     rel: &camino::Utf8Path,
     parsed: &mollify_parse::ParsedModule,
+    dev_tree: bool,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut occ = crate::fingerprint::Occurrences::default();
     for hit in &parsed.security_hits {
         let occ_key = format!("{}\u{1f}{}", hit.rule, hit.detail);
+        let confidence = if dev_tree {
+            Confidence::Uncertain
+        } else {
+            confidence_for(hit.rule)
+        };
+        let mut reason = match cwe_for(hit.rule) {
+            Some(cwe) => format!("{} [{cwe}]", hit.detail),
+            None => hit.detail.clone(),
+        };
+        if dev_tree {
+            reason.push_str(" (in test/docs/example code)");
+        }
         findings.push(Finding {
             fingerprint: fingerprint(hit.rule, &[rel.as_str(), &hit.detail, &occ.next(&occ_key)]),
             rule: hit.rule.to_string(),
             category: Category::Security,
             severity: Severity::Warn,
-            confidence: confidence_for(hit.rule),
+            confidence,
             attribution: None,
-            reason: match cwe_for(hit.rule) {
-                Some(cwe) => format!("{} [{cwe}]", hit.detail),
-                None => hit.detail.clone(),
-            },
+            reason,
             location: Location {
                 path: path.to_owned(),
                 line: hit.line,
@@ -132,7 +146,7 @@ mod tests {
         );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
-        let f = analyze(&g);
+        let f = analyze(&g, &[]);
         let rules: Vec<_> = f.iter().map(|x| x.rule.as_str()).collect();
         assert!(rules.contains(&"hardcoded-secret"), "got {rules:?}");
         assert!(rules.contains(&"subprocess-shell-true"), "got {rules:?}");
@@ -150,7 +164,7 @@ mod tests {
         );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
-        let f = analyze(&g);
+        let f = analyze(&g, &[]);
         let rules: Vec<_> = f.iter().map(|x| x.rule.as_str()).collect();
         for expected in [
             "weak-hash",
@@ -183,7 +197,7 @@ mod tests {
         );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
-        let f = analyze(&g);
+        let f = analyze(&g, &[]);
         let wc = f
             .iter()
             .find(|x| x.rule == "weak-cipher")

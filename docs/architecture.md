@@ -30,7 +30,7 @@ files ──▶ mollify-parse ──▶ mollify-graph ──▶ mollify-core ─
 | **mollify-types** | The serde **contract**: `Report` (kind-discriminated), `Finding`, `Confidence`, `Severity`, `Category`, `Attribution`, `Summary`, deterministic `sort_findings`. The public API surface — clients depend on the JSON shape, not on internals. |
 | **mollify-parse** | Python parsing via Astral's `ruff_python_parser` / `ruff_python_ast` (crates.io, pinned) behind parser-agnostic types (`ParsedModule`, `Definition`, `Import`, `FunctionComplexity`). Extracts defs, imports, `__all__`, decorators, used-name counts, dynamic sinks, per-function complexity, and **scope/binding resolution** (`module_used`). See [ADR-0001](adr/0001-parser-tree-sitter.md). |
 | **mollify-graph** | Discovery (`.gitignore`-aware, and always pruning VCS/virtualenv/build/cache directories — see `discover_python_files`), **path-sorted stable FileIds**, dotted-name + relative-import resolution, internal import edges, **BFS reachability** from entry points, symbol-usage queries, and **Tarjan cycle detection**. |
-| **mollify-core** | The engines (`deadcode` + `members` for class/enum members, `deps`, `arch`, `complexity`, `hotspots`, `dupes`, `security`, `typehealth` + `apihygiene` for private-type leaks, `commented`, `cohesion`, `coverage`, `supply-chain`, `policy`), framework `plugins`, `config`, `git` gate, `sarif`, `fix`, and `fingerprint`. Assembles `Report` envelopes. |
+| **mollify-core** | The engines (`deadcode` + `members` for class/enum members, `deps`, `arch`, `complexity`, `hotspots`, `dupes`, `security`, `typehealth` + `apihygiene` for private-type leaks, `commented`, `cohesion`, `coverage`, `supply-chain`, `policy`), framework `plugins`, `config`, `git` gate, `sarif`, `fix`, and `fingerprint`. Assembles `Report` envelopes. Every engine runs under `catch_unwind`: a panicking engine degrades to a single `engine-panic` finding (severity `error`) instead of killing the report. |
 | **mollify-cli** | The `mollify` binary (clap). |
 | **mollify-mcp** | The MCP stdio server (`mollify mcp`) — one server, many agent front-ends. |
 | **mollify-lsp** | The Language Server (`mollify lsp`, stdio) — publishes mollify diagnostics on open/save, reusing the deterministic audit so editor results match CI. |
@@ -39,7 +39,10 @@ files ──▶ mollify-parse ──▶ mollify-graph ──▶ mollify-core ─
 
 1. **Determinism** — identical input → byte-identical output. Findings are sorted
    before serialization; FileIds are path-sorted; maps that reach output are
-   ordered.
+   ordered. Every serialized `location.path` is root-relative with `/`
+   separators on every OS, so reports, `.mollifyrc` patterns, and fingerprint
+   baselines are portable between Linux, macOS, and Windows (CI pins this with
+   a cross-OS golden fingerprint set for the sample project).
 2. **Candidate / verifier separation** — Mollify emits evidence; only
    `certain` + `auto_fixable` findings may be auto-applied.
 3. **Versioned, `kind`-discriminated output** — `schema_version` is pinned by

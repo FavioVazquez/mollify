@@ -32,7 +32,7 @@ pub fn report(root: &Utf8Path) -> MetricsReport {
         let mi_raw = 171.0 - 5.2 * volume.ln() - 0.23 * cc - 16.2 * (sloc as f64).ln();
         let mi = (mi_raw * 100.0 / 171.0).clamp(0.0, 100.0);
         files.push(FileMetrics {
-            path: m.path.clone(),
+            path: m.rel.clone(),
             loc,
             sloc,
             comment_lines,

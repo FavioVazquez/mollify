@@ -65,13 +65,15 @@ pub fn build_graph_with_includes(root: &Utf8Path, includes: &[String]) -> Module
     graph
 }
 
-/// Sort, apply inline `# mollify: ignore[...]` suppressions and `.mollifyrc`
-/// (severity overrides + ignore), then summarize.
+/// Relativize, sort, apply inline `# mollify: ignore[...]` suppressions and
+/// `.mollifyrc` (severity overrides + ignore), then summarize.
 fn finalize(
+    root: &Utf8Path,
     cfg: &config::Config,
     graph: &ModuleGraph,
     mut findings: Vec<Finding>,
 ) -> FindingsReport {
+    relativize_paths(root, &mut findings);
     apply_suppressions(graph, &mut findings);
     config::apply(cfg, &mut findings);
     sort_findings(&mut findings);
@@ -82,15 +84,38 @@ fn finalize(
     }
 }
 
+/// Rewrite every `location.path` to be **relative to the analysis root**.
+/// Identical input must yield byte-identical output no matter how the root was
+/// spelled (`.` vs an absolute path) or where the checkout lives — and
+/// root-relative paths are what `.mollifyrc` patterns, baselines shared across
+/// machines, and CI diffs expect.
+fn relativize_paths(root: &Utf8Path, findings: &mut Vec<Finding>) {
+    for f in findings {
+        if let Ok(rel) = f.location.path.strip_prefix(root) {
+            if !rel.as_str().is_empty() {
+                f.location.path = rel.to_owned();
+            }
+        }
+        // Identity spelling is `/`-separated on every OS: baselines saved on
+        // Linux CI must match a Windows checkout, and `.mollifyrc` `ignore`
+        // patterns are written with `/`.
+        if f.location.path.as_str().contains('\\') {
+            f.location.path =
+                camino::Utf8PathBuf::from(f.location.path.as_str().replace('\\', "/"));
+        }
+    }
+}
+
 /// Drop findings silenced by an inline `# mollify: ignore[<rule>]` comment on
 /// the finding's line (or a bare `# mollify: ignore` matching any rule).
+/// Expects relativized findings (`location.path` keyed by module `rel`).
 pub fn apply_suppressions(graph: &ModuleGraph, findings: &mut Vec<Finding>) {
     use rustc_hash::FxHashMap;
     // (path, line) -> set of suppressed rules ("*" = all).
     let mut sup: FxHashMap<(&str, u32), Vec<&str>> = FxHashMap::default();
     for m in &graph.modules {
         for (line, rule) in &m.parsed.ignores {
-            sup.entry((m.path.as_str(), *line))
+            sup.entry((m.rel.as_str(), *line))
                 .or_default()
                 .push(rule.as_str());
         }
@@ -107,6 +132,57 @@ pub fn apply_suppressions(graph: &ModuleGraph, findings: &mut Vec<Finding>) {
     });
 }
 
+/// Run one engine with panic isolation: a bug in a single engine must degrade
+/// to an `engine-panic` finding, not kill the whole report. (A real blowup in
+/// the dupes engine previously took `audit` down with it on three corpus
+/// repos.) This catches panics only — resource exhaustion that ends in an OOM
+/// kill is a process-level signal nothing in-process can intercept.
+///
+/// The findings the engine produced before panicking are lost by design:
+/// partial engine output would silently change summary counts run-to-run.
+fn run_engine<F>(name: &str, category: Category, out: &mut Vec<Finding>, f: F)
+where
+    F: FnOnce() -> Vec<Finding>,
+{
+    // Engines only read the graph/config; nothing they touch is observable
+    // after a panic, so unwinding across them is safe to assert.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(findings) => out.extend(findings),
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".into());
+            out.push(Finding {
+                fingerprint: crate::fingerprint::fingerprint("engine-panic", &[name]),
+                rule: "engine-panic".into(),
+                category,
+                severity: Severity::Error,
+                confidence: Confidence::Certain,
+                attribution: None,
+                reason: format!(
+                    "the {name} engine panicked ({msg}); its findings are missing from this report — please file a bug"
+                ),
+                location: mollify_types::Location {
+                    path: ".".into(),
+                    line: 1,
+                    column: 0,
+                    end_line: None,
+                },
+                actions: vec![mollify_types::Action {
+                    kind: "report-bug".into(),
+                    description: format!(
+                        "Report the {name} engine panic to the mollify issue tracker"
+                    ),
+                    auto_fixable: false,
+                    suppression_comment: None,
+                }],
+            });
+        }
+    }
+}
+
 /// `mollify dead-code` — reachability-based unused files/symbols.
 pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
     dead_code_report_with_includes(root, &[])
@@ -115,14 +191,21 @@ pub fn dead_code_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`dead_code_report`], honoring the CLI's `--include` override.
 pub fn dead_code_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
-    let mut findings = deadcode::analyze_with(
-        &graph,
-        &paths::pytest_testpaths(root),
-        &deps::entry_point_symbols(root),
-    );
-    findings.extend(members::analyze(&graph));
-    findings.extend(commented::analyze(&graph));
-    finalize(&config::load(root), &graph, findings)
+    let mut findings = Vec::new();
+    run_engine("dead-code", Category::DeadCode, &mut findings, || {
+        deadcode::analyze_with(
+            &graph,
+            &paths::pytest_testpaths(root),
+            &deps::entry_point_symbols(root),
+        )
+    });
+    run_engine("members", Category::DeadCode, &mut findings, || {
+        members::analyze(&graph)
+    });
+    run_engine("commented-code", Category::DeadCode, &mut findings, || {
+        commented::analyze(&graph)
+    });
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// `mollify deps` — dependency hygiene.
@@ -133,9 +216,17 @@ pub fn deps_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`deps_report`], honoring the CLI's `--include` override.
 pub fn deps_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
-    let mut findings = deps::analyze(root, &graph);
-    findings.extend(deps::unresolved(&graph));
-    finalize(&config::load(root), &graph, findings)
+    let mut findings = Vec::new();
+    run_engine("deps", Category::DependencyHygiene, &mut findings, || {
+        deps::analyze(root, &graph)
+    });
+    run_engine(
+        "unresolved-imports",
+        Category::DependencyHygiene,
+        &mut findings,
+        || deps::unresolved(&graph),
+    );
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// `mollify arch` — circular dependencies (boundary presets later).
@@ -147,12 +238,18 @@ pub fn arch_report(root: &Utf8Path) -> FindingsReport {
 pub fn arch_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
-    let mut findings = arch::analyze(&graph);
-    findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
-    findings.extend(arch::analyze_contracts(&graph, &cfg.contracts));
-    findings.extend(arch::private_imports(&graph));
-    findings.extend(policy::analyze(&graph, &cfg.policies));
-    finalize(&cfg, &graph, findings)
+    let mut findings = Vec::new();
+    run_engine("arch", Category::Architecture, &mut findings, || {
+        let mut f = arch::analyze(&graph);
+        f.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
+        f.extend(arch::analyze_contracts(&graph, &cfg.contracts));
+        f.extend(arch::private_imports(&graph));
+        f
+    });
+    run_engine("policy", Category::Architecture, &mut findings, || {
+        policy::analyze(&graph, &cfg.policies)
+    });
+    finalize(root, &cfg, &graph, findings)
 }
 
 /// `mollify complexity` / `mollify health` — complexity hotspots.
@@ -164,10 +261,17 @@ pub fn complexity_report(root: &Utf8Path) -> FindingsReport {
 pub fn complexity_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
-    let mut findings = complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive);
-    findings.extend(hotspots::analyze(root, &graph));
-    findings.extend(cohesion::analyze(&graph));
-    finalize(&cfg, &graph, findings)
+    let mut findings = Vec::new();
+    run_engine("complexity", Category::Complexity, &mut findings, || {
+        complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive)
+    });
+    run_engine("hotspots", Category::Complexity, &mut findings, || {
+        hotspots::analyze(root, &graph)
+    });
+    run_engine("cohesion", Category::Complexity, &mut findings, || {
+        cohesion::analyze(&graph)
+    });
+    finalize(root, &cfg, &graph, findings)
 }
 
 /// `mollify dupes` — duplication / clone families.
@@ -179,8 +283,11 @@ pub fn dupes_report(root: &Utf8Path) -> FindingsReport {
 pub fn dupes_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
-    let findings = dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines);
-    finalize(&cfg, &graph, findings)
+    let mut findings = Vec::new();
+    run_engine("dupes", Category::Duplication, &mut findings, || {
+        dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines)
+    });
+    finalize(root, &cfg, &graph, findings)
 }
 
 /// `mollify types` — type-annotation health + API-hygiene (private-type leaks).
@@ -191,9 +298,14 @@ pub fn types_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`types_report`], honoring the CLI's `--include` override.
 pub fn types_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
-    let mut findings = typehealth::analyze(&graph);
-    findings.extend(apihygiene::analyze(&graph));
-    finalize(&config::load(root), &graph, findings)
+    let mut findings = Vec::new();
+    run_engine("type-health", Category::TypeHealth, &mut findings, || {
+        typehealth::analyze(&graph)
+    });
+    run_engine("api-hygiene", Category::TypeHealth, &mut findings, || {
+        apihygiene::analyze(&graph)
+    });
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// `mollify security` — security candidates (deterministic; review before acting).
@@ -204,14 +316,18 @@ pub fn security_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`security_report`], honoring the CLI's `--include` override.
 pub fn security_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
-    finalize(&config::load(root), &graph, security::analyze(&graph))
+    let mut findings = Vec::new();
+    run_engine("security", Category::Security, &mut findings, || {
+        security::analyze(&graph, &paths::pytest_testpaths(root))
+    });
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// `mollify coverage` — cold-path analysis from a coverage.py JSON report.
 pub fn coverage_report(root: &Utf8Path, coverage_path: &Utf8Path) -> FindingsReport {
     let graph = build_graph(root);
     let findings = coverage::analyze(root, &graph, coverage_path);
-    finalize(&config::load(root), &graph, findings)
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// `mollify supply-chain` — match pinned/locked dependency versions against a
@@ -230,7 +346,7 @@ pub fn supply_chain_report_with(
 ) -> FindingsReport {
     let graph = build_graph(root);
     let findings = supplychain::analyze(root, advisories);
-    finalize(&config::load(root), &graph, findings)
+    finalize(root, &config::load(root), &graph, findings)
 }
 
 /// The default advisory DB path checked by `audit` when present.
@@ -417,7 +533,7 @@ pub fn list_topology(root: &Utf8Path, kind: &str) -> Vec<String> {
         "files" => graph
             .modules
             .iter()
-            .map(|m| format!("{}\t{}", m.dotted, m.path))
+            .map(|m| format!("{}\t{}", m.dotted, m.rel))
             .collect(),
         "frameworks" => {
             let mut fw: std::collections::BTreeSet<String> = Default::default();
@@ -436,7 +552,7 @@ pub fn list_topology(root: &Utf8Path, kind: &str) -> Vec<String> {
             .modules
             .iter()
             .filter(|m| m.is_entry)
-            .map(|m| format!("{}\t{}", m.dotted, m.path))
+            .map(|m| format!("{}\t{}", m.dotted, m.rel))
             .collect(),
     };
     rows.sort();
@@ -454,41 +570,67 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
     let graph = build_graph_with_includes(root, includes);
     let cfg = config::load(root);
     let mut findings: Vec<Finding> = Vec::new();
-    findings.extend(deadcode::analyze_with(
-        &graph,
-        &paths::pytest_testpaths(root),
-        &deps::entry_point_symbols(root),
-    ));
-    findings.extend(members::analyze(&graph));
-    findings.extend(commented::analyze(&graph));
-    findings.extend(deps::analyze(root, &graph));
-    findings.extend(deps::unresolved(&graph));
-    findings.extend(arch::analyze(&graph));
-    findings.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
-    findings.extend(arch::analyze_contracts(&graph, &cfg.contracts));
-    findings.extend(arch::private_imports(&graph));
-    findings.extend(policy::analyze(&graph, &cfg.policies));
-    findings.extend(complexity::analyze_with(
-        &graph,
-        cfg.max_cyclomatic,
-        cfg.max_cognitive,
-    ));
-    findings.extend(dupes::analyze_with(
-        &graph,
-        cfg.dup_min_tokens,
-        cfg.dup_min_lines,
-    ));
-    findings.extend(typehealth::analyze(&graph));
-    findings.extend(apihygiene::analyze(&graph));
-    findings.extend(security::analyze(&graph));
-    findings.extend(hotspots::analyze(root, &graph));
-    findings.extend(cohesion::analyze(&graph));
+    run_engine("dead-code", Category::DeadCode, &mut findings, || {
+        deadcode::analyze_with(
+            &graph,
+            &paths::pytest_testpaths(root),
+            &deps::entry_point_symbols(root),
+        )
+    });
+    run_engine("members", Category::DeadCode, &mut findings, || {
+        members::analyze(&graph)
+    });
+    run_engine("commented-code", Category::DeadCode, &mut findings, || {
+        commented::analyze(&graph)
+    });
+    run_engine("deps", Category::DependencyHygiene, &mut findings, || {
+        let mut f = deps::analyze(root, &graph);
+        f.extend(deps::unresolved(&graph));
+        f
+    });
+    run_engine("arch", Category::Architecture, &mut findings, || {
+        let mut f = arch::analyze(&graph);
+        f.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
+        f.extend(arch::analyze_contracts(&graph, &cfg.contracts));
+        f.extend(arch::private_imports(&graph));
+        f
+    });
+    run_engine("policy", Category::Architecture, &mut findings, || {
+        policy::analyze(&graph, &cfg.policies)
+    });
+    run_engine("complexity", Category::Complexity, &mut findings, || {
+        complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive)
+    });
+    run_engine("dupes", Category::Duplication, &mut findings, || {
+        dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines)
+    });
+    run_engine("type-health", Category::TypeHealth, &mut findings, || {
+        typehealth::analyze(&graph)
+    });
+    run_engine("api-hygiene", Category::TypeHealth, &mut findings, || {
+        apihygiene::analyze(&graph)
+    });
+    run_engine("security", Category::Security, &mut findings, || {
+        security::analyze(&graph, &paths::pytest_testpaths(root))
+    });
+    run_engine("hotspots", Category::Complexity, &mut findings, || {
+        hotspots::analyze(root, &graph)
+    });
+    run_engine("cohesion", Category::Complexity, &mut findings, || {
+        cohesion::analyze(&graph)
+    });
     // Supply-chain runs only when a local advisory DB is present (keeps audit
     // offline + deterministic; no implicit network).
     let db_path = root.join(DEFAULT_ADVISORY_DB);
     if let Some(advisories) = supplychain::load_db(&db_path) {
-        findings.extend(supplychain::analyze(root, &advisories));
+        run_engine(
+            "supply-chain",
+            Category::DependencyHygiene,
+            &mut findings,
+            || supplychain::analyze(root, &advisories),
+        );
     }
+    relativize_paths(root, &mut findings);
     apply_suppressions(&graph, &mut findings);
     config::apply(&cfg, &mut findings);
     sort_findings(&mut findings);
@@ -548,6 +690,130 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         Utf8PathBuf::from_path_buf(base).unwrap()
+    }
+
+    #[test]
+    fn windows_spelled_paths_share_one_identity() {
+        // The identity layer (serialized location.path, and therefore what
+        // baselines and `.mollifyrc` patterns see) must be `/`-separated on
+        // every OS: a fingerprint computed from a `\`-spelled rel must equal
+        // the `/`-spelled one.
+        let mut findings = vec![Finding {
+            fingerprint: "x".into(),
+            rule: "unused-import".into(),
+            category: Category::DeadCode,
+            severity: Severity::Warn,
+            confidence: Confidence::Certain,
+            attribution: None,
+            reason: "r".into(),
+            location: mollify_types::Location {
+                path: r"billing\app.py".into(),
+                line: 1,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![],
+        }];
+        relativize_paths(Utf8Path::new("."), &mut findings);
+        assert_eq!(findings[0].location.path.as_str(), "billing/app.py");
+        assert_eq!(
+            fingerprint::fingerprint("unused-import", &[findings[0].location.path.as_str(), "os"]),
+            fingerprint::fingerprint("unused-import", &["billing/app.py", "os"]),
+        );
+    }
+
+    #[test]
+    fn engine_panic_degrades_to_finding() {
+        // One sick engine must not kill the report: the dupes OOM previously
+        // took `audit` down with it on three corpus repos.
+        let mut findings = Vec::new();
+        run_engine("boom", Category::Duplication, &mut findings, || {
+            panic!("synthetic engine failure")
+        });
+        run_engine("fine", Category::DeadCode, &mut findings, Vec::new);
+        assert_eq!(findings.len(), 1, "got {findings:?}");
+        let f = &findings[0];
+        assert_eq!(f.rule, "engine-panic");
+        assert_eq!(f.severity, Severity::Error);
+        assert!(f.reason.contains("boom") && f.reason.contains("synthetic"));
+    }
+
+    #[test]
+    fn noqa_suppresses_unused_import_end_to_end() {
+        // The WSGI entry-point idiom from flask's test apps: the import is the
+        // module's entire purpose and the author already said so with noqa.
+        let d = temp("noqa");
+        std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
+        std::fs::write(d.join("hello.py"), "app = object()\n").unwrap();
+        std::fs::write(d.join("wsgi.py"), "from hello import app  # noqa: F401\n").unwrap();
+        let r = dead_code_report(&d);
+        assert!(
+            !r.findings
+                .iter()
+                .any(|f| f.rule == "unused-import" && f.location.path.as_str().contains("wsgi")),
+            "noqa'd import leaked: {:?}",
+            r.findings
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn report_paths_are_root_relative_regardless_of_root_spelling() {
+        // Identical input must yield byte-identical output whether the root
+        // was `.`, `sub/dir`, or absolute — so location paths must never echo
+        // the caller's spelling, and machine-specific prefixes must not leak.
+        let d = temp("relpath");
+        std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
+        std::fs::write(d.join("lib.py"), "import os\n").unwrap();
+        let abs = dead_code_report(&d);
+        let f = abs
+            .findings
+            .iter()
+            .find(|f| f.rule == "unused-import")
+            .expect("unused-import finding");
+        assert_eq!(f.location.path.as_str(), "lib.py", "got {:?}", f.location);
+        // Same tree via a different spelling of the root (`…/x/.`): the
+        // serialized findings must be identical byte for byte.
+        let respelled = dead_code_report(&d.join("."));
+        assert_eq!(
+            serde_json::to_string(&abs.findings).unwrap(),
+            serde_json::to_string(&respelled.findings).unwrap(),
+            "root spelling changed the output"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn security_confidence_capped_in_dev_trees() {
+        let d = temp("devtree");
+        std::fs::create_dir_all(d.join("src")).unwrap();
+        std::fs::create_dir_all(d.join("tests")).unwrap();
+        std::fs::write(d.join("src/app.py"), "import requests\nrequests.get(url)\n").unwrap();
+        std::fs::write(
+            d.join("tests/test_app.py"),
+            "import subprocess\nsubprocess.run(c, shell=True)\n",
+        )
+        .unwrap();
+        let r = security_report(&d);
+        let test_hit = r
+            .findings
+            .iter()
+            .find(|f| f.location.path.as_str().starts_with("tests/"))
+            .expect("test-tree security candidate");
+        assert_eq!(test_hit.confidence, Confidence::Uncertain);
+        assert!(
+            test_hit.reason.contains("test/docs/example code"),
+            "reason not tagged: {}",
+            test_hit.reason
+        );
+        // Production hits keep their per-rule confidence (shell=True → Likely).
+        let src_hit = r
+            .findings
+            .iter()
+            .find(|f| f.location.path.as_str().starts_with("src/"))
+            .expect("src security candidate");
+        assert!(!src_hit.reason.contains("test/docs/example"));
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

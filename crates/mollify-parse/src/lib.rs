@@ -69,6 +69,14 @@ pub struct Import {
     /// True if guarded by `if TYPE_CHECKING:` / `if False:` — a deliberate
     /// type-only import that must never be flagged as unused.
     pub type_checking_only: bool,
+    /// Per-binding: true when written with a redundant alias (`import x as x`,
+    /// `from m import y as y`) — the PEP 484 explicit re-export convention, so
+    /// the binding is public API even with zero in-module uses.
+    pub redundant: Vec<bool>,
+    /// True if the statement sits in a `try:` body or an `except:` handler —
+    /// the availability-probe idiom (`try: import x / except ImportError: …`).
+    /// Removing either arm changes behavior, so this is never a certain fix.
+    pub in_try: bool,
     pub line: u32,
 }
 
@@ -293,8 +301,13 @@ impl PyParser {
                 name_tokens.push((tok.range().start(), text));
             }
             if kind == TokenKind::Comment {
+                let line = line1(&li, tok.range().start());
                 if let Some(rules) = parse_ignore_comment(text) {
-                    let line = line1(&li, tok.range().start());
+                    for r in rules {
+                        m.ignores.push((line, r));
+                    }
+                }
+                if let Some(rules) = parse_noqa_comment(text) {
                     for r in rules {
                         m.ignores.push((line, r));
                     }
@@ -636,10 +649,18 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                 }
             }
             Stmt::Try(t) => {
+                // Imports in the `try:` body or an `except:` handler are the
+                // availability-probe idiom; mark them so unused-import analysis
+                // never grades them certain. The `else:`/`finally:` suites run
+                // unconditionally and carry no probe semantics.
+                let before = m.imports.len();
                 scan_top_level(&t.body, li, type_checking, m);
                 for h in &t.handlers {
                     let ruff_python_ast::ExceptHandler::ExceptHandler(eh) = h;
                     scan_top_level(&eh.body, li, type_checking, m);
+                }
+                for imp in m.imports[before..].iter_mut() {
+                    imp.in_try = true;
                 }
                 scan_top_level(&t.orelse, li, type_checking, m);
                 scan_top_level(&t.finalbody, li, type_checking, m);
@@ -733,22 +754,26 @@ fn parse_import(i: &StmtImport, li: &LineIndex, out: &mut Vec<Import>) {
     let line = line1(li, i.range().start());
     for alias in &i.names {
         let module = alias.name.as_str().to_string();
+        let redundant = matches!(&alias.asname, Some(a) if a.as_str() == alias.name.as_str());
         let binding = match &alias.asname {
             Some(a) => a.as_str().to_string(),
             None => module.split('.').next().unwrap_or(&module).to_string(),
         };
         if !module.is_empty() {
+            let bindings = if binding.is_empty() {
+                vec![]
+            } else {
+                vec![binding]
+            };
             out.push(Import {
                 module,
                 relative_dots: 0,
                 names: vec![],
-                bindings: if binding.is_empty() {
-                    vec![]
-                } else {
-                    vec![binding]
-                },
+                redundant: vec![redundant; bindings.len()],
+                bindings,
                 is_star: false,
                 type_checking_only: false,
+                in_try: false,
                 line,
             });
         }
@@ -760,6 +785,7 @@ fn parse_import_from(i: &StmtImportFrom, li: &LineIndex) -> Import {
     let module = i.module.as_ref().map(|m| m.to_string()).unwrap_or_default();
     let mut names = Vec::new();
     let mut bindings = Vec::new();
+    let mut redundant = Vec::new();
     let mut is_star = false;
     for alias in &i.names {
         let name = alias.name.as_str();
@@ -768,6 +794,7 @@ fn parse_import_from(i: &StmtImportFrom, li: &LineIndex) -> Import {
             continue;
         }
         names.push(name.to_string());
+        redundant.push(matches!(&alias.asname, Some(a) if a.as_str() == name));
         bindings.push(match &alias.asname {
             Some(a) => a.as_str().to_string(),
             None => name.to_string(),
@@ -778,8 +805,10 @@ fn parse_import_from(i: &StmtImportFrom, li: &LineIndex) -> Import {
         relative_dots: i.level.min(u8::MAX as u32) as u8,
         names,
         bindings,
+        redundant,
         is_star,
         type_checking_only: false,
+        in_try: false,
         line,
     }
 }
@@ -1467,6 +1496,16 @@ impl<'a> Visitor<'a> for LocalUseVisitor {
         // String forward-ref annotations: extract identifier tokens.
         if let Stmt::AnnAssign(a) = stmt {
             collect_annotation_strings(&a.annotation, &mut self.uses);
+            // A quoted TypeAlias *value* is type syntax too:
+            // `_P: TypeAlias = 'partial[Any] | partialmethod[Any]'` uses
+            // `partial`/`partialmethod` (type checkers — and pydantic at
+            // runtime — evaluate the string). Found live on pydantic, where
+            // the import was wrongly certain + auto-fixable.
+            if is_type_alias_annotation(&a.annotation) {
+                if let Some(v) = &a.value {
+                    collect_annotation_strings(v, &mut self.uses);
+                }
+            }
         }
         if let Stmt::FunctionDef(f) = stmt {
             if let Some(r) = &f.returns {
@@ -1493,10 +1532,31 @@ impl<'a> Visitor<'a> for LocalUseVisitor {
                 self.uses.push(a.attr.as_str().to_string());
                 self.attrs.push(a.attr.as_str().to_string());
             }
+            // `cast("dict[int, Foo]", x)`: the string is a type expression
+            // referencing `Foo` — removing Foo's import breaks type checking.
+            // Found live on lmcache, where `fix --apply` introduced four F821s.
+            Expr::Call(c) => {
+                let is_cast = expr_path(&c.func)
+                    .map(|p| p == "cast" || p.ends_with(".cast"))
+                    .unwrap_or(false);
+                if is_cast {
+                    if let Some(first) = c.arguments.args.first() {
+                        collect_annotation_strings(first, &mut self.uses);
+                    }
+                }
+            }
             _ => {}
         }
         walk_expr(self, expr);
     }
+}
+
+/// `TypeAlias` / `typing.TypeAlias` / `typing_extensions.TypeAlias` as an
+/// AnnAssign annotation — marks the assigned value as type syntax.
+fn is_type_alias_annotation(e: &Expr) -> bool {
+    expr_path(e)
+        .map(|p| p == "TypeAlias" || p.ends_with(".TypeAlias"))
+        .unwrap_or(false)
 }
 
 /// Pull identifier-like tokens out of any string literal inside an annotation
@@ -2120,6 +2180,37 @@ fn security_imports(m: &mut ParsedModule) {
 
 /// Parse a `# mollify: ignore[rule1,rule2]` comment into suppressed rule ids.
 /// Trailing text after the closing bracket (e.g. `-- reason`) is allowed.
+/// Map a flake8 `# noqa` comment to the mollify rules it suppresses. These are
+/// author-deliberate exceptions that predate mollify, so honoring them kills a
+/// whole class of false positives (`from hello import app  # noqa: F401`).
+/// Scope is intentionally narrow — only the unused-binding rules that flake8's
+/// F401/F841 correspond to; a blanket `# noqa` suppresses both. Other codes are
+/// other tools' semantics and are not interpreted.
+fn parse_noqa_comment(text: &str) -> Option<Vec<String>> {
+    let t = text.trim_start_matches('#').trim();
+    if t.len() < 4 || !t.is_char_boundary(4) || !t[..4].eq_ignore_ascii_case("noqa") {
+        return None;
+    }
+    let rest = t[4..].trim_start();
+    if rest.is_empty() || rest.starts_with('#') {
+        return Some(vec!["unused-import".into(), "unused-variable".into()]);
+    }
+    let codes = rest.strip_prefix(':')?;
+    let mut rules = Vec::new();
+    for code in codes.split([',', ' ', '#']).map(str::trim) {
+        match code.to_ascii_uppercase().as_str() {
+            "F401" => rules.push("unused-import".to_string()),
+            "F841" => rules.push("unused-variable".to_string()),
+            _ => {}
+        }
+    }
+    if rules.is_empty() {
+        None
+    } else {
+        Some(rules)
+    }
+}
+
 fn parse_ignore_comment(text: &str) -> Option<Vec<String>> {
     let t = text.trim_start_matches('#').trim();
     let rest = t.strip_prefix("mollify:")?.trim();
@@ -2544,6 +2635,84 @@ mod tests {
             "try:\n    _P = ParamSpec('_P')\nexcept ImportError:\n    pass\ndef g(x: _P): ...\n",
         );
         assert!(m2.type_leaks.is_empty(), "{:?}", m2.type_leaks);
+    }
+
+    #[test]
+    fn comment_parsers_fuzz_no_panic() {
+        // Deterministic xorshift64 fuzz over the hand-written comment parsers
+        // (multi-byte chars land at arbitrary offsets — slicing must never
+        // panic on a char boundary).
+        let mut state = 0x0123_4567_89AB_CDEFu64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet: &[&str] = &[
+            "#", "n", "o", "q", "a", "N", "Q", "A", ":", ",", " ", "F", "4", "0", "1", "8",
+            "mollify", "ignore", "[", "]", "ß", "é", "—", "\t",
+        ];
+        for _ in 0..4000u32 {
+            let len = (next() % 40) as usize;
+            let mut s = String::from("#");
+            for _ in 0..len {
+                s.push_str(alphabet[(next() as usize) % alphabet.len()]);
+            }
+            let _ = parse_noqa_comment(&s);
+            let _ = parse_ignore_comment(&s);
+        }
+    }
+
+    #[test]
+    fn noqa_comments_map_to_unused_binding_rules() {
+        // Blanket noqa silences both unused-binding rules on that line.
+        assert_eq!(
+            parse_noqa_comment("# noqa"),
+            Some(vec!["unused-import".into(), "unused-variable".into()])
+        );
+        assert_eq!(
+            parse_noqa_comment("#NOQA"),
+            Some(vec!["unused-import".into(), "unused-variable".into()])
+        );
+        // Coded noqa maps only the codes that correspond to our rules.
+        assert_eq!(
+            parse_noqa_comment("# noqa: F401"),
+            Some(vec!["unused-import".into()])
+        );
+        assert_eq!(
+            parse_noqa_comment("# noqa: E501, F841"),
+            Some(vec!["unused-variable".into()])
+        );
+        // Foreign codes and noqa-ish prose are not ours to interpret.
+        assert_eq!(parse_noqa_comment("# noqa: E501"), None);
+        assert_eq!(parse_noqa_comment("# noqable"), None);
+        assert_eq!(parse_noqa_comment("# see noqa docs"), None);
+        // End-to-end: the wsgi entry-point idiom lands in `ignores`.
+        let m = parse("from hello import app  # noqa: F401\n");
+        assert!(
+            m.ignores.contains(&(1, "unused-import".into())),
+            "{:?}",
+            m.ignores
+        );
+    }
+
+    #[test]
+    fn redundant_alias_and_try_body_imports_are_marked() {
+        let m = parse(
+            "from sansio import State as State\nfrom sansio import Blueprint as Sansio\ntry:\n    import fast_json\nexcept ImportError:\n    import json as fast_json\nimport os\n",
+        );
+        let state = m.imports.iter().find(|i| i.bindings == ["State"]).unwrap();
+        assert_eq!(state.redundant, vec![true]);
+        let aliased = m.imports.iter().find(|i| i.bindings == ["Sansio"]).unwrap();
+        assert_eq!(aliased.redundant, vec![false]);
+        let probe = m.imports.iter().find(|i| i.module == "fast_json").unwrap();
+        assert!(probe.in_try, "try-body import not marked: {probe:?}");
+        let fallback = m.imports.iter().find(|i| i.module == "json").unwrap();
+        assert!(fallback.in_try, "except-handler import not marked");
+        let plain = m.imports.iter().find(|i| i.module == "os").unwrap();
+        assert!(!plain.in_try);
+        std::assert!(!plain.redundant.iter().any(|r| *r));
     }
 
     #[test]

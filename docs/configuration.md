@@ -153,7 +153,7 @@ later offline runs. `mollify audit` never touches the network — it folds in
 supply-chain findings from the local DB only, when the file exists. Seed or
 regenerate the DB with `scripts/fetch-advisories.py` (OSV.dev / safety-db), and
 override its path with `mollify supply-chain --advisory-db <path>`. See
-`examples/advisories.sample.json`.
+`cookbook/advisories.sample.json`.
 
 ## `ignore`
 
@@ -219,3 +219,8 @@ the line, e.g.:
 def legacy_entrypoint():  # mollify: ignore[unused-export]
     ...
 ```
+
+Existing flake8-style `# noqa` comments are honored for the rules they map to:
+a blanket `# noqa` (or `# noqa: F401`) silences `unused-import` on that line,
+and `# noqa: F841` silences `unused-variable`. Other flake8 codes belong to
+other tools and are not interpreted.

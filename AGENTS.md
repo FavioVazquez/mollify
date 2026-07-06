@@ -70,7 +70,7 @@ Reading the kind-discriminated JSON envelope:
   sql-injection, unsafe-yaml-load, unsafe-deserialization, tls-verify-disabled,
   hardcoded-secret, weak-hash, weak-cipher, insecure-random,
   request-without-timeout, flask-debug-true, jinja2-autoescape-false, try-except-pass,
-  vulnerable-dependency, policy-violation, plus custom policy ids.
+  vulnerable-dependency, policy-violation, engine-panic (an isolated engine crash; the rest of the report is complete), plus custom policy ids.
 - Act only on `confidence: "certain"` without confirming with the user. Surface
   `likely`/`uncertain` with their reason and ask before changing code.
 - To silence a known-good finding, add its action's `suppression_comment` instead

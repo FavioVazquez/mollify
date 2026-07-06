@@ -127,10 +127,32 @@ fn unreachable_code(graph: &ModuleGraph, out: &mut Vec<Finding>) {
 /// Flag unused local variables (`unused-variable`, ruff F841) and parameters
 /// (`unused-parameter`) from the parser's per-function scope analysis. Never
 /// auto-fixable: the assignment's right-hand side may have side effects.
+///
+/// Parameters whose signature is dictated by an interface are skipped entirely
+/// (see [`param_is_interface_bound`]): the author cannot remove them, so the
+/// finding would be pure noise. Found live on flask, where 100 of the corpus
+/// `unused-parameter` hits were override/callback signatures.
 fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
+    // Project-wide `class name -> its method names` index for the override
+    // heuristic. Keyed by bare class name: base spellings (`Base`,
+    // `mod.Base`) are matched on their last segment.
+    let mut base_methods: FxHashMap<&str, FxHashSet<&str>> = FxHashMap::default();
+    for m in &graph.modules {
+        for c in &m.parsed.classes {
+            base_methods.entry(c.name.as_str()).or_default().extend(
+                c.members
+                    .iter()
+                    .filter(|mem| mem.is_method)
+                    .map(|mem| mem.name.as_str()),
+            );
+        }
+    }
     for m in &graph.modules {
         let mut occ = Occurrences::default();
         for s in &m.parsed.scope_findings {
+            if s.is_param && param_is_interface_bound(m, s.line, &base_methods) {
+                continue;
+            }
             let (rule, kind, confidence) = if s.is_param {
                 ("unused-parameter", "parameter", Confidence::Uncertain)
             } else {
@@ -164,11 +186,83 @@ fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
     }
 }
 
+/// True when a parameter at `line` sits inside a def whose signature is a
+/// contract the author doesn't control, so `unused-parameter` must not fire:
+///
+/// - a dunder method (`__exit__` takes three arguments whether you use them
+///   or not);
+/// - a method marked `@abstractmethod` / `@overload` / `@override` (the
+///   signature *is* the interface);
+/// - a method overriding one an in-project base class declares;
+/// - a method of a class with an external (unresolvable) base — the parent
+///   library may dictate the signature;
+/// - a decorated top-level function — decorators commonly register callbacks
+///   whose signature the framework requires (`@app.errorhandler` handlers
+///   must accept the error argument).
+fn param_is_interface_bound(
+    m: &mollify_graph::ModuleInfo,
+    line: u32,
+    base_methods: &FxHashMap<&str, FxHashSet<&str>>,
+) -> bool {
+    // Innermost enclosing method, if any (nested classes: latest def wins).
+    let mut enclosing: Option<(&mollify_parse::ClassInfo, &mollify_parse::ClassMember)> = None;
+    for c in &m.parsed.classes {
+        if !(c.line <= line && line <= c.end_line) {
+            continue;
+        }
+        for mem in c.members.iter().filter(|mem| mem.is_method) {
+            if mem.line <= line && line <= mem.end_line {
+                let inner = enclosing.is_none_or(|(_, b)| mem.line >= b.line);
+                if inner {
+                    enclosing = Some((c, mem));
+                }
+            }
+        }
+    }
+    if let Some((c, mem)) = enclosing {
+        if mem.name.starts_with("__") && mem.name.ends_with("__") {
+            return true;
+        }
+        let contract_decorator = mem.decorators.iter().any(|d| {
+            let last = d.rsplit('.').next().unwrap_or(d);
+            matches!(last, "abstractmethod" | "overload" | "override")
+        });
+        if contract_decorator {
+            return true;
+        }
+        for base in &c.bases {
+            let last = base.rsplit('.').next().unwrap_or(base);
+            if last == "object" {
+                continue;
+            }
+            match base_methods.get(last) {
+                // Overrides a method an in-project base declares.
+                Some(methods) if methods.contains(mem.name.as_str()) => return true,
+                // Base not defined in this project: external interface.
+                None => return true,
+                Some(_) => {}
+            }
+        }
+        return false;
+    }
+    // Top-level function: any decorator may register it as a callback.
+    m.parsed.definitions.iter().any(|d| {
+        matches!(d.kind, DefKind::Function)
+            && d.line <= line
+            && line <= d.end_line
+            && !d.decorators.is_empty()
+    })
+}
+
 /// Flag unused imports. A *whole-statement*-unused import (every binding unused)
 /// is `certain` + auto-fixable (the line can be deleted). A *partially*-unused
 /// `from x import a, b` (some names used) reports each unused name as `likely`
 /// (not auto-fixed — rewriting the line precisely is left to the human). Skips
-/// `import *`, `__init__.py` re-exports (downgraded), and dynamic-sink modules.
+/// `import *` and dynamic-sink modules. Deliberate-import idioms are honored:
+/// a redundant alias (`import x as x`, PEP 484 re-export) and a binding that
+/// another module imports *from* here (`from m import name`) count as used;
+/// `__init__.py` re-exports and try/except availability probes are downgraded
+/// to `uncertain` (never auto-fixed).
 fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
     for m in &graph.modules {
         let local: FxHashSet<&str> = m.parsed.local_uses.iter().map(|s| s.as_str()).collect();
@@ -193,20 +287,38 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
             if imp.module == "__future__" {
                 continue; // future imports have a compiler effect; never "unused"
             }
-            let is_used = |b: &String| {
-                local.contains(b.as_str()) || dunder_all.is_some_and(|all| all.contains(b))
+            let is_used = |i: usize, b: &String| {
+                local.contains(b.as_str())
+                    || dunder_all.is_some_and(|all| all.contains(b))
+                    // `import x as x` / `from m import y as y`: explicit re-export.
+                    || imp.redundant.get(i).copied().unwrap_or(false)
+                    // Another module does `from <here> import <b>` — the binding
+                    // is this module's export surface (compat/shim idiom).
+                    || graph.name_imported_by_others(m.id, b)
             };
-            let unused: Vec<&String> = imp.bindings.iter().filter(|b| !is_used(b)).collect();
+            let unused: Vec<&String> = imp
+                .bindings
+                .iter()
+                .enumerate()
+                .filter(|(i, b)| !is_used(*i, b))
+                .map(|(_, b)| b)
+                .collect();
             if unused.is_empty() {
                 continue;
             }
             let whole = unused.len() == imp.bindings.len();
             let rule = "unused-import";
             if whole {
-                // Entire statement unused → safe to delete the line.
+                // Entire statement unused → safe to delete the line, unless a
+                // deliberate-import idiom means deletion could change behavior.
+                // Unreachable modules (often fixture/data files — black's
+                // formatter cases, pydantic's mypy golden inputs) are never
+                // certain: editing a file nothing imports can't be verified.
                 let what = format!("`{}`", imp.bindings.join("`, `"));
-                let confidence = if is_init || m.parsed.has_dynamic_sink {
+                let confidence = if is_init || imp.in_try || m.parsed.has_dynamic_sink {
                     Confidence::Uncertain
+                } else if !graph.module_reachable(m.id) || crate::paths::is_fixture_tree(&m.rel) {
+                    Confidence::Likely
                 } else {
                     Confidence::Certain
                 };
@@ -223,7 +335,13 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                     severity: Severity::Warn,
                     confidence,
                     attribution: None,
-                    reason: format!("import {what} is never used in this module"),
+                    reason: if imp.in_try {
+                        format!(
+                            "import {what} is never used in this module (inside try/except — may be an availability probe)"
+                        )
+                    } else {
+                        format!("import {what} is never used in this module")
+                    },
                     location: Location {
                         path: m.path.clone(),
                         line: imp.line,
@@ -241,7 +359,7 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                 // Some names still used: report each unused name (not auto-fixed,
                 // since rewriting a shared import line precisely is risky).
                 for (i, name) in imp.bindings.iter().enumerate() {
-                    if is_used(name) {
+                    if is_used(i, name) {
                         continue;
                     }
                     out.push(Finding {
@@ -314,7 +432,9 @@ fn unused_files(graph: &ModuleGraph, out: &mut Vec<Finding>) {
             },
             actions: vec![Action {
                 kind: "remove-file".into(),
-                description: format!("Delete unused module `{}`", m.path),
+                // `rel`, not `path`: descriptions are part of the output
+                // contract too, and must not echo the root's spelling.
+                description: format!("Delete unused module `{}`", m.rel),
                 auto_fixable: false, // file deletion is never auto-applied
                 suppression_comment: Some("# mollify: ignore[unused-file]".into()),
             }],
@@ -380,9 +500,14 @@ fn unused_symbols(
             // Confidence tiering. A dynamic sink (getattr/eval/importlib)
             // anywhere in the project can reference this symbol across module
             // boundaries, so it caps confidence exactly as in `unused_files`.
+            // Unreachable modules are never certain (fixture/data hazard —
+            // see `unused_imports`).
             let confidence = if m.parsed.has_dynamic_sink || graph.global_dynamic {
                 Confidence::Uncertain
-            } else if d.private_by_convention {
+            } else if d.private_by_convention
+                && graph.module_reachable(m.id)
+                && !crate::paths::is_fixture_tree(&m.rel)
+            {
                 Confidence::Certain
             } else {
                 Confidence::Likely
@@ -553,8 +678,13 @@ mod tests {
     #[test]
     fn private_unused_is_certain_and_autofixable() {
         let d = temp("priv");
-        write(&d, "__main__.py", "print('hi')\n");
-        write(&d, "lib.py", "def _dead():\n    return 2\n");
+        // lib must be reachable: unreachable modules are fixture-hazard-capped.
+        write(&d, "__main__.py", "import lib\nlib.used()\n");
+        write(
+            &d,
+            "lib.py",
+            "def used():\n    return 1\n\ndef _dead():\n    return 2\n",
+        );
         let files = discover_python_files(&d);
         let g = ModuleGraph::build(&d, &files);
         let f = analyze(&g);
@@ -596,7 +726,9 @@ def view():
     #[test]
     fn flags_unused_import_and_respects_usage_and_aliases() {
         let d = temp("imp");
-        write(&d, "__main__.py", "print('hi')\n");
+        // lib must be reachable: unreachable modules are fixture-hazard-capped
+        // below certain (never auto-fixable).
+        write(&d, "__main__.py", "import lib\nlib.f(None)\n");
         write(
             &d,
             "lib.py",
@@ -650,6 +782,86 @@ def view():
         assert!(
             imps.iter().any(|x| x.reason.contains("`os`")),
             "real unused import missed: {imps:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn interface_bound_params_are_never_flagged() {
+        let d = temp("iface");
+        write(&d, "__main__.py", "import lib\nimport base\nlib.go()\n");
+        write(
+            &d,
+            "base.py",
+            "class Base:\n    def handle(self, event):\n        return event\n",
+        );
+        write(
+            &d,
+            "lib.py",
+            concat!(
+                "from base import Base\n",
+                "from somelib import External\n",
+                "from flask import app\n",
+                "\n",
+                "class Sub(Base):\n",
+                "    def handle(self, event):\n",
+                "        return 1\n",
+                "\n",
+                "class Plugin(External):\n",
+                "    def process(self, ctx):\n",
+                "        return 1\n",
+                "\n",
+                "class Ctx:\n",
+                "    def __exit__(self, exc_type, exc, tb):\n",
+                "        return False\n",
+                "\n",
+                "@app.errorhandler(404)\n",
+                "def notfound(err):\n",
+                "    return 'x'\n",
+                "\n",
+                "def go(dead_p):\n",
+                "    return 1\n",
+            ),
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let params: Vec<_> = f.iter().filter(|x| x.rule == "unused-parameter").collect();
+        // Override of an in-project base, external-base method, dunder
+        // protocol, and decorated callback are all interface-bound: skipped.
+        for bound in ["event", "ctx", "exc_type", "exc", "tb", "err"] {
+            assert!(
+                !params
+                    .iter()
+                    .any(|x| x.reason.contains(&format!("`{bound}`"))),
+                "interface-bound param `{bound}` wrongly flagged: {params:?}"
+            );
+        }
+        // A plain undecorated function keeps its true positive.
+        assert!(
+            params.iter().any(|x| x.reason.contains("`dead_p`")),
+            "real unused param missed: {params:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn plain_class_method_unused_param_still_flagged() {
+        let d = temp("iface-plain");
+        write(&d, "__main__.py", "import lib\nlib.Svc().run(1)\n");
+        write(
+            &d,
+            "lib.py",
+            "class Svc:\n    def run(self, dead_p):\n        return 1\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        // No bases, no decorators, not a dunder: the contract is Svc's own.
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "unused-parameter" && x.reason.contains("`dead_p`")),
+            "baseless method param should still be flagged: {f:?}"
         );
         std::fs::remove_dir_all(&d).ok();
     }
@@ -740,6 +952,134 @@ def view():
         assert!(dict.is_some(), "got {f:?}");
         assert!(!dict.unwrap().actions[0].auto_fixable);
         assert!(!f.iter().any(|x| x.reason.contains("`List`")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn quoted_type_alias_value_counts_as_use() {
+        // Distilled from pydantic/functional_serializers.py: names inside a
+        // quoted TypeAlias value are type syntax evaluated by checkers (and
+        // by pydantic at runtime) — removing the import breaks them.
+        let d = temp("typealias");
+        write(&d, "__main__.py", "import lib\n");
+        write(
+            &d,
+            "lib.py",
+            "from functools import partial, partialmethod\nfrom typing import Any, TypeAlias\n\n_Partial: TypeAlias = 'partial[Any] | partialmethod[Any]'\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-import" && x.reason.contains("partial")),
+            "quoted TypeAlias use wrongly flagged: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn quoted_cast_type_argument_counts_as_use() {
+        // Distilled from lmcache: `cast("dict[int, Iface]", x)` uses `Iface`
+        // inside a string type expression; `fix --apply` deleting the import
+        // introduced real F821s there (caught by the apply-then-verify pass).
+        let d = temp("caststr");
+        write(&d, "__main__.py", "import lib\n");
+        write(
+            &d,
+            "lib.py",
+            "from typing import cast\nfrom iface import Iface\n\ndef f(x):\n    return cast(\"dict[int, Iface]\", x)\n",
+        );
+        write(&d, "iface.py", "class Iface:\n    pass\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-import" && x.reason.contains("Iface")),
+            "quoted cast type wrongly flagged: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn redundant_alias_is_an_explicit_reexport_never_flagged() {
+        // PEP 484 convention, distilled from flask/src/flask/blueprints.py:
+        // `from x import Y as Y` declares a re-export; deleting it breaks the
+        // public API even with zero in-module uses.
+        let d = temp("xasx");
+        write(&d, "__main__.py", "import blueprints\n");
+        write(
+            &d,
+            "blueprints.py",
+            "from sansio import BlueprintSetupState as BlueprintSetupState\nfrom sansio import Blueprint as SansioBlueprint\n\nclass Blueprint(SansioBlueprint):\n    pass\n",
+        );
+        write(
+            &d,
+            "sansio.py",
+            "class Blueprint:\n    pass\n\nclass BlueprintSetupState:\n    pass\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-import" && x.reason.contains("BlueprintSetupState")),
+            "X-as-X re-export wrongly flagged: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn try_except_probe_import_is_never_certain() {
+        // Distilled from requests/tests/compat.py: both arms of an
+        // availability probe bind the name; removing either changes behavior.
+        let d = temp("tryimp");
+        write(&d, "__main__.py", "print('hi')\n");
+        write(
+            &d,
+            "compat.py",
+            "try:\n    import StringIO\nexcept ImportError:\n    import io as StringIO\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let imps: Vec<_> = f.iter().filter(|x| x.rule == "unused-import").collect();
+        for imp in &imps {
+            assert_ne!(
+                imp.confidence,
+                Confidence::Certain,
+                "try/except probe import graded certain: {imp:?}"
+            );
+            assert!(
+                !imp.actions[0].auto_fixable,
+                "try/except probe import auto-fixable: {imp:?}"
+            );
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn import_consumed_by_downstream_module_counts_as_used() {
+        // Distilled from requests: tests/compat.py binds a name only so that
+        // sibling modules can `from .compat import` it — a re-export shim.
+        let d = temp("consumer");
+        write(&d, "__main__.py", "import user\n");
+        write(&d, "compat.py", "import json\n");
+        write(
+            &d,
+            "user.py",
+            "from compat import json\nprint(json.dumps({}))\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter().any(|x| {
+                x.rule == "unused-import" && x.location.path.as_str().ends_with("compat.py")
+            }),
+            "re-export shim import wrongly flagged: {f:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

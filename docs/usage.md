@@ -66,6 +66,25 @@ and `--include <dir>` (repeatable) to scan a directory despite the builtin
 exclude list, `.mollifyrc.json`'s `exclude_dirs`, or `.gitignore` — see
 [configuration.md](configuration.md#exclude_dirs).
 
+Every `location.path` in a report is **relative to the analysis root**, no
+matter how `--path` was spelled — identical trees produce byte-identical
+reports across machines, and `.mollifyrc` path patterns and shared baselines
+match the same strings everywhere.
+
+Security candidates found in test, docs, or example trees are capped at
+`uncertain` confidence (and tagged in the reason): their risk model assumes
+production code, so they must not drown a report — filter them out entirely
+with `--min-confidence likely` if desired.
+
+Engines are **isolated**: if one analysis engine crashes, the report still
+completes and carries a single `engine-panic` finding (severity `error`)
+naming the engine, instead of the whole run dying. See
+`mollify explain engine-panic`.
+
+Known limitation: source files that are not valid UTF-8 (e.g. latin-1 with a
+PEP 263 coding cookie) are currently skipped and do not appear in
+`files_analyzed`.
+
 ## Editor integration (LSP)
 
 `mollify lsp` runs a Language Server over stdio that publishes mollify diagnostics
@@ -125,7 +144,7 @@ advisory DB. Flags:
 
 The DB uses the `mollify-advisories/1` schema; regenerate/seed it with
 `scripts/fetch-advisories.py` (OSV.dev export, falling back to pyup safety-db).
-A small real-CVE sample lives at `examples/advisories.sample.json`.
+A small real-CVE sample lives at `cookbook/advisories.sample.json`.
 
 **`mollify audit` stays offline and deterministic** — it folds in supply-chain
 findings only from the local DB (`.mollify/advisories.json`) when present, never
@@ -144,6 +163,21 @@ The **quality score** (`mollify audit`) weights each finding's penalty by its
 confidence — `uncertain` candidates count least, `certain` most — so a report
 dominated by low-confidence review items isn't punished like one full of proven
 defects. The score is still deterministic.
+
+Some signals are calibrated rather than tiered:
+
+- **`unused-parameter` skips interface-bound signatures entirely** — dunder
+  methods, `@abstractmethod`/`@overload`/`@override` methods, overrides of an
+  in-project base-class method, methods of classes with external bases, and
+  decorated top-level functions (an `@app.errorhandler` handler must accept
+  the error argument).
+- **`untyped-function` rolls up deliberately-untyped packages** — when 60%+ of
+  20+ eligible public functions in a top-level package are untyped, the
+  package gets one `likely` package-level finding and its per-function
+  findings demote to `uncertain`.
+- **Security candidates in test/docs/example trees are capped at `uncertain`**
+  and tagged in the reason — a missing request timeout in a test carries a
+  different risk than one on a serving path.
 
 ## What counts as reachable
 

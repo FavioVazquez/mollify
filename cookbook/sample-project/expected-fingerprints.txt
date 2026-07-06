@@ -1,0 +1,16 @@
+circular-dependency:d297a057a059c6fb
+high-complexity:1cbe4ffa6ee8ed1d
+untyped-function:308c065e993ecff3
+untyped-function:7058751ef9260e0f
+untyped-function:a3c79d14005834f2
+unused-dependency:262b99f436d498a8
+unused-dependency:d4b9afaea73f6d0a
+unused-export:5024ab2f29d5cdeb
+unused-export:51b9d1bcc4e4ee5b
+unused-export:b3454f8f0092acf5
+unused-import:0e814590eab517ff
+unused-import:4de5ca3ebae02431
+unused-import:5c1d3a12f0f0f698
+unused-import:9a5e10483cc040fd
+unused-variable:bced62ab9da79356
+weak-hash:2fda8ae0463ffdee
