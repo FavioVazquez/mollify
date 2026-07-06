@@ -16,6 +16,12 @@ survive, though report *bytes* change where paths/confidences did).
   `catch_unwind`; a panicking engine degrades to a single `engine-panic`
   finding (severity `error`) instead of killing the whole report. Motivated
   by the dupes OOM taking `audit` down with it on three corpus repos.
+- **Cross-platform path identity.** `rel`, dotted module names, and every
+  serialized `location.path` are normalized to `/` separators on all OSes at
+  construction time, so fingerprints and baselines saved on Linux CI match a
+  Windows checkout and `/`-style `.mollifyrc` patterns match everywhere; CI
+  now runs the test job on a Linux + Windows matrix and pins the sample
+  project's fingerprint set as a cross-OS golden contract.
 - **Windows path hardening.** The test/dev/fixture path heuristics normalize
   `\` separators before matching, so they classify correctly on Windows
   paths instead of silently never matching.

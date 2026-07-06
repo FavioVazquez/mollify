@@ -64,8 +64,9 @@ Each finding:
   `sql-injection`, `unsafe-yaml-load`, `unsafe-deserialization`,
   `tls-verify-disabled`, `hardcoded-secret`, `weak-hash`, `weak-cipher`,
   `insecure-random`, `request-without-timeout`, `flask-debug-true`,
-  `jinja2-autoescape-false`, `try-except-pass`, `vulnerable-dependency`, plus
-  custom policy ids
+  `jinja2-autoescape-false`, `try-except-pass`, `vulnerable-dependency`,
+  `engine-panic` (an isolated engine crash; the rest of the report is
+  complete), plus custom policy ids
 - `category` — `dead-code` | `dependency-hygiene` | `circular-dependency` |
   `complexity` | `architecture` | `duplication` | `type-health` | `security`
 - `confidence` — `certain` | `likely` | `uncertain`

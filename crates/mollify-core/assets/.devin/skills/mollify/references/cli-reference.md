@@ -70,7 +70,7 @@ Severities are `warn` by default; raise rules/categories to `error` in `.mollify
 `unsafe-deserialization`, `tls-verify-disabled`, `hardcoded-secret`,
 `weak-hash`, `weak-cipher`, `insecure-random`, `request-without-timeout`,
 `flask-debug-true`, `jinja2-autoescape-false`, `try-except-pass`,
-`vulnerable-dependency`, `policy-violation` (+ custom policy ids) from `.mollifyrc.json`
+`vulnerable-dependency`, `policy-violation`, `engine-panic` (an isolated engine crash; the rest of the report is complete) (+ custom policy ids) from `.mollifyrc.json`
 `policies`.
 
 ## MCP tools (`mollify mcp`)

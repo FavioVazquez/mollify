@@ -96,6 +96,13 @@ fn relativize_paths(root: &Utf8Path, findings: &mut Vec<Finding>) {
                 f.location.path = rel.to_owned();
             }
         }
+        // Identity spelling is `/`-separated on every OS: baselines saved on
+        // Linux CI must match a Windows checkout, and `.mollifyrc` `ignore`
+        // patterns are written with `/`.
+        if f.location.path.as_str().contains('\\') {
+            f.location.path =
+                camino::Utf8PathBuf::from(f.location.path.as_str().replace('\\', "/"));
+        }
     }
 }
 
@@ -683,6 +690,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         Utf8PathBuf::from_path_buf(base).unwrap()
+    }
+
+    #[test]
+    fn windows_spelled_paths_share_one_identity() {
+        // The identity layer (serialized location.path, and therefore what
+        // baselines and `.mollifyrc` patterns see) must be `/`-separated on
+        // every OS: a fingerprint computed from a `\`-spelled rel must equal
+        // the `/`-spelled one.
+        let mut findings = vec![Finding {
+            fingerprint: "x".into(),
+            rule: "unused-import".into(),
+            category: Category::DeadCode,
+            severity: Severity::Warn,
+            confidence: Confidence::Certain,
+            attribution: None,
+            reason: "r".into(),
+            location: mollify_types::Location {
+                path: r"billing\app.py".into(),
+                line: 1,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![],
+        }];
+        relativize_paths(Utf8Path::new("."), &mut findings);
+        assert_eq!(findings[0].location.path.as_str(), "billing/app.py");
+        assert_eq!(
+            fingerprint::fingerprint("unused-import", &[findings[0].location.path.as_str(), "os"]),
+            fingerprint::fingerprint("unused-import", &["billing/app.py", "os"]),
+        );
     }
 
     #[test]
