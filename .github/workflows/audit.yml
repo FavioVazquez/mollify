@@ -40,7 +40,7 @@ jobs:
       checks: write # surface advisories as check annotations
       issues: write # scheduled runs open an issue when a new advisory lands
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
