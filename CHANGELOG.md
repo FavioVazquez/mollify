@@ -4,7 +4,7 @@ All notable changes to Mollify. This project follows the spirit of
 [Keep a Changelog](https://keepachangelog.com/) and the JSON contract is
 versioned by `schema_version` (currently `0.1`).
 
-## Unreleased
+## 0.1.5 - 2026-07-06
 
 Calibration and portability fixes from the first real-world corpus evaluation
 (all engines run against pinned checkouts of requests, flask, rich,
