@@ -247,19 +247,34 @@ fn find_dirs_named(
 /// Read a module's source. For `.ipynb`, extract and concatenate code cells into
 /// one Python source (line numbers are relative to that concatenation — a
 /// documented v1 simplification). Jupyter magics/shell-escapes are skipped.
+/// Handles nbformat 4 (top-level `cells`, cell text in `source`) and the
+/// legacy nbformat 3 (pre-2015: cells nested under `worksheets`, code-cell
+/// text in `input`) — long-lived teaching repos still carry v3 notebooks,
+/// which used to be silently skipped.
 pub fn read_source(path: &Utf8Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
     if path.extension() != Some("ipynb") {
         return Some(raw);
     }
     let nb: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let cells = nb.get("cells")?.as_array()?;
+    let mut cells: Vec<&serde_json::Value> = Vec::new();
+    if let Some(v4) = nb.get("cells").and_then(|c| c.as_array()) {
+        cells.extend(v4);
+    } else if let Some(sheets) = nb.get("worksheets").and_then(|w| w.as_array()) {
+        for sheet in sheets {
+            if let Some(v3) = sheet.get("cells").and_then(|c| c.as_array()) {
+                cells.extend(v3);
+            }
+        }
+    } else {
+        return None;
+    }
     let mut src = String::new();
     for cell in cells {
         if cell.get("cell_type").and_then(|t| t.as_str()) != Some("code") {
             continue;
         }
-        match cell.get("source") {
+        match cell.get("source").or_else(|| cell.get("input")) {
             Some(serde_json::Value::Array(lines)) => {
                 for l in lines {
                     if let Some(s) = l.as_str() {
@@ -842,6 +857,31 @@ fn resolve_relative(importer_dotted: &str, dots: u8, module: &str, is_package: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nbformat3_notebooks_are_read() {
+        // Legacy (pre-2015) notebooks nest cells under `worksheets` and spell
+        // code-cell text `input`. Six such notebooks in a real teaching repo
+        // were silently invisible to every engine.
+        let d = temp("nbv3");
+        write(
+            &d,
+            "legacy.ipynb",
+            r#"{"nbformat": 3, "worksheets": [{"cells": [
+                {"cell_type": "code", "input": ["import os\n", "print(os.name)\n"]},
+                {"cell_type": "markdown", "source": ["ignored"]},
+                {"cell_type": "code", "input": "x = 1\n"}
+            ]}]}"#,
+        );
+        let src = read_source(&d.join("legacy.ipynb")).expect("v3 notebook read");
+        assert!(src.contains("import os"), "src: {src:?}");
+        assert!(src.contains("x = 1"), "src: {src:?}");
+        // And it flows into the graph: the notebook is an analyzed module.
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        assert_eq!(g.modules.len(), 1, "v3 notebook not discovered/parsed");
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     #[test]
     fn identity_paths_are_separator_normalized() {

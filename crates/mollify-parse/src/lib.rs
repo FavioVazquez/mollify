@@ -73,11 +73,15 @@ pub struct Import {
     /// `from m import y as y`) — the PEP 484 explicit re-export convention, so
     /// the binding is public API even with zero in-module uses.
     pub redundant: Vec<bool>,
-    /// True if the statement sits in a `try:` body or an `except:` handler —
-    /// the availability-probe idiom (`try: import x / except ImportError: …`).
-    /// Removing either arm changes behavior, so this is never a certain fix.
+    /// True if the statement sits in a `try:` body / `except:` handler, or a
+    /// module-level `if`/`else` arm — availability probes and platform
+    /// switches (`try: import x / except: …`, `if flag: from y import z`).
+    /// Removing a guarded arm changes behavior, so this is never a certain fix.
     pub in_try: bool,
     pub line: u32,
+    /// Last line of the statement (inclusive) — multi-line `from x import (…)`
+    /// spans several lines, and a `# noqa` on any of them counts.
+    pub end_line: u32,
 }
 
 /// Per-function complexity metrics (cyclomatic + cognitive) and type-annotation
@@ -199,6 +203,11 @@ pub struct ParsedModule {
     pub functions: Vec<FunctionComplexity>,
     pub security_hits: Vec<SecurityHit>,
     pub dunder_all: Option<Vec<String>>,
+    /// True when `__all__` exists but part of it is not statically knowable
+    /// (`__all__ = sub.__all__ + [...]`, `.extend(func())`). `dunder_all`
+    /// then holds only the literal names that could be collected, so
+    /// "not in `__all__`" is no longer evidence of certainty.
+    pub dunder_all_dynamic: bool,
     pub used_names: Vec<String>,
     pub local_uses: Vec<String>,
     /// Names accessed as an attribute (`obj.attr`, `self.attr`, `Class.attr`) —
@@ -257,6 +266,7 @@ impl PyParser {
             functions: Vec::new(),
             security_hits: Vec::new(),
             dunder_all: None,
+            dunder_all_dynamic: false,
             used_names: Vec::new(),
             local_uses: Vec::new(),
             attr_accessed: Vec::new(),
@@ -436,6 +446,20 @@ impl PyParser {
         m.security_hits
             .dedup_by(|a, b| a.rule == b.rule && a.line == b.line);
 
+        // A suppression comment on ANY line of a multi-line import statement
+        // counts for the whole statement: mollify reports the finding at the
+        // statement's first line, while ruff anchors F401 at the alias — so
+        // users legitimately write `name,  # noqa: F401` inside the parens
+        // (seen live in astropy's test suite).
+        let mut span_ignores: Vec<(u32, String)> = Vec::new();
+        for (line, rule) in &m.ignores {
+            for imp in &m.imports {
+                if *line > imp.line && *line <= imp.end_line {
+                    span_ignores.push((imp.line, rule.clone()));
+                }
+            }
+        }
+        m.ignores.extend(span_ignores);
         Ok(m)
     }
 }
@@ -542,8 +566,10 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                 if let [Expr::Name(target)] = a.targets.as_slice() {
                     let name = target.id.as_str();
                     if name == "__all__" {
-                        if let Some(items) = string_list(&a.value) {
-                            m.dunder_all = Some(items);
+                        match string_list(&a.value) {
+                            Some(items) => m.dunder_all = Some(items),
+                            // `__all__ = sub.__all__ + [...]`: unknowable.
+                            None => m.dunder_all_dynamic = true,
                         }
                     } else {
                         m.definitions.push(Definition {
@@ -562,8 +588,9 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                     let name = target.id.as_str();
                     if name == "__all__" {
                         if let Some(v) = &a.value {
-                            if let Some(items) = string_list(v) {
-                                m.dunder_all = Some(items);
+                            match string_list(v) {
+                                Some(items) => m.dunder_all = Some(items),
+                                None => m.dunder_all_dynamic = true,
                             }
                         }
                     } else {
@@ -578,19 +605,22 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                     }
                 }
             }
-            // `__all__ += [...]` extends the export list; a non-literal RHS
-            // makes it unknowable, so drop to None rather than keep a wrong
-            // partial list.
+            // `__all__ += [...]` extends the export list. When the base was
+            // dynamic (`__all__ = sub.__all__ + …`), keep the literal names we
+            // CAN see (they are exports) and remember the list is partial via
+            // `dunder_all_dynamic` — "not in __all__" then proves nothing.
             Stmt::AugAssign(a) => {
                 if let Expr::Name(t) = &*a.target {
                     if t.id.as_str() == "__all__" {
                         match string_list(&a.value) {
-                            Some(items) => {
-                                if let Some(all) = &mut m.dunder_all {
-                                    all.extend(items);
-                                }
+                            Some(items) => match &mut m.dunder_all {
+                                Some(all) => all.extend(items),
+                                None => m.dunder_all = Some(items),
+                            },
+                            None => {
+                                m.dunder_all = None;
+                                m.dunder_all_dynamic = true;
                             }
-                            None => m.dunder_all = None,
                         }
                     }
                 }
@@ -601,21 +631,25 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                     match expr_path(&c.func).as_deref() {
                         Some("__all__.extend") => {
                             match c.arguments.args.first().and_then(string_list) {
-                                Some(items) => {
-                                    if let Some(all) = &mut m.dunder_all {
-                                        all.extend(items);
-                                    }
+                                Some(items) => match &mut m.dunder_all {
+                                    Some(all) => all.extend(items),
+                                    None => m.dunder_all = Some(items),
+                                },
+                                None => {
+                                    m.dunder_all = None;
+                                    m.dunder_all_dynamic = true;
                                 }
-                                None => m.dunder_all = None,
                             }
                         }
                         Some("__all__.append") => match c.arguments.args.first() {
-                            Some(Expr::StringLiteral(s)) => {
-                                if let Some(all) = &mut m.dunder_all {
-                                    all.push(s.value.to_str().to_string());
-                                }
+                            Some(Expr::StringLiteral(s)) => match &mut m.dunder_all {
+                                Some(all) => all.push(s.value.to_str().to_string()),
+                                None => m.dunder_all = Some(vec![s.value.to_str().to_string()]),
+                            },
+                            _ => {
+                                m.dunder_all = None;
+                                m.dunder_all_dynamic = true;
                             }
-                            _ => m.dunder_all = None,
                         },
                         _ => {}
                     }
@@ -633,17 +667,26 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                 let else_tc = type_checking || is_not_type_checking_guard(&i.test);
                 let before = m.imports.len();
                 scan_top_level(&i.body, li, body_tc, m);
-                if body_tc {
-                    for imp in m.imports[before..].iter_mut() {
+                for imp in m.imports[before..].iter_mut() {
+                    if body_tc {
                         imp.type_checking_only = true;
+                    } else {
+                        // A module-level conditional import is the try/except
+                        // availability probe spelled with `if` (scipy:
+                        // `if _has_uarray: from uarray import _Function`),
+                        // or a platform switch — removing one arm changes
+                        // behavior, so it must never be a certain fix.
+                        imp.in_try = true;
                     }
                 }
                 for clause in &i.elif_else_clauses {
                     let before = m.imports.len();
                     scan_top_level(&clause.body, li, else_tc, m);
-                    if else_tc {
-                        for imp in m.imports[before..].iter_mut() {
+                    for imp in m.imports[before..].iter_mut() {
+                        if else_tc {
                             imp.type_checking_only = true;
+                        } else {
+                            imp.in_try = true;
                         }
                     }
                 }
@@ -752,6 +795,7 @@ fn is_not_type_checking_guard(test: &Expr) -> bool {
 
 fn parse_import(i: &StmtImport, li: &LineIndex, out: &mut Vec<Import>) {
     let line = line1(li, i.range().start());
+    let end_line = end_line1(li, i.range());
     for alias in &i.names {
         let module = alias.name.as_str().to_string();
         let redundant = matches!(&alias.asname, Some(a) if a.as_str() == alias.name.as_str());
@@ -775,6 +819,7 @@ fn parse_import(i: &StmtImport, li: &LineIndex, out: &mut Vec<Import>) {
                 type_checking_only: false,
                 in_try: false,
                 line,
+                end_line,
             });
         }
     }
@@ -782,6 +827,7 @@ fn parse_import(i: &StmtImport, li: &LineIndex, out: &mut Vec<Import>) {
 
 fn parse_import_from(i: &StmtImportFrom, li: &LineIndex) -> Import {
     let line = line1(li, i.range().start());
+    let end_line = end_line1(li, i.range());
     let module = i.module.as_ref().map(|m| m.to_string()).unwrap_or_default();
     let mut names = Vec::new();
     let mut bindings = Vec::new();
@@ -810,6 +856,7 @@ fn parse_import_from(i: &StmtImportFrom, li: &LineIndex) -> Import {
         type_checking_only: false,
         in_try: false,
         line,
+        end_line,
     }
 }
 
