@@ -553,9 +553,13 @@ fn unused_symbols(
         // caller, so these have no in-repo references but are not dead.
         let is_test = crate::paths::is_test_module(&m.path, test_dirs);
         // Functions named by a console-script entry point in this module.
+        // Suffix match mirrors mark_entry_points: a src-layout tree spells
+        // the `pkg.cli:main` target's module as `src.pkg.cli`.
         let entry_here: FxHashSet<&str> = entry_symbols
             .iter()
-            .filter(|(module, _)| module == m.dotted.as_str())
+            .filter(|(module, _)| {
+                module == m.dotted.as_str() || m.dotted.ends_with(&format!(".{module}"))
+            })
             .map(|(_, func)| func.as_str())
             .collect();
 

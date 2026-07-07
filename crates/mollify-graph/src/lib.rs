@@ -580,12 +580,34 @@ impl ModuleGraph {
     /// half of a `[project.scripts]` entry point `pkg.cli:main`), then recompute
     /// reachability. A no-op for names that match no module.
     pub fn mark_entry_points(&mut self, dotted_modules: &[String]) {
-        let wanted: FxHashSet<&str> = dotted_modules.iter().map(|s| s.as_str()).collect();
         let mut changed = false;
-        for m in &mut self.modules {
-            if !m.is_entry && wanted.contains(m.dotted.as_str()) {
-                m.is_entry = true;
-                changed = true;
+        for wanted in dotted_modules {
+            // Exact dotted match first (dotted_name already strips a `src/`
+            // source root). Other source-root prefixes (`lib/`, `python/`,
+            // monorepo dirs) spell a `pkg.cli:main` target as
+            // `python.pkg.cli`, so fall back to a suffix match — but only
+            // when it is unambiguous (exactly one module ends with
+            // `.{wanted}`).
+            let target = if self.by_dotted.contains_key(wanted.as_str()) {
+                Some(wanted.clone())
+            } else {
+                let suffix = format!(".{wanted}");
+                let mut hits = self
+                    .modules
+                    .iter()
+                    .filter(|m| m.dotted.ends_with(&suffix))
+                    .map(|m| m.dotted.clone());
+                match (hits.next(), hits.next()) {
+                    (Some(one), None) => Some(one),
+                    _ => None, // no match, or ambiguous — fail safe
+                }
+            };
+            let Some(target) = target else { continue };
+            for m in &mut self.modules {
+                if !m.is_entry && m.dotted == target {
+                    m.is_entry = true;
+                    changed = true;
+                }
             }
         }
         if changed {
@@ -978,6 +1000,49 @@ mod tests {
         // one real level to the parent package.
         assert_eq!(resolve_relative("pkg.sub", 1, "x", true), "pkg.sub.x");
         assert_eq!(resolve_relative("pkg.sub", 2, "x", true), "pkg.x");
+    }
+
+    #[test]
+    fn source_root_entry_points_match_by_suffix() {
+        // `src/` is already stripped by dotted_name; this covers the OTHER
+        // source-root prefixes (lib/, python/, monorepo dirs) where the
+        // console-script target `pkg.cli:main` names a module whose dotted
+        // name in this tree is `python.pkg.cli`.
+        let d = temp("nonsrclayout");
+        write(&d, "python/pkg/__init__.py", "");
+        write(&d, "python/pkg/cli.py", "def main():\n    return 0\n");
+        let files = discover_python_files(&d);
+        let mut g = ModuleGraph::build(&d, &files);
+        assert!(g
+            .unused_files()
+            .iter()
+            .any(|m| m.dotted == "python.pkg.cli"));
+        g.mark_entry_points(&["pkg.cli".to_string()]);
+        assert!(
+            !g.unused_files()
+                .iter()
+                .any(|m| m.dotted == "python.pkg.cli"),
+            "source-root entry point not matched by suffix"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn ambiguous_entry_point_suffix_is_not_marked() {
+        let d = temp("srclayout-ambig");
+        // Two distinct modules both end in `.pkg.cli` — marking either would
+        // be a guess, so neither is marked.
+        write(&d, "a/pkg/cli.py", "def main():\n    return 0\n");
+        write(&d, "b/pkg/cli.py", "def main():\n    return 1\n");
+        let files = discover_python_files(&d);
+        let mut g = ModuleGraph::build(&d, &files);
+        g.mark_entry_points(&["pkg.cli".to_string()]);
+        assert!(
+            g.unused_files().iter().any(|m| m.dotted == "a.pkg.cli")
+                && g.unused_files().iter().any(|m| m.dotted == "b.pkg.cli"),
+            "ambiguous suffix must not mark any module"
+        );
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
