@@ -7,7 +7,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// The union of public top-level stdlib module names across CPython 3.8-3.13
 /// (including since-removed "dead battery" modules, so projects on older
 /// Pythons never see them as missing dependencies). Used to exclude stdlib
-/// imports from "missing dependency".
+/// imports from "missing dependency". One deliberate exclusion: `test` —
+/// CPython's self-test package — because a user `import test` is almost
+/// always a first-party package (or a mistake), and calling it stdlib would
+/// mask a real missing/unresolved signal.
 const STDLIB: &[&str] = &[
     "__future__",
     "abc",
@@ -395,6 +398,10 @@ mod tests {
         // projects on older Pythons never see them as missing dependencies.
         assert!(k.is_stdlib("asyncore"));
         assert!(k.is_stdlib("distutils"));
+        // `test` (CPython's self-test package) is deliberately NOT stdlib
+        // here: a user `import test` is almost always first-party, and
+        // treating it as stdlib would mask a real missing/unresolved signal.
+        assert!(!k.is_stdlib("test"));
         // The table must stay sorted (determinism + reviewability).
         let mut sorted = STDLIB.to_vec();
         sorted.sort_unstable();

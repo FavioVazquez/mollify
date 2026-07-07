@@ -32,16 +32,16 @@ versioned by `schema_version` (currently `0.1`).
   local planning documents (source comments citing them were cleaned up
   too).
 
-### Migration note (baselines saved before 0.1.3)
-- Fingerprints were redesigned across 0.1.3–0.1.4 (64-bit hash,
-  root-relative paths, no line numbers, rule id folded into the hash), so
-  a baseline saved with **0.1.2 or earlier does not match any current
+### Migration note (baselines saved before 0.1.4)
+- Fingerprints were redesigned in 0.1.4 (64-bit hash, root-relative
+  paths, no line numbers, rule id folded into the hash), so a baseline
+  saved with **0.1.3 or earlier does not match any current
   fingerprint**: every finding will report as *new*, and
   `--fail-on-regression` (which now also hard-fails on a missing or
   invalid baseline file) will gate on all of them. After upgrading,
   re-save your baseline once on a clean branch:
   `mollify audit --save-baseline .mollify/baseline.json`. Baselines saved
-  with 0.1.3+ are stable, portable across OSes, and survive unrelated
+  with 0.1.4+ are stable, portable across OSes, and survive unrelated
   line shifts.
 
 ## 0.1.5 - 2026-07-06
