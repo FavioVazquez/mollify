@@ -790,16 +790,29 @@ fn run_fix(a: &FixArgs) -> i32 {
     if !a.apply {
         return 0;
     }
-    match mollify_core::fix::apply(&edits) {
-        Ok(n) => {
-            println!("Applied {n} fix(es). Re-run `mollify audit` to confirm.");
-            0
-        }
-        Err(e) => {
-            eprintln!("error: applying fixes: {e}");
-            1
-        }
+    let outcome = mollify_core::fix::apply(&edits);
+    if outcome.applied > 0 {
+        println!(
+            "Applied {} fix(es). Re-run `mollify audit` to confirm.",
+            outcome.applied
+        );
     }
+    if !outcome.failures.is_empty() {
+        eprintln!(
+            "error: {} file(s) failed{}:",
+            outcome.failures.len(),
+            if outcome.applied > 0 {
+                " (the applied fixes above are already on disk)"
+            } else {
+                ""
+            }
+        );
+        for f in &outcome.failures {
+            eprintln!("  {f}");
+        }
+        return 1;
+    }
+    0
 }
 
 fn run_explain(a: &ExplainArgs) -> i32 {

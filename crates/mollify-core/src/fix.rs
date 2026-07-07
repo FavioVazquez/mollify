@@ -46,13 +46,25 @@ pub fn plan(root: &Utf8Path) -> Vec<FixEdit> {
     edits
 }
 
+/// Outcome of applying a fix plan. `applied` edits are already on disk even
+/// when `failures` is non-empty (per-file application is independent), so
+/// callers must report both sides — "wrote 5, failed 1" is not "wrote 0".
+#[derive(Debug, Clone, Default)]
+pub struct ApplyOutcome {
+    /// Number of edits written to disk.
+    pub applied: usize,
+    /// One `path: error` entry per file that could not be read or written,
+    /// sorted for deterministic output.
+    pub failures: Vec<String>,
+}
+
 /// Apply edits in place. Deletes the inclusive line ranges, bottom-up per file
 /// so earlier line numbers stay valid. Line endings are preserved: a CRLF
 /// file keeps CRLF on every untouched line (a one-line fix must not rewrite
-/// the whole file's endings). Returns the number of edits applied; a file
-/// that fails I/O is skipped (reported in the error) without abandoning the
-/// edits already applied to other files.
-pub fn apply(edits: &[FixEdit]) -> std::io::Result<usize> {
+/// the whole file's endings). A file that fails I/O is skipped without
+/// abandoning the edits already applied to other files — the outcome reports
+/// both sides.
+pub fn apply(edits: &[FixEdit]) -> ApplyOutcome {
     let mut by_file: FxHashMap<&Utf8Path, Vec<&FixEdit>> = FxHashMap::default();
     for e in edits {
         by_file.entry(e.path.as_path()).or_default().push(e);
@@ -92,13 +104,10 @@ pub fn apply(edits: &[FixEdit]) -> std::io::Result<usize> {
         }
         applied += removed_here;
     }
-    if failed.is_empty() {
-        Ok(applied)
-    } else {
-        Err(std::io::Error::other(format!(
-            "applied {applied} fix(es); failed: {}",
-            failed.join("; ")
-        )))
+    failed.sort();
+    ApplyOutcome {
+        applied,
+        failures: failed,
     }
 }
 
@@ -183,7 +192,8 @@ mod tests {
         .unwrap();
         let edits = plan(&d);
         assert!(!edits.is_empty());
-        apply(&edits).unwrap();
+        let out = apply(&edits);
+        assert!(out.failures.is_empty(), "failures: {:?}", out.failures);
         let after = std::fs::read_to_string(&lib).unwrap();
         assert!(
             after.contains("def keep():\r\n"),
@@ -227,8 +237,9 @@ mod tests {
         )
         .unwrap();
         let edits = plan(&d);
-        let n = apply(&edits).unwrap();
-        assert_eq!(n, 1);
+        let out = apply(&edits);
+        assert!(out.failures.is_empty(), "failures: {:?}", out.failures);
+        assert_eq!(out.applied, 1);
         let after = std::fs::read_to_string(&lib).unwrap();
         assert!(!after.contains("_priv"), "after: {after:?}");
         assert!(after.contains("keep"));

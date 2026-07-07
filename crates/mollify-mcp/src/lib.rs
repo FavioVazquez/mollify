@@ -289,19 +289,27 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
                     json!({ "path": e.path, "start_line": e.start_line, "end_line": e.end_line, "description": e.description })
                 })
                 .collect();
-            let written = if do_apply {
-                match mollify_core::fix::apply(&edits) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        return tool_error(id, &format!("mollify_fix: applying fixes failed: {e}"))
-                    }
-                }
+            let outcome = if do_apply {
+                mollify_core::fix::apply(&edits)
             } else {
-                0
+                mollify_core::fix::ApplyOutcome::default()
             };
+            // Total failure (nothing written) is a tool error; partial success
+            // returns a normal result carrying BOTH sides — `written` edits
+            // are already on disk and must not read as "wrote 0".
+            if do_apply && outcome.applied == 0 && !outcome.failures.is_empty() {
+                return tool_error(
+                    id,
+                    &format!(
+                        "mollify_fix: applying fixes failed (0 written): {}",
+                        outcome.failures.join("; ")
+                    ),
+                );
+            }
             serde_json::to_string_pretty(&json!({
                 "kind": "fix", "applied": do_apply, "count": edits.len(),
-                "fixes": items, "written": written,
+                "fixes": items, "written": outcome.applied,
+                "failures": outcome.failures,
             }))
         }
         "mollify_explain" => {
