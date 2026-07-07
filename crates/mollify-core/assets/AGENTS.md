@@ -82,7 +82,7 @@ failed/misconfigured gate (`--save-baseline` write failure, or
 (nonexistent `--path`, or an unsupported `--format` for the subcommand). The
 MCP tools report the same usage errors as `isError` results.
 
-MCP server (`mollify mcp`) exposes 16 tools (`watch` and `lsp` are CLI-only):
+MCP server (`mollify mcp`) exposes 16 tools (`watch`, `lsp`, `graph`, `init`, and `mcp` itself are CLI-only):
 mollify_audit, mollify_dead_code, mollify_deps, mollify_arch, mollify_complexity,
 mollify_dupes, mollify_types, mollify_security, mollify_coverage,
 mollify_supply_chain, mollify_explain, mollify_trace, mollify_inspect,

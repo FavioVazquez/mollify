@@ -75,6 +75,11 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 | **Metrics** | `mollify metrics` | Maintainability Index, Halstead, raw LOC, per-file complexity |
 | **Everything + score** | `mollify audit` | all of the above + a 0–100 quality score |
 
+Every finding carries one of mollify's **eight categories** (`dead-code`,
+`dependency-hygiene`, `circular-dependency`, `complexity`, `architecture`,
+`duplication`, `type-health`, `security`); cold paths, supply chain, and
+metrics are additional command surfaces over those same categories.
+
 Plus `mollify graph [--mermaid]` (import-graph export), `mollify lsp` (editor
 diagnostics), and `--format github|junit` for CI.
 
@@ -296,7 +301,7 @@ Mollify is built to be precise and dependency-light:
 
 - **Full-fidelity parsing.** Built on Astral's `ruff_python_parser` / `ruff_python_ast`
   — the same parser behind `ruff` — pinned to a crates.io release, so every
-  distribution channel builds the identical binary ([ADR-0001](docs/adr/0001-parser-tree-sitter.md)).
+  distribution channel builds the identical binary ([ADR-0001](docs/adr/0001-parser-foundation.md)).
 - **Real scope/binding resolution.** Reachability resolves each name *load* to its
   binding (LEGB), so shadowing function-locals and attribute accesses never mask a
   dead top-level symbol.

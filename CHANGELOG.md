@@ -4,6 +4,46 @@ All notable changes to Mollify. This project follows the spirit of
 [Keep a Changelog](https://keepachangelog.com/) and the JSON contract is
 versioned by `schema_version` (currently `0.1`).
 
+## Unreleased
+
+### Fixed
+- **Complete stdlib module table.** The `missing-dependency` stdlib
+  exclusion list was a 120-entry subset; ~100 public top-level modules
+  (`tomllib`, `atexit`, `binascii`, `codecs`, `code`, `readline`,
+  `rlcompleter`, `locale`, `pdb`, `doctest`, `wsgiref`, …) were flagged
+  as missing dependencies on real codebases (observed auditing Flask).
+  The table is now the sorted union of public `sys.stdlib_module_names`
+  across CPython 3.8–3.13, including since-removed "dead battery"
+  modules so projects on older Pythons never see them as missing. A
+  regression test pins the previously missing names and the table's
+  sorted-order invariant.
+- **Dead `source_roots` config key removed.** `mollify init` scaffolded
+  (and `docs/configuration.md` documented) a `source_roots` key the
+  config loader never parsed. It is gone from both surfaces until root
+  configuration exists as a working feature.
+- **Docs coherence pass.** The signal count is anchored to the
+  eight-variant `Category` enum everywhere ("five co-equal areas" was a
+  pre-type-health/security leftover in the architecture docs and the
+  enum's own comment); ADR-0001 is renamed `0001-parser-foundation.md`
+  to match its ruff content; the agent surfaces' "CLI-only" note now
+  names all five commands with no MCP tool (`watch`, `lsp`, `graph`,
+  `init`, `mcp`); and `CLAUDE.md` was rewritten as a dev + usage hybrid
+  matching `AGENTS.md`/`GEMINI.md`, dropping references to unpublished
+  local planning documents (source comments citing them were cleaned up
+  too).
+
+### Migration note (baselines saved before 0.1.4)
+- Fingerprints were redesigned in 0.1.4 (64-bit hash, root-relative
+  paths, no line numbers, rule id folded into the hash), so a baseline
+  saved with **0.1.3 or earlier does not match any current
+  fingerprint**: every finding will report as *new*, and
+  `--fail-on-regression` (which now also hard-fails on a missing or
+  invalid baseline file) will gate on all of them. After upgrading,
+  re-save your baseline once on a clean branch:
+  `mollify audit --save-baseline .mollify/baseline.json`. Baselines saved
+  with 0.1.4+ are stable, portable across OSes, and survive unrelated
+  line shifts.
+
 ## 0.1.5 - 2026-07-06
 
 Calibration and portability fixes from the first real-world corpus evaluation

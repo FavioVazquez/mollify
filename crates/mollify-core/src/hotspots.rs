@@ -1,5 +1,5 @@
 //! Churn × complexity hotspot ranking — a refactor-priority signal that is
-//! genuinely unfilled in FOSS Python tooling (RESEARCH.md §8.3). A file that is
+//! genuinely unfilled in FOSS Python tooling. A file that is
 //! both **complex** and **frequently changed** is where bugs cluster.
 //!
 //! Churn = commits touching the file (from `git log`). File complexity = sum of

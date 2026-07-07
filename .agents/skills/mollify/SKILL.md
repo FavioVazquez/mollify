@@ -99,7 +99,7 @@ for all commands and flags.
   fully implemented working features.
 
 ## MCP server tools
-`mollify mcp` exposes 16 tools (`watch` and `lsp` are CLI-only): `mollify_audit`,
+`mollify mcp` exposes 16 tools (`watch`, `lsp`, `graph`, `init`, and `mcp` itself are CLI-only): `mollify_audit`,
 `mollify_dead_code`, `mollify_deps`, `mollify_arch`, `mollify_complexity`,
 `mollify_dupes`, `mollify_types`, `mollify_security`, `mollify_coverage`,
 `mollify_supply_chain`, `mollify_explain`, `mollify_trace`, `mollify_inspect`,

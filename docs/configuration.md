@@ -31,7 +31,6 @@ obvious knobs. `_comment` keys are ignored by the loader and act as inline docs
 ```json
 {
   "_comment": "mollify config — see docs/configuration.md. Severities: error | warn | off.",
-  "source_roots": [".", "src"],
   "severity": {
     "dead-code": "warn",
     "dependency-hygiene": "warn",

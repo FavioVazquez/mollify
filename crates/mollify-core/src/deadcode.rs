@@ -1,5 +1,5 @@
 //! Dead-code engine: reachability-based unused files and unused top-level
-//! symbols, with confidence tiers (RESEARCH.md §4 / PLAN.md §4).
+//! symbols, with confidence tiers.
 
 use crate::fingerprint::{fingerprint, Occurrences};
 use mollify_graph::ModuleGraph;

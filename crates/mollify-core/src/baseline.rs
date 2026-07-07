@@ -2,7 +2,7 @@
 //! later run report only what's **new** relative to that snapshot. This is the
 //! "no new issues" CI gate (complementary to git-attribution `--gate new-only`):
 //! it works without git and survives file moves, because fingerprints are
-//! content-derived (RESEARCH.md §2.11 — evidence-preserving).
+//! content-derived (the evidence-preserving invariant).
 
 use camino::Utf8Path;
 use mollify_types::Finding;

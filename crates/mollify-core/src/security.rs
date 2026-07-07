@@ -1,6 +1,6 @@
 //! Security engine — a deterministic **candidate producer** (bandit-style).
 //! It emits syntactic candidates; it never decides exploitability (the
-//! candidate/verifier split — RESEARCH.md §2.11). Maps parser `SecurityHit`s to
+//! candidate/verifier split). Maps parser `SecurityHit`s to
 //! findings with per-rule confidence.
 
 use crate::fingerprint::fingerprint;

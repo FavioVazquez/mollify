@@ -1,6 +1,6 @@
 //! Complexity engine. Flags functions whose cyclomatic or cognitive complexity
 //! exceeds a threshold. (Churn × complexity hotspot ranking — the unfilled FOSS
-//! Python niche — is planned via `git log --numstat`; PLAN.md §3.5.)
+//! Python niche — is planned via `git log --numstat`.)
 
 use crate::fingerprint::fingerprint;
 use mollify_graph::ModuleGraph;

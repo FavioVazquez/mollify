@@ -1,5 +1,5 @@
 //! Framework awareness — the dominant false-positive killer for Python
-//! dead-code analysis (RESEARCH.md §4). A symbol registered with a framework via
+//! dead-code analysis. A symbol registered with a framework via
 //! a decorator (a Flask/FastAPI route, a Celery task, a pytest fixture, a Django
 //! signal receiver, a click/typer command, a Pydantic validator, …) is *reached*
 //! even with zero in-repo callers.

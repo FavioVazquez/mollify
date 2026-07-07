@@ -4,7 +4,7 @@
 //! JSON envelope with a discriminating top-level `kind`; downstream agents and
 //! CI depend on this JSON shape, not on Mollify's internal Rust types.
 //!
-//! Invariants (ported from fallow's design — see `RESEARCH.md` §2.11):
+//! Invariants (ported from fallow's design — see docs/architecture.md):
 //! - **Determinism:** identical input → byte-identical output. All collections
 //!   that reach output are sorted deterministically before serialization.
 //! - **Evidence, not decisions:** every [`Finding`] carries a stable
@@ -64,8 +64,9 @@ pub enum Attribution {
     Inherited,
 }
 
-/// The five co-equal analysis areas (plus dependency hygiene), mirroring
-/// fallow's "never reduce it to a dead-code tool" rule.
+/// The eight co-equal analysis areas — every finding carries exactly one.
+/// This enum is the `category` field of the JSON contract and the project's
+/// authoritative signal count ("never reduce it to a dead-code tool").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
