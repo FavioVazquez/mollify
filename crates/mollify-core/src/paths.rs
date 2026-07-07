@@ -64,6 +64,15 @@ pub fn is_fixture_tree(path: &Utf8Path) -> bool {
         "test_data",
         "golden",
         "snapshots",
+        // Vendored trees are code you don't own: auto-editing them breaks
+        // upstream-sync hygiene even when the finding is true (astropy's
+        // `extern/`, black's `blib2to3`-style vendoring).
+        "extern",
+        "vendor",
+        "vendored",
+        "_vendor",
+        "third_party",
+        "thirdparty",
     ]
     .iter()
     .any(|d| p.starts_with(&format!("{d}/")) || p.contains(&format!("/{d}/")))

@@ -413,9 +413,29 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                 // formatter cases, pydantic's mypy golden inputs) are never
                 // certain: editing a file nothing imports can't be verified.
                 let what = format!("`{}`", imp.bindings.join("`, `"));
-                let confidence = if is_init || imp.in_try || m.parsed.has_dynamic_sink {
+                // An import of an internal module that registers handlers at
+                // import time (framework/dispatch decorators at its top level)
+                // may exist purely for that side effect — sympy's geometry
+                // imports its sets handlers this way. Never a certain fix.
+                let registers = {
+                    let target = graph.import_target_dotted(m, imp);
+                    graph.module_by_dotted(&target).is_some_and(|src| {
+                        src.parsed
+                            .definitions
+                            .iter()
+                            .any(crate::plugins::is_framework_entry)
+                    })
+                };
+                let confidence = if is_init
+                    || imp.in_try
+                    || m.parsed.has_dynamic_sink
+                    || m.parsed.dunder_all_dynamic
+                {
                     Confidence::Uncertain
-                } else if !graph.module_reachable(m.id) || crate::paths::is_fixture_tree(&m.rel) {
+                } else if !graph.module_reachable(m.id)
+                    || crate::paths::is_fixture_tree(&m.rel)
+                    || registers
+                {
                     Confidence::Likely
                 } else {
                     Confidence::Certain
@@ -435,7 +455,11 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                     attribution: None,
                     reason: if imp.in_try {
                         format!(
-                            "import {what} is never used in this module (inside try/except — may be an availability probe)"
+                            "import {what} is never used in this module (conditionally imported — may be an availability probe)"
+                        )
+                    } else if registers {
+                        format!(
+                            "import {what} is never used in this module (the imported module registers handlers at import time)"
                         )
                     } else {
                         format!("import {what} is never used in this module")
@@ -621,6 +645,9 @@ fn unused_symbols(
             } else if d.private_by_convention
                 && graph.module_reachable(m.id)
                 && !crate::paths::is_fixture_tree(&m.rel)
+                // A dynamically-built `__all__` can export anything, so
+                // "not in __all__" is no longer proof.
+                && !m.parsed.dunder_all_dynamic
             {
                 Confidence::Certain
             } else {
@@ -1223,6 +1250,138 @@ def view():
         assert!(dict.is_some(), "got {f:?}");
         assert!(!dict.unwrap().actions[0].auto_fixable);
         assert!(!f.iter().any(|x| x.reason.contains("`List`")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn conditional_import_is_never_certain() {
+        // Distilled from scipy/_lib/uarray.py: the try/except availability
+        // probe spelled as a module-level `if`/`else` — both arms bind the
+        // name; removing either changes behavior.
+        let d = temp("condimp");
+        write(&d, "__main__.py", "import shim\nprint(shim.thing)\n");
+        write(
+            &d,
+            "shim.py",
+            "HAS_FAST = False\nif HAS_FAST:\n    from fast import thing\nelse:\n    from slow import thing\n",
+        );
+        write(&d, "fast.py", "thing = 1\n");
+        write(&d, "slow.py", "thing = 2\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        for imp in f.iter().filter(|x| x.rule == "unused-import") {
+            assert_ne!(
+                imp.confidence,
+                Confidence::Certain,
+                "conditional import graded certain: {imp:?}"
+            );
+            assert!(!imp.actions[0].auto_fixable, "auto-fixable: {imp:?}");
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn dynamic_dunder_all_blocks_certainty_and_keeps_literal_names() {
+        // Distilled from scipy/stats/mstats.py:
+        //   __all__ = _basic.__all__ + _extras.__all__   (unknowable base)
+        //   __all__ += ['gmean', 'hmean']                (literal extension)
+        // `gmean` IS exported (must not be flagged at all); other unused
+        // imports in the module must not be certain (the __all__ is partial).
+        let d = temp("dynall");
+        write(&d, "__main__.py", "import facade\n");
+        write(&d, "basic.py", "__all__ = ['b']\nb = 1\n");
+        write(
+            &d,
+            "facade.py",
+            "import basic\nfrom stats import gmean, hmean\nimport os\n\n__all__ = basic.__all__ + ['extra']\n__all__ += ['gmean', 'hmean']\n",
+        );
+        write(&d, "stats.py", "gmean = 1\nhmean = 2\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter().any(|x| x.reason.contains("`gmean`")),
+            "name in literal __all__ extension wrongly flagged: {f:?}"
+        );
+        let os_imp = f
+            .iter()
+            .find(|x| x.rule == "unused-import" && x.reason.contains("`os`"))
+            .expect("unused `os` still reported");
+        assert_ne!(
+            os_imp.confidence,
+            Confidence::Certain,
+            "dynamic __all__ module import graded certain: {os_imp:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn registration_import_is_never_certain() {
+        // Distilled from sympy/geometry/entity.py: the import exists to load
+        // a module whose top-level defs register themselves via @dispatch —
+        // deleting the "unused" import unregisters the handlers.
+        let d = temp("regimp");
+        write(&d, "__main__.py", "import entity\n");
+        write(
+            &d,
+            "handlers.py",
+            "from dispatchlib import dispatch\n\n@dispatch(int, int)\ndef intersection_sets(a, b):\n    return a\n",
+        );
+        write(
+            &d,
+            "dispatchlib.py",
+            "def dispatch(*t):\n    def deco(f):\n        return f\n    return deco\n",
+        );
+        write(
+            &d,
+            "entity.py",
+            "from handlers import intersection_sets\n\ndef run():\n    return 1\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let imp = f
+            .iter()
+            .find(|x| x.rule == "unused-import" && x.reason.contains("intersection_sets"))
+            .expect("registration import still reported as evidence");
+        assert_ne!(imp.confidence, Confidence::Certain, "{imp:?}");
+        assert!(!imp.actions[0].auto_fixable, "{imp:?}");
+        assert!(
+            imp.reason.contains("registers handlers"),
+            "reason lacks the registration evidence: {}",
+            imp.reason
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn noqa_inside_multiline_import_suppresses() {
+        // Distilled from astropy's test suite: the noqa sits on the NAME's
+        // line inside a parenthesized from-import (where ruff anchors F401),
+        // not on the statement's first line where mollify reports.
+        let d = temp("noqaspan");
+        write(&d, "__main__.py", "import helpers\n");
+        write(
+            &d,
+            "common.py",
+            "setup_function = 1\nteardown_function = 2\n",
+        );
+        write(
+            &d,
+            "helpers.py",
+            "from common import (\n    setup_function,  # noqa: F401\n    teardown_function,  # noqa: F401\n)\n\ndef use():\n    return 1\n",
+        );
+        // Full pipeline: suppression matching runs on relativized paths.
+        let r = crate::dead_code_report(&d);
+        assert!(
+            !r.findings
+                .iter()
+                .any(|x| x.rule == "unused-import"
+                    && x.location.path.as_str().ends_with("helpers.py")),
+            "noqa on multi-line import name lines not honored: {:?}",
+            r.findings
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 
