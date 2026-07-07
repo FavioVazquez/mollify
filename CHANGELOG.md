@@ -7,6 +7,64 @@ versioned by `schema_version` (currently `0.1`).
 ## Unreleased
 
 ### Fixed
+- **Third stress-test sweep: scientific, notebook-heavy, and code-golf
+  corpora** (sympy/astropy/scipy, three notebook teaching repos, four golf
+  repos — 160/160 engine runs clean, deterministic). Every `certain`
+  unused-import it produced on the scientific tier was a false positive
+  (0/8 confirmed by ruff); all four root causes fixed, each with a
+  regression test distilled from the site that exposed it:
+  - imports of internal modules that **register handlers at import time**
+    (sympy's `@dispatch` geometry handlers; `dispatch` joins the framework
+    decorator table) cap at `likely` with the registration named in the
+    reason — `fix --apply` would have unregistered sympy's set-intersection
+    handlers;
+  - **module-level `if`/`else` conditional imports** (scipy's
+    `if _has_uarray:` availability probe) are guarded like try/except
+    probes — never certain;
+  - a **dynamic `__all__`** (`__all__ = a.__all__ + [...]` — scipy's
+    `mstats`) now keeps the literal names it *can* see as exports and
+    blocks certainty for the rest, instead of silently discarding the
+    export list;
+  - `# noqa` on the **name lines of a multi-line `from … import (…)`**
+    (astropy's test suite; where ruff anchors F401) suppresses the
+    statement's finding.
+- **Vendored trees are never auto-edited.** `extern/`, `vendor/`,
+  `_vendor/`, `third_party/` and friends join the fixture-tree list: the
+  findings stay, but code you don't own is not a certain fix (astropy's
+  `extern/configobj`).
+- **Legacy nbformat-3 notebooks are analyzed.** Pre-2015 notebooks nest
+  cells under `worksheets` and spell cell text `input`; they were silently
+  invisible to every engine (six of a real teaching repo's fifty files).
+- **`unused-parameter` override detection resolves the actual base class.**
+  The interface-bound heuristic pooled base-class methods by bare class
+  name project-wide, so two unrelated classes sharing a name
+  cross-suppressed: a genuine unused parameter in a subclass of one
+  `Config` vanished because a different `Config` elsewhere declared a
+  method with the same name. Base spellings now resolve to the specific
+  class through the subclass module's own imports (same module, `from X
+  import Base [as B]`, dotted `alias.Base`, relative imports included);
+  the pooled index remains only as the fallback for unresolvable
+  spellings.
+- **`mollify fix --apply` reports partial success honestly.** Applying
+  used to collapse "wrote 5, failed 1" and "wrote 0" into the same
+  error even though the five edits were already on disk. The CLI now
+  prints the applied count and then lists per-file failures (exit 1,
+  noting applied fixes are on disk); the MCP `mollify_fix` result
+  carries both `written` and `failures`, reserving `isError` for total
+  failure. Failure lists are sorted (deterministic output).
+- **Console-script entry points resolve under non-`src` source roots.**
+  A `[project.scripts]` target `pkg.cli:main` names the module from the
+  import root, but a tree rooted under `lib/`, `python/`, or a monorepo
+  prefix spells it `python.pkg.cli` — entry-point marking silently
+  no-op'd and `main` was reported `unused-export`. (`src/` was already
+  stripped.) Now falls back to an unambiguous suffix match; ambiguous
+  suffixes mark nothing.
+- **Cookbook accuracy.** Recipe 01's first audit block dropped two
+  findings mid-sequence and showed an `… 7 more` line the CLI never
+  prints; it now shows the true first 11 lines verbatim with the trim
+  noted in prose. Recipe 06's metrics header was one line stale
+  (44 → 45 LOC). The cookbook README now gives the working
+  `advisories.sample.json` invocation (`--advisory-db` required).
 - **Complete stdlib module table.** The `missing-dependency` stdlib
   exclusion list was a 120-entry subset; ~100 public top-level modules
   (`tomllib`, `atexit`, `binascii`, `codecs`, `code`, `readline`,

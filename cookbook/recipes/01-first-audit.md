@@ -20,9 +20,13 @@ Quality score: 84/100
   billing/app.py:18 [warn/likely] weak-hash — `hashlib.md5` is a weak hash; use sha256+ (or pass usedforsecurity=False) [CWE-327]  (weak-hash:2fda8ae0463ffdee)
   billing/services/invoice.py:1 [warn/certain] circular-dependency — import cycle: billing.services.invoice → billing.services.ledger → billing.services.invoice  (circular-dependency:d297a057a059c6fb)
   billing/services/invoice.py:1 [warn/certain] unused-import — import `requests` is never used in this module  (unused-import:5c1d3a12f0f0f698)
+  billing/services/invoice.py:2 [warn/certain] unused-import — import `Money` is never used in this module  (unused-import:0e814590eab517ff)
+  billing/services/invoice.py:3 [warn/certain] unused-import — import `ledger` is never used in this module  (unused-import:4de5ca3ebae02431)
   billing/services/invoice.py:6 [warn/certain] high-complexity — function `create_invoice` is complex (cyclomatic 7, cognitive 21); thresholds 10/15  (high-complexity:1cbe4ffa6ee8ed1d)
-  … 7 more
 ```
+
+*(Trimmed here for the page — the real run prints all 16 findings; the lines
+above are the first 11, verbatim.)*
 
 That's the whole product in one screen. `audit` runs **every** engine — dead
 code, deps, complexity, duplication, architecture, types, security — in a single

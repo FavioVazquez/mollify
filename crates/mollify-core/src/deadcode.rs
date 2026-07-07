@@ -134,8 +134,9 @@ fn unreachable_code(graph: &ModuleGraph, out: &mut Vec<Finding>) {
 /// `unused-parameter` hits were override/callback signatures.
 fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
     // Project-wide `class name -> its method names` index for the override
-    // heuristic. Keyed by bare class name: base spellings (`Base`,
-    // `mod.Base`) are matched on their last segment.
+    // heuristic — the *fallback* when a base spelling can't be resolved to
+    // one specific class (see `resolved_base_methods`). Keyed by bare class
+    // name, pooling every same-named class.
     let mut base_methods: FxHashMap<&str, FxHashSet<&str>> = FxHashMap::default();
     for m in &graph.modules {
         for c in &m.parsed.classes {
@@ -150,7 +151,7 @@ fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
     for m in &graph.modules {
         let mut occ = Occurrences::default();
         for s in &m.parsed.scope_findings {
-            if s.is_param && param_is_interface_bound(m, s.line, &base_methods) {
+            if s.is_param && param_is_interface_bound(graph, m, s.line, &base_methods) {
                 continue;
             }
             let (rule, kind, confidence) = if s.is_param {
@@ -200,6 +201,7 @@ fn unused_locals(graph: &ModuleGraph, out: &mut Vec<Finding>) {
 ///   whose signature the framework requires (`@app.errorhandler` handlers
 ///   must accept the error argument).
 fn param_is_interface_bound(
+    graph: &ModuleGraph,
     m: &mollify_graph::ModuleInfo,
     line: u32,
     base_methods: &FxHashMap<&str, FxHashSet<&str>>,
@@ -235,6 +237,15 @@ fn param_is_interface_bound(
             if last == "object" {
                 continue;
             }
+            // Prefer the *specific* class the spelling refers to (resolved
+            // through this module's own imports) over the bare-name pool, so
+            // two unrelated same-named classes never cross-suppress.
+            if let Some(methods) = resolved_base_methods(graph, m, base) {
+                if methods.contains(mem.name.as_str()) {
+                    return true; // genuine override of the actual base
+                }
+                continue; // the actual base has no such method
+            }
             match base_methods.get(last) {
                 // Overrides a method an in-project base declares.
                 Some(methods) if methods.contains(mem.name.as_str()) => return true,
@@ -252,6 +263,93 @@ fn param_is_interface_bound(
             && line <= d.end_line
             && !d.decorators.is_empty()
     })
+}
+
+/// Resolve a base-class spelling to the method set of the *specific*
+/// in-project class it names, seen from module `m`: a class defined in `m`
+/// itself, one imported via `from X import Base [as B]`, or a dotted
+/// `alias.Base` path resolved through `m`'s imports. Returns `None` when the
+/// spelling can't be pinned to exactly one class (the caller falls back to
+/// the pooled bare-name index).
+fn resolved_base_methods<'g>(
+    graph: &'g ModuleGraph,
+    m: &'g mollify_graph::ModuleInfo,
+    spelling: &str,
+) -> Option<FxHashSet<&'g str>> {
+    let class_methods = |module: &'g mollify_graph::ModuleInfo, name: &str| {
+        module
+            .parsed
+            .classes
+            .iter()
+            .find(|c| c.name == name)
+            .map(|c| {
+                c.members
+                    .iter()
+                    .filter(|mem| mem.is_method)
+                    .map(|mem| mem.name.as_str())
+                    .collect::<FxHashSet<_>>()
+            })
+    };
+    if let Some((prefix, last)) = spelling.rsplit_once('.') {
+        // Dotted spelling. Try the prefix as an absolute module path first
+        // (`import a.b` + `a.b.Base`), then substitute the leading segment
+        // through this module's import bindings (`import a.b as ab` +
+        // `ab.Base`, `from . import sub` + `sub.Base`).
+        if let Some(target) = graph.module_by_dotted(prefix) {
+            return class_methods(target, last);
+        }
+        let (first, rest) = match prefix.split_once('.') {
+            Some((f, r)) => (f, Some(r)),
+            None => (prefix, None),
+        };
+        for imp in &m.parsed.imports {
+            let target = if imp.names.is_empty() && imp.bindings.iter().any(|b| b == first) {
+                // `import mod[.sub] [as first]` — the binding names the module.
+                imp.module.clone()
+            } else if let Some(idx) = imp.bindings.iter().position(|b| b == first) {
+                // `from X import sub [as first]` where the (possibly aliased)
+                // binding is itself a module — map it back to the real name.
+                let Some(original) = imp.names.get(idx) else {
+                    continue;
+                };
+                let base = graph.import_target_dotted(m, imp);
+                if base.is_empty() {
+                    original.clone()
+                } else {
+                    format!("{base}.{original}")
+                }
+            } else {
+                continue;
+            };
+            let full = match rest {
+                Some(r) => format!("{target}.{r}"),
+                None => target,
+            };
+            if let Some(module) = graph.module_by_dotted(&full) {
+                return class_methods(module, last);
+            }
+        }
+        return None;
+    }
+    // Bare spelling: a class in this module wins, else follow
+    // `from X import Base [as spelling]` to the defining module.
+    if let Some(methods) = class_methods(m, spelling) {
+        return Some(methods);
+    }
+    for imp in &m.parsed.imports {
+        let Some(idx) = imp.bindings.iter().position(|b| b == spelling) else {
+            continue;
+        };
+        let Some(original) = imp.names.get(idx) else {
+            continue;
+        };
+        let target = graph.import_target_dotted(m, imp);
+        if let Some(module) = graph.module_by_dotted(&target) {
+            return class_methods(module, original);
+        }
+        return None;
+    }
+    None
 }
 
 /// Flag unused imports. A *whole-statement*-unused import (every binding unused)
@@ -315,9 +413,29 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                 // formatter cases, pydantic's mypy golden inputs) are never
                 // certain: editing a file nothing imports can't be verified.
                 let what = format!("`{}`", imp.bindings.join("`, `"));
-                let confidence = if is_init || imp.in_try || m.parsed.has_dynamic_sink {
+                // An import of an internal module that registers handlers at
+                // import time (framework/dispatch decorators at its top level)
+                // may exist purely for that side effect — sympy's geometry
+                // imports its sets handlers this way. Never a certain fix.
+                let registers = {
+                    let target = graph.import_target_dotted(m, imp);
+                    graph.module_by_dotted(&target).is_some_and(|src| {
+                        src.parsed
+                            .definitions
+                            .iter()
+                            .any(crate::plugins::is_framework_entry)
+                    })
+                };
+                let confidence = if is_init
+                    || imp.in_try
+                    || m.parsed.has_dynamic_sink
+                    || m.parsed.dunder_all_dynamic
+                {
                     Confidence::Uncertain
-                } else if !graph.module_reachable(m.id) || crate::paths::is_fixture_tree(&m.rel) {
+                } else if !graph.module_reachable(m.id)
+                    || crate::paths::is_fixture_tree(&m.rel)
+                    || registers
+                {
                     Confidence::Likely
                 } else {
                     Confidence::Certain
@@ -337,7 +455,11 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                     attribution: None,
                     reason: if imp.in_try {
                         format!(
-                            "import {what} is never used in this module (inside try/except — may be an availability probe)"
+                            "import {what} is never used in this module (conditionally imported — may be an availability probe)"
+                        )
+                    } else if registers {
+                        format!(
+                            "import {what} is never used in this module (the imported module registers handlers at import time)"
                         )
                     } else {
                         format!("import {what} is never used in this module")
@@ -459,9 +581,25 @@ fn unused_symbols(
         // caller, so these have no in-repo references but are not dead.
         let is_test = crate::paths::is_test_module(&m.path, test_dirs);
         // Functions named by a console-script entry point in this module.
+        // Mirrors mark_entry_points fully: suffix match for non-src source
+        // roots (`python.pkg.cli` for a `pkg.cli:main` target), and the same
+        // exactly-one guard — an ambiguous suffix exempts nothing, so the
+        // symbol side never out-guesses the file side.
         let entry_here: FxHashSet<&str> = entry_symbols
             .iter()
-            .filter(|(module, _)| module == m.dotted.as_str())
+            .filter(|(module, _)| {
+                if module == m.dotted.as_str() {
+                    return true;
+                }
+                let suffix = format!(".{module}");
+                m.dotted.ends_with(&suffix)
+                    && graph
+                        .modules
+                        .iter()
+                        .filter(|other| other.dotted.ends_with(&suffix))
+                        .count()
+                        == 1
+            })
             .map(|(_, func)| func.as_str())
             .collect();
 
@@ -507,6 +645,9 @@ fn unused_symbols(
             } else if d.private_by_convention
                 && graph.module_reachable(m.id)
                 && !crate::paths::is_fixture_tree(&m.rel)
+                // A dynamically-built `__all__` can export anything, so
+                // "not in __all__" is no longer proof.
+                && !m.parsed.dunder_all_dynamic
             {
                 Confidence::Certain
             } else {
@@ -867,6 +1008,163 @@ def view():
     }
 
     #[test]
+    fn same_named_class_does_not_cross_suppress_params() {
+        // Two unrelated classes both named `Config`: `a.Config` declares
+        // `run`, `b.Config` does not. A subclass of *b's* Config defining
+        // `run(self, dead_p)` is NOT an override — the pooled bare-name index
+        // used to borrow `run` from a.Config and swallow the finding.
+        let d = temp("iface-collide");
+        write(&d, "__main__.py", "import c\nc.Sub().run(1)\n");
+        write(
+            &d,
+            "a.py",
+            "class Config:\n    def run(self, x):\n        return x\n",
+        );
+        write(
+            &d,
+            "b.py",
+            "class Config:\n    def size(self):\n        return 1\n",
+        );
+        write(
+            &d,
+            "c.py",
+            "from b import Config\n\nclass Sub(Config):\n    def run(self, dead_p):\n        return 1\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "unused-parameter" && x.reason.contains("`dead_p`")),
+            "same-named unrelated class wrongly suppressed the param: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn resolved_override_still_suppressed() {
+        // The genuine override — subclassing the Config that DOES declare
+        // `run` — must stay suppressed, including via an import alias.
+        let d = temp("iface-resolved");
+        write(&d, "__main__.py", "import c\nc.Sub().run(1)\n");
+        write(
+            &d,
+            "a.py",
+            "class Config:\n    def run(self, x):\n        return x\n",
+        );
+        write(
+            &d,
+            "b.py",
+            "class Config:\n    def size(self):\n        return 1\n",
+        );
+        write(
+            &d,
+            "c.py",
+            "from a import Config as Base\n\nclass Sub(Base):\n    def run(self, dead_p):\n        return 1\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-parameter" && x.reason.contains("`dead_p`")),
+            "genuine override wrongly flagged: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn dotted_base_spelling_resolves_to_specific_class() {
+        // `import b` + `class Sub(b.Config)` pins the base to b.Config, which
+        // has no `run` — the unused param in the subclass must be flagged even
+        // though a.Config (same bare name) declares `run`.
+        let d = temp("iface-dotted");
+        write(&d, "__main__.py", "import c\nc.Sub().run(1)\n");
+        write(
+            &d,
+            "a.py",
+            "class Config:\n    def run(self, x):\n        return x\n",
+        );
+        write(
+            &d,
+            "b.py",
+            "class Config:\n    def size(self):\n        return 1\n",
+        );
+        write(
+            &d,
+            "c.py",
+            "import b\n\nclass Sub(b.Config):\n    def run(self, dead_p):\n        return 1\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "unused-parameter" && x.reason.contains("`dead_p`")),
+            "dotted base spelling not resolved to the specific class: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn aliased_submodule_base_spelling_resolves() {
+        // `from pkg import sub as s` + `class Sub(s.Config)` — the binding
+        // must map back to the real submodule name, pinning the base to
+        // pkg.sub.Config (no `run`) instead of pooling with a.Config's `run`.
+        let d = temp("iface-alias-sub");
+        write(&d, "__main__.py", "import c\nc.Sub().run(1)\n");
+        write(
+            &d,
+            "a.py",
+            "class Config:\n    def run(self, x):\n        return x\n",
+        );
+        write(&d, "pkg/__init__.py", "");
+        write(
+            &d,
+            "pkg/sub.py",
+            "class Config:\n    def size(self):\n        return 1\n",
+        );
+        write(
+            &d,
+            "c.py",
+            "from pkg import sub as s\n\nclass Sub(s.Config):\n    def run(self, dead_p):\n        return 1\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "unused-parameter" && x.reason.contains("`dead_p`")),
+            "aliased-submodule base spelling fell back to the pool: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn ambiguous_entry_symbol_suffix_exempts_nothing() {
+        // Two modules both end in `.pkg.cli` and both define `main`; the
+        // console-script exemption must refuse to guess, mirroring
+        // mark_entry_points — both `main`s stay reported.
+        let d = temp("entry-ambig-sym");
+        write(&d, "__main__.py", "print('hi')\n");
+        write(&d, "x/pkg/cli.py", "def main():\n    return 0\n");
+        write(&d, "y/pkg/cli.py", "def main():\n    return 1\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let entry_syms = vec![("pkg.cli".to_string(), "main".to_string())];
+        let f = analyze_with(&g, &[], &entry_syms);
+        let flagged = f
+            .iter()
+            .filter(|x| x.rule == "unused-export" && x.reason.contains("`main`"))
+            .count();
+        assert_eq!(
+            flagged, 2,
+            "ambiguous entry-symbol suffix must exempt neither: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
     fn flags_unused_local_and_param_but_not_used_ones() {
         let d = temp("scope");
         write(&d, "__main__.py", "import lib\nlib.f(1, 2)\n");
@@ -952,6 +1250,138 @@ def view():
         assert!(dict.is_some(), "got {f:?}");
         assert!(!dict.unwrap().actions[0].auto_fixable);
         assert!(!f.iter().any(|x| x.reason.contains("`List`")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn conditional_import_is_never_certain() {
+        // Distilled from scipy/_lib/uarray.py: the try/except availability
+        // probe spelled as a module-level `if`/`else` — both arms bind the
+        // name; removing either changes behavior.
+        let d = temp("condimp");
+        write(&d, "__main__.py", "import shim\nprint(shim.thing)\n");
+        write(
+            &d,
+            "shim.py",
+            "HAS_FAST = False\nif HAS_FAST:\n    from fast import thing\nelse:\n    from slow import thing\n",
+        );
+        write(&d, "fast.py", "thing = 1\n");
+        write(&d, "slow.py", "thing = 2\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        for imp in f.iter().filter(|x| x.rule == "unused-import") {
+            assert_ne!(
+                imp.confidence,
+                Confidence::Certain,
+                "conditional import graded certain: {imp:?}"
+            );
+            assert!(!imp.actions[0].auto_fixable, "auto-fixable: {imp:?}");
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn dynamic_dunder_all_blocks_certainty_and_keeps_literal_names() {
+        // Distilled from scipy/stats/mstats.py:
+        //   __all__ = _basic.__all__ + _extras.__all__   (unknowable base)
+        //   __all__ += ['gmean', 'hmean']                (literal extension)
+        // `gmean` IS exported (must not be flagged at all); other unused
+        // imports in the module must not be certain (the __all__ is partial).
+        let d = temp("dynall");
+        write(&d, "__main__.py", "import facade\n");
+        write(&d, "basic.py", "__all__ = ['b']\nb = 1\n");
+        write(
+            &d,
+            "facade.py",
+            "import basic\nfrom stats import gmean, hmean\nimport os\n\n__all__ = basic.__all__ + ['extra']\n__all__ += ['gmean', 'hmean']\n",
+        );
+        write(&d, "stats.py", "gmean = 1\nhmean = 2\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            !f.iter().any(|x| x.reason.contains("`gmean`")),
+            "name in literal __all__ extension wrongly flagged: {f:?}"
+        );
+        let os_imp = f
+            .iter()
+            .find(|x| x.rule == "unused-import" && x.reason.contains("`os`"))
+            .expect("unused `os` still reported");
+        assert_ne!(
+            os_imp.confidence,
+            Confidence::Certain,
+            "dynamic __all__ module import graded certain: {os_imp:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn registration_import_is_never_certain() {
+        // Distilled from sympy/geometry/entity.py: the import exists to load
+        // a module whose top-level defs register themselves via @dispatch —
+        // deleting the "unused" import unregisters the handlers.
+        let d = temp("regimp");
+        write(&d, "__main__.py", "import entity\n");
+        write(
+            &d,
+            "handlers.py",
+            "from dispatchlib import dispatch\n\n@dispatch(int, int)\ndef intersection_sets(a, b):\n    return a\n",
+        );
+        write(
+            &d,
+            "dispatchlib.py",
+            "def dispatch(*t):\n    def deco(f):\n        return f\n    return deco\n",
+        );
+        write(
+            &d,
+            "entity.py",
+            "from handlers import intersection_sets\n\ndef run():\n    return 1\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        let imp = f
+            .iter()
+            .find(|x| x.rule == "unused-import" && x.reason.contains("intersection_sets"))
+            .expect("registration import still reported as evidence");
+        assert_ne!(imp.confidence, Confidence::Certain, "{imp:?}");
+        assert!(!imp.actions[0].auto_fixable, "{imp:?}");
+        assert!(
+            imp.reason.contains("registers handlers"),
+            "reason lacks the registration evidence: {}",
+            imp.reason
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn noqa_inside_multiline_import_suppresses() {
+        // Distilled from astropy's test suite: the noqa sits on the NAME's
+        // line inside a parenthesized from-import (where ruff anchors F401),
+        // not on the statement's first line where mollify reports.
+        let d = temp("noqaspan");
+        write(&d, "__main__.py", "import helpers\n");
+        write(
+            &d,
+            "common.py",
+            "setup_function = 1\nteardown_function = 2\n",
+        );
+        write(
+            &d,
+            "helpers.py",
+            "from common import (\n    setup_function,  # noqa: F401\n    teardown_function,  # noqa: F401\n)\n\ndef use():\n    return 1\n",
+        );
+        // Full pipeline: suppression matching runs on relativized paths.
+        let r = crate::dead_code_report(&d);
+        assert!(
+            !r.findings
+                .iter()
+                .any(|x| x.rule == "unused-import"
+                    && x.location.path.as_str().ends_with("helpers.py")),
+            "noqa on multi-line import name lines not honored: {:?}",
+            r.findings
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

@@ -61,7 +61,10 @@ const ENTRY_DECORATORS: &[&str] = &[
     "field_serializer",
     "model_serializer",
     "computed_field",
-    // Generic plugin/registry/dispatch patterns
+    // Generic plugin/registry/dispatch patterns (multipledispatch's
+    // `@dispatch` registers the def at import time — sympy's geometry
+    // handlers are reached purely through that registration)
+    "dispatch",
     "hook",
     "plugin",
     "rule",

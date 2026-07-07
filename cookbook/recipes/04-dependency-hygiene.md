@@ -28,9 +28,9 @@ reports the gap in both directions:
   pulled it in. Works today; breaks the day that intermediary drops it.
 - **`misplaced-dev-dependency`** — declared only in a dev/test group (PEP 735
   `dependency-groups`, Poetry/uv/pdm dev deps) but imported from production code
-  (deptry's DEP004). It also flags **`unresolved-import`** — a first-party/relative
-  import that resolves to no module (a broken refactor), distinct from a missing
-  third-party distribution.
+  (deptry's DEP004).
+- **`unresolved-import`** — a first-party/relative import that resolves to no
+  module (a broken refactor), distinct from a missing third-party distribution.
 
 ## It understands the whole Python packaging zoo
 

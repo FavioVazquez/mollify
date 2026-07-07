@@ -20,14 +20,16 @@ pub fn text(rule: &str) -> Option<&'static str> {
         "unused-import" => {
             "An imported name that is never referenced outside its own import in \
             the module. Confidence: certain in a reachable module with no dynamic \
-            sink (auto-fixable); likely when the module itself is unreachable \
-            (often fixture/data files — never auto-edited); uncertain in \
-            `__init__.py` (likely a re-export) and inside `try`/`except` \
-            (availability probe). Never flagged: `__future__` imports (compiler \
-            effect), redundant-alias re-exports (`import x as x`, PEP 484), \
+            sink (auto-fixable); likely when the module itself is unreachable or \
+            vendored (fixture/extern trees — never auto-edited) or the imported \
+            module registers handlers at import time (framework/dispatch \
+            decorators); uncertain in `__init__.py` (likely a re-export), inside \
+            `try`/`except` or a module-level `if` (availability probes), and \
+            when the module's `__all__` is dynamic. Never flagged: `__future__` \
+            imports, redundant-alias re-exports (`import x as x`, PEP 484), \
             names another module imports from here, names in quoted TypeAlias \
-            values, and lines suppressed with `# noqa` / `# noqa: F401`. \
-            Action: remove the import."
+            values, and `# noqa`-suppressed lines (any line of a multi-line \
+            import). Action: remove the import."
         }
         "unused-variable" => {
             "A local variable assigned but never read in its function (ruff F841). \

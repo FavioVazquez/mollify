@@ -247,19 +247,34 @@ fn find_dirs_named(
 /// Read a module's source. For `.ipynb`, extract and concatenate code cells into
 /// one Python source (line numbers are relative to that concatenation — a
 /// documented v1 simplification). Jupyter magics/shell-escapes are skipped.
+/// Handles nbformat 4 (top-level `cells`, cell text in `source`) and the
+/// legacy nbformat 3 (pre-2015: cells nested under `worksheets`, code-cell
+/// text in `input`) — long-lived teaching repos still carry v3 notebooks,
+/// which used to be silently skipped.
 pub fn read_source(path: &Utf8Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
     if path.extension() != Some("ipynb") {
         return Some(raw);
     }
     let nb: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let cells = nb.get("cells")?.as_array()?;
+    let mut cells: Vec<&serde_json::Value> = Vec::new();
+    if let Some(v4) = nb.get("cells").and_then(|c| c.as_array()) {
+        cells.extend(v4);
+    } else if let Some(sheets) = nb.get("worksheets").and_then(|w| w.as_array()) {
+        for sheet in sheets {
+            if let Some(v3) = sheet.get("cells").and_then(|c| c.as_array()) {
+                cells.extend(v3);
+            }
+        }
+    } else {
+        return None;
+    }
     let mut src = String::new();
     for cell in cells {
         if cell.get("cell_type").and_then(|t| t.as_str()) != Some("code") {
             continue;
         }
-        match cell.get("source") {
+        match cell.get("source").or_else(|| cell.get("input")) {
             Some(serde_json::Value::Array(lines)) => {
                 for l in lines {
                     if let Some(s) = l.as_str() {
@@ -460,6 +475,28 @@ impl ModuleGraph {
         self.by_dotted.get(dotted)
     }
 
+    /// Look up a module by its dotted name.
+    pub fn module_by_dotted(&self, dotted: &str) -> Option<&ModuleInfo> {
+        self.lookup(dotted).map(|id| &self.modules[id.0 as usize])
+    }
+
+    /// The dotted module name an import statement targets, from `importer`'s
+    /// perspective: relative dots resolve against the importer's package
+    /// (package surfaces resolve against themselves), absolute imports pass
+    /// through unchanged.
+    pub fn import_target_dotted(&self, importer: &ModuleInfo, imp: &Import) -> String {
+        if imp.relative_dots > 0 {
+            resolve_relative(
+                &importer.dotted,
+                imp.relative_dots,
+                &imp.module,
+                importer.is_package,
+            )
+        } else {
+            imp.module.clone()
+        }
+    }
+
     /// True if an import target resolves to an internal module — directly, or as
     /// `from pkg import submodule` where `pkg.submodule` is a module.
     fn import_resolves(&self, target: &str, imp: &Import) -> bool {
@@ -558,12 +595,34 @@ impl ModuleGraph {
     /// half of a `[project.scripts]` entry point `pkg.cli:main`), then recompute
     /// reachability. A no-op for names that match no module.
     pub fn mark_entry_points(&mut self, dotted_modules: &[String]) {
-        let wanted: FxHashSet<&str> = dotted_modules.iter().map(|s| s.as_str()).collect();
         let mut changed = false;
-        for m in &mut self.modules {
-            if !m.is_entry && wanted.contains(m.dotted.as_str()) {
-                m.is_entry = true;
-                changed = true;
+        for wanted in dotted_modules {
+            // Exact dotted match first (dotted_name already strips a `src/`
+            // source root). Other source-root prefixes (`lib/`, `python/`,
+            // monorepo dirs) spell a `pkg.cli:main` target as
+            // `python.pkg.cli`, so fall back to a suffix match — but only
+            // when it is unambiguous (exactly one module ends with
+            // `.{wanted}`).
+            let target = if self.by_dotted.contains_key(wanted.as_str()) {
+                Some(wanted.clone())
+            } else {
+                let suffix = format!(".{wanted}");
+                let mut hits = self
+                    .modules
+                    .iter()
+                    .filter(|m| m.dotted.ends_with(&suffix))
+                    .map(|m| m.dotted.clone());
+                match (hits.next(), hits.next()) {
+                    (Some(one), None) => Some(one),
+                    _ => None, // no match, or ambiguous — fail safe
+                }
+            };
+            let Some(target) = target else { continue };
+            for m in &mut self.modules {
+                if !m.is_entry && m.dotted == target {
+                    m.is_entry = true;
+                    changed = true;
+                }
             }
         }
         if changed {
@@ -800,6 +859,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nbformat3_notebooks_are_read() {
+        // Legacy (pre-2015) notebooks nest cells under `worksheets` and spell
+        // code-cell text `input`. Six such notebooks in a real teaching repo
+        // were silently invisible to every engine.
+        let d = temp("nbv3");
+        write(
+            &d,
+            "legacy.ipynb",
+            r#"{"nbformat": 3, "worksheets": [{"cells": [
+                {"cell_type": "code", "input": ["import os\n", "print(os.name)\n"]},
+                {"cell_type": "markdown", "source": ["ignored"]},
+                {"cell_type": "code", "input": "x = 1\n"}
+            ]}]}"#,
+        );
+        let src = read_source(&d.join("legacy.ipynb")).expect("v3 notebook read");
+        assert!(src.contains("import os"), "src: {src:?}");
+        assert!(src.contains("x = 1"), "src: {src:?}");
+        // And it flows into the graph: the notebook is an analyzed module.
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        assert_eq!(g.modules.len(), 1, "v3 notebook not discovered/parsed");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
     fn identity_paths_are_separator_normalized() {
         // `rel` and `dotted` are identity strings, not OS paths: a baseline
         // saved on Linux CI must match a Windows checkout, so the native `\`
@@ -956,6 +1040,49 @@ mod tests {
         // one real level to the parent package.
         assert_eq!(resolve_relative("pkg.sub", 1, "x", true), "pkg.sub.x");
         assert_eq!(resolve_relative("pkg.sub", 2, "x", true), "pkg.x");
+    }
+
+    #[test]
+    fn source_root_entry_points_match_by_suffix() {
+        // `src/` is already stripped by dotted_name; this covers the OTHER
+        // source-root prefixes (lib/, python/, monorepo dirs) where the
+        // console-script target `pkg.cli:main` names a module whose dotted
+        // name in this tree is `python.pkg.cli`.
+        let d = temp("nonsrclayout");
+        write(&d, "python/pkg/__init__.py", "");
+        write(&d, "python/pkg/cli.py", "def main():\n    return 0\n");
+        let files = discover_python_files(&d);
+        let mut g = ModuleGraph::build(&d, &files);
+        assert!(g
+            .unused_files()
+            .iter()
+            .any(|m| m.dotted == "python.pkg.cli"));
+        g.mark_entry_points(&["pkg.cli".to_string()]);
+        assert!(
+            !g.unused_files()
+                .iter()
+                .any(|m| m.dotted == "python.pkg.cli"),
+            "source-root entry point not matched by suffix"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn ambiguous_entry_point_suffix_is_not_marked() {
+        let d = temp("srclayout-ambig");
+        // Two distinct modules both end in `.pkg.cli` — marking either would
+        // be a guess, so neither is marked.
+        write(&d, "a/pkg/cli.py", "def main():\n    return 0\n");
+        write(&d, "b/pkg/cli.py", "def main():\n    return 1\n");
+        let files = discover_python_files(&d);
+        let mut g = ModuleGraph::build(&d, &files);
+        g.mark_entry_points(&["pkg.cli".to_string()]);
+        assert!(
+            g.unused_files().iter().any(|m| m.dotted == "a.pkg.cli")
+                && g.unused_files().iter().any(|m| m.dotted == "b.pkg.cli"),
+            "ambiguous suffix must not mark any module"
+        );
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

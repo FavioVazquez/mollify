@@ -70,7 +70,8 @@ CI's cross-platform golden contract — if you change the sample project, CI wil
 tell you to regenerate it.)
 
 One more data file lives here: [`advisories.sample.json`](advisories.sample.json),
-a small real-CVE advisory database for running `mollify supply-chain --offline`
-without network access. See the supply-chain section of
-[`docs/usage.md`](../docs/usage.md) for how to regenerate a full one with
-`scripts/fetch-advisories.py`.
+a small real-CVE advisory database for running
+`mollify supply-chain --offline --advisory-db advisories.sample.json`
+without network access (`--offline` alone reads `.mollify/advisories.json`).
+See the supply-chain section of [`docs/usage.md`](../docs/usage.md) for how to
+regenerate a full one with `scripts/fetch-advisories.py`.
