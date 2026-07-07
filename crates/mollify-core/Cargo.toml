@@ -8,9 +8,9 @@ repository.workspace = true
 description = "Analysis engines for Mollify: dead code, dependency hygiene, architecture, complexity, duplication, security, type health, coverage, and supply chain."
 
 [dependencies]
-mollify-types = { path = "../mollify-types", version = "0.1.5" }
-mollify-parse = { path = "../mollify-parse", version = "0.1.5" }
-mollify-graph = { path = "../mollify-graph", version = "0.1.5" }
+mollify-types = { path = "../mollify-types", version = "0.1.6" }
+mollify-parse = { path = "../mollify-parse", version = "0.1.6" }
+mollify-graph = { path = "../mollify-graph", version = "0.1.6" }
 camino.workspace = true
 xxhash-rust.workspace = true
 rustc-hash.workspace = true

@@ -4,7 +4,13 @@ All notable changes to Mollify. This project follows the spirit of
 [Keep a Changelog](https://keepachangelog.com/) and the JSON contract is
 versioned by `schema_version` (currently `0.1`).
 
-## Unreleased
+## 0.1.6 - 2026-07-07
+
+The pre-announcement precision series: a second and third calibration sweep
+(flask/requests/fastapi hands-on runs; sympy/astropy/scipy, notebook-heavy, and
+code-golf corpora), a full claims-vs-code audit of every doc surface, and the
+resulting engine fixes. Fingerprints are unaffected — baselines saved with
+0.1.4+ survive.
 
 ### Fixed
 - **Third stress-test sweep: scientific, notebook-heavy, and code-golf
