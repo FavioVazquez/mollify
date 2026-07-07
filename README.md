@@ -301,7 +301,7 @@ Mollify is built to be precise and dependency-light:
 
 - **Full-fidelity parsing.** Built on Astral's `ruff_python_parser` / `ruff_python_ast`
   — the same parser behind `ruff` — pinned to a crates.io release, so every
-  distribution channel builds the identical binary ([ADR-0001](docs/adr/0001-parser-tree-sitter.md)).
+  distribution channel builds the identical binary ([ADR-0001](docs/adr/0001-parser-foundation.md)).
 - **Real scope/binding resolution.** Reachability resolves each name *load* to its
   binding (LEGB), so shadowing function-locals and attribute accesses never mask a
   dead top-level symbol.
