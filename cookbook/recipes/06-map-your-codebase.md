@@ -13,7 +13,7 @@ mollify metrics
 
 ```text
 Mollify metrics — .
-7 file(s), 44 LOC (35 SLOC), 6 function(s); mean MI 80.9
+7 file(s), 45 LOC (35 SLOC), 6 function(s); mean MI 80.9
   [A] MI  99.9  cc(max  0, sum   0)  1 sloc  billing/__init__.py
   [A] MI  56.0  cc(max  1, sum   3)  14 sloc  billing/app.py
   [A] MI  99.9  cc(max  0, sum   0)  1 sloc  billing/domain/__init__.py
