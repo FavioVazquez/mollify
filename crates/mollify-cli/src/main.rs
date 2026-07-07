@@ -1040,7 +1040,6 @@ fn run_metrics(a: &MetricsArgs) -> i32 {
 /// dominated by low-confidence noise.
 const STARTER_RC: &str = r#"{
   "_comment": "mollify config — see docs/configuration.md. Severities: error | warn | off.",
-  "source_roots": [".", "src"],
   "severity": {
     "_comment": "Per-rule ids win over category names (dead-code, dependency-hygiene, complexity, security, architecture, type-health).",
     "dead-code": "warn",
