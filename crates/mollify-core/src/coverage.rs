@@ -2,7 +2,7 @@
 //! function map against a `coverage.py` JSON report (`coverage json`): a function
 //! that is statically reachable but has **zero executed lines** is a strong
 //! delete/triage candidate. This is fallow's paid differentiator, here free
-//! (RESEARCH.md §6) — Python makes it cheap (PEP 669 / SlipCover).
+//! — Python makes it cheap (PEP 669 / SlipCover).
 
 use crate::fingerprint::fingerprint;
 use camino::Utf8Path;

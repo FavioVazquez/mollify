@@ -4,7 +4,7 @@
 //! JSON envelope with a discriminating top-level `kind`; downstream agents and
 //! CI depend on this JSON shape, not on Mollify's internal Rust types.
 //!
-//! Invariants (ported from fallow's design — see `RESEARCH.md` §2.11):
+//! Invariants (ported from fallow's design — see docs/architecture.md):
 //! - **Determinism:** identical input → byte-identical output. All collections
 //!   that reach output are sorted deterministically before serialization.
 //! - **Evidence, not decisions:** every [`Finding`] carries a stable

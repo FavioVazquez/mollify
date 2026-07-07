@@ -1,6 +1,6 @@
 //! Built-in knowledge: the Python standard-library top-level module set, and a
 //! curated import-name → distribution-name alias table (the `cv2`→`opencv-python`
-//! long tail). A maintained alias table is a durable moat (RESEARCH.md §3.5).
+//! long tail). A maintained alias table is a durable moat.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 

@@ -1,5 +1,5 @@
 //! Type-health engine — annotation coverage for public functions. A
-//! Python-specific signal with no fallow analog (RESEARCH.md §8: clean white
+//! Python-specific signal with no fallow analog (clean white
 //! space). Flags fully-untyped public functions (params, but zero annotations
 //! and no return type).
 //!

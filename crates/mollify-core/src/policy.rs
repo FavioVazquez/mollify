@@ -2,7 +2,7 @@
 //! optionally scoped to path substrings. Unlike the heuristic engines this is
 //! pure data → deterministic, no false-positive guessing: a banned import that
 //! literally appears is a `Certain` violation. Modeled on fallow's policy packs
-//! but expressed in Python terms (RESEARCH.md §5).
+//! but expressed in Python terms.
 
 use crate::config::Policy;
 use crate::fingerprint::fingerprint;
