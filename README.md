@@ -75,6 +75,11 @@ Mollify *produces candidates*; you (or your agent) decide what to do with them.
 | **Metrics** | `mollify metrics` | Maintainability Index, Halstead, raw LOC, per-file complexity |
 | **Everything + score** | `mollify audit` | all of the above + a 0–100 quality score |
 
+Every finding carries one of mollify's **eight categories** (`dead-code`,
+`dependency-hygiene`, `circular-dependency`, `complexity`, `architecture`,
+`duplication`, `type-health`, `security`); cold paths, supply chain, and
+metrics are additional command surfaces over those same categories.
+
 Plus `mollify graph [--mermaid]` (import-graph export), `mollify lsp` (editor
 diagnostics), and `--format github|junit` for CI.
 

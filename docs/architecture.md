@@ -47,8 +47,10 @@ files ──▶ mollify-parse ──▶ mollify-graph ──▶ mollify-core ─
    `certain` + `auto_fixable` findings may be auto-applied.
 3. **Versioned, `kind`-discriminated output** — `schema_version` is pinned by
    agent skills.
-4. **Five co-equal analysis areas** — dead code, duplication, circular deps,
-   complexity, architecture (+ dependency hygiene). Not "a dead-code tool".
+4. **Eight co-equal analysis areas** — dead code, duplication, circular deps,
+   complexity, architecture, dependency hygiene, type health, and security
+   (the `Category` enum in `mollify-types` is the authoritative list). Not
+   "a dead-code tool".
 5. **Evidence-preserving** — every finding carries a fingerprint, confidence,
    and human reason.
 
