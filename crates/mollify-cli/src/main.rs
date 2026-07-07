@@ -2,8 +2,9 @@
 //!
 //! Analysis: `audit`, `dead-code`, `deps`, `arch`, `complexity`, `dupes`,
 //! `types`, `security`, `coverage`, `supply-chain`. Workflow: `fix`, `explain`,
-//! `trace`, `inspect`, `list`, `watch`, `init`, `mcp`. Analysis commands support
-//! `--format human|json|sarif`, `--path`, `--gate`, and regression baselines
+//! `trace`, `inspect`, `list`, `metrics`, `graph`, `watch`, `init`, `mcp`,
+//! `lsp`. Analysis commands support
+//! `--format human|json|sarif|github|junit`, `--path`, `--gate`, and regression baselines
 //! (`--save-baseline`/`--baseline`/`--fail-on-regression`/`--brief`). JSON is the
 //! kind-discriminated contract from `mollify-types`.
 
