@@ -306,13 +306,17 @@ fn resolved_base_methods<'g>(
             let target = if imp.names.is_empty() && imp.bindings.iter().any(|b| b == first) {
                 // `import mod[.sub] [as first]` — the binding names the module.
                 imp.module.clone()
-            } else if imp.names.iter().any(|n| n == first) {
-                // `from X import first` where `first` is itself a module.
+            } else if let Some(idx) = imp.bindings.iter().position(|b| b == first) {
+                // `from X import sub [as first]` where the (possibly aliased)
+                // binding is itself a module — map it back to the real name.
+                let Some(original) = imp.names.get(idx) else {
+                    continue;
+                };
                 let base = graph.import_target_dotted(m, imp);
                 if base.is_empty() {
-                    first.to_string()
+                    original.clone()
                 } else {
-                    format!("{base}.{first}")
+                    format!("{base}.{original}")
                 }
             } else {
                 continue;
@@ -553,12 +557,24 @@ fn unused_symbols(
         // caller, so these have no in-repo references but are not dead.
         let is_test = crate::paths::is_test_module(&m.path, test_dirs);
         // Functions named by a console-script entry point in this module.
-        // Suffix match mirrors mark_entry_points: a src-layout tree spells
-        // the `pkg.cli:main` target's module as `src.pkg.cli`.
+        // Mirrors mark_entry_points fully: suffix match for non-src source
+        // roots (`python.pkg.cli` for a `pkg.cli:main` target), and the same
+        // exactly-one guard — an ambiguous suffix exempts nothing, so the
+        // symbol side never out-guesses the file side.
         let entry_here: FxHashSet<&str> = entry_symbols
             .iter()
             .filter(|(module, _)| {
-                module == m.dotted.as_str() || m.dotted.ends_with(&format!(".{module}"))
+                if module == m.dotted.as_str() {
+                    return true;
+                }
+                let suffix = format!(".{module}");
+                m.dotted.ends_with(&suffix)
+                    && graph
+                        .modules
+                        .iter()
+                        .filter(|other| other.dotted.ends_with(&suffix))
+                        .count()
+                        == 1
             })
             .map(|(_, func)| func.as_str())
             .collect();
@@ -1059,6 +1075,64 @@ def view():
             f.iter()
                 .any(|x| x.rule == "unused-parameter" && x.reason.contains("`dead_p`")),
             "dotted base spelling not resolved to the specific class: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn aliased_submodule_base_spelling_resolves() {
+        // `from pkg import sub as s` + `class Sub(s.Config)` — the binding
+        // must map back to the real submodule name, pinning the base to
+        // pkg.sub.Config (no `run`) instead of pooling with a.Config's `run`.
+        let d = temp("iface-alias-sub");
+        write(&d, "__main__.py", "import c\nc.Sub().run(1)\n");
+        write(
+            &d,
+            "a.py",
+            "class Config:\n    def run(self, x):\n        return x\n",
+        );
+        write(&d, "pkg/__init__.py", "");
+        write(
+            &d,
+            "pkg/sub.py",
+            "class Config:\n    def size(self):\n        return 1\n",
+        );
+        write(
+            &d,
+            "c.py",
+            "from pkg import sub as s\n\nclass Sub(s.Config):\n    def run(self, dead_p):\n        return 1\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g);
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "unused-parameter" && x.reason.contains("`dead_p`")),
+            "aliased-submodule base spelling fell back to the pool: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn ambiguous_entry_symbol_suffix_exempts_nothing() {
+        // Two modules both end in `.pkg.cli` and both define `main`; the
+        // console-script exemption must refuse to guess, mirroring
+        // mark_entry_points — both `main`s stay reported.
+        let d = temp("entry-ambig-sym");
+        write(&d, "__main__.py", "print('hi')\n");
+        write(&d, "x/pkg/cli.py", "def main():\n    return 0\n");
+        write(&d, "y/pkg/cli.py", "def main():\n    return 1\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let entry_syms = vec![("pkg.cli".to_string(), "main".to_string())];
+        let f = analyze_with(&g, &[], &entry_syms);
+        let flagged = f
+            .iter()
+            .filter(|x| x.rule == "unused-export" && x.reason.contains("`main`"))
+            .count();
+        assert_eq!(
+            flagged, 2,
+            "ambiguous entry-symbol suffix must exempt neither: {f:?}"
         );
         std::fs::remove_dir_all(&d).ok();
     }
