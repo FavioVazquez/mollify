@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "mollify-cli"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "camino",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "mollify-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "camino",
  "include_dir",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "mollify-graph"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "camino",
  "ignore",
@@ -756,7 +756,7 @@ dependencies = [
 
 [[package]]
 name = "mollify-lsp"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "camino",
  "mollify-core",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "mollify-mcp"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "camino",
  "mollify-core",
@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "mollify-parse"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "camino",
  "ruff_python_ast",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "mollify-types"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "camino",
  "serde",
