@@ -460,6 +460,28 @@ impl ModuleGraph {
         self.by_dotted.get(dotted)
     }
 
+    /// Look up a module by its dotted name.
+    pub fn module_by_dotted(&self, dotted: &str) -> Option<&ModuleInfo> {
+        self.lookup(dotted).map(|id| &self.modules[id.0 as usize])
+    }
+
+    /// The dotted module name an import statement targets, from `importer`'s
+    /// perspective: relative dots resolve against the importer's package
+    /// (package surfaces resolve against themselves), absolute imports pass
+    /// through unchanged.
+    pub fn import_target_dotted(&self, importer: &ModuleInfo, imp: &Import) -> String {
+        if imp.relative_dots > 0 {
+            resolve_relative(
+                &importer.dotted,
+                imp.relative_dots,
+                &imp.module,
+                importer.is_package,
+            )
+        } else {
+            imp.module.clone()
+        }
+    }
+
     /// True if an import target resolves to an internal module — directly, or as
     /// `from pkg import submodule` where `pkg.submodule` is a module.
     fn import_resolves(&self, target: &str, imp: &Import) -> bool {
