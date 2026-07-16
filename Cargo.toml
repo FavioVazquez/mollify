@@ -22,7 +22,7 @@ clap = { version = "4", features = ["derive"] }
 # every distribution channel (crates.io publish, PyPI, source) builds it.
 # Pinned for reproducibility. See docs/adr/0001-parser-foundation.md.
 ruff_python_parser = "=0.0.3"
-ruff_python_ast = "=0.0.3"
+ruff_python_ast = "=0.0.5"
 ruff_source_file = "=0.0.3"
 ruff_text_size = "=0.0.3"
 rayon = "1"
