@@ -4,7 +4,7 @@ All notable changes to Mollify. This project follows the spirit of
 [Keep a Changelog](https://keepachangelog.com/) and the JSON contract is
 versioned by `schema_version` (currently `0.1`).
 
-## Unreleased
+## 0.1.7 - 2026-09-21
 
 ### Security
 - **`rustls` 0.23.45** (via `ureq` 3.4.2). Closes the TLS 1.3 handshake
