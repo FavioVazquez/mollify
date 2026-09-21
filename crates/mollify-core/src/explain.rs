@@ -14,6 +14,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "unused-file" => {
             "A module that nothing reachable from an entry point imports. \
+            String arguments of importlib.import_module, load_hook, and load_plugin \
+            count as imports, and console-script or uvicorn module:attr entry points \
+            count as roots. \
             Confidence: certain when there is no dynamic import sink in the project. \
             Action: delete the file, or mark its module as an entry point."
         }

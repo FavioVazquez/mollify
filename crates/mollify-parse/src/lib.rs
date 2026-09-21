@@ -1947,6 +1947,24 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
                     line: line1(self.li, c.func.range().start()),
                 });
             }
+            // `importlib.import_module("pkg.hooks.evaluate")` and a project
+            // `load_hook("pkg.hooks.export")` name a real module. Record it as
+            // a lazy import so reachability sees the plugin.
+            if let Some(module) = loaded_module_literal(&callee, c) {
+                let line = line1(self.li, c.range().start());
+                self.m.nested_imports.push(Import {
+                    module,
+                    relative_dots: 0,
+                    names: Vec::new(),
+                    bindings: Vec::new(),
+                    is_star: false,
+                    type_checking_only: false,
+                    redundant: Vec::new(),
+                    in_try: false,
+                    line,
+                    end_line: line,
+                });
+            }
             security_call(c, &callee, line1(self.li, c.range().start()), self.m);
         }
         walk_expr(self, expr);
@@ -2016,6 +2034,37 @@ fn has_kwarg(c: &ruff_python_ast::ExprCall, name: &str) -> bool {
 
 fn first_positional_is_string(c: &ruff_python_ast::ExprCall) -> bool {
     matches!(c.arguments.args.first(), Some(Expr::StringLiteral(_)))
+}
+
+/// A string-literal module path passed to `importlib.import_module`,
+/// `__import__`, or a callable named `load_hook` / `load_plugin`.
+fn loaded_module_literal(callee: &str, call: &ruff_python_ast::ExprCall) -> Option<String> {
+    let leaf = callee.rsplit('.').next().unwrap_or(callee);
+    let loader = matches!(
+        leaf,
+        "import_module" | "__import__" | "load_hook" | "load_plugin"
+    );
+    if !loader {
+        return None;
+    }
+    let arg = call.arguments.args.first()?;
+    let Expr::StringLiteral(s) = arg else {
+        return None;
+    };
+    let module = s.value.to_str().trim();
+    if module.split('.').all(|seg| {
+        let mut chars = seg.chars();
+        match chars.next() {
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+            }
+            _ => false,
+        }
+    }) {
+        Some(module.to_string())
+    } else {
+        None
+    }
 }
 
 fn is_dynamic_string(arg: &Expr) -> bool {

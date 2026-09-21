@@ -468,78 +468,196 @@ fn internal_top_levels(graph: &ModuleGraph) -> FxHashSet<String> {
     set
 }
 
-/// Module names referenced by `[project.scripts]` / `[project.gui-scripts]` /
-/// `[tool.poetry.scripts]` console-script entry points (the `pkg.mod` half of a
-/// `pkg.mod:func` target). These are reachability roots even with no in-repo
-/// caller. Returns dotted module names.
+/// Module names referenced by console scripts, `[tool.uvicorn] app`, and
+/// `uvicorn … module:attr` lines in deploy scripts. These are reachability
+/// roots even with no in-repo caller. Returns dotted module names.
 pub fn entry_point_modules(root: &Utf8Path) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(root.join("pyproject.toml")) else {
-        return Vec::new();
-    };
-    let Ok(table) = text.parse::<toml::Table>() else {
-        return Vec::new();
-    };
-    let val = toml::Value::Table(table);
     let mut modules = FxHashSet::default();
-    let mut harvest = |tbl: Option<&toml::Value>| {
-        if let Some(t) = tbl.and_then(|t| t.as_table()) {
-            for target in t.values().filter_map(|v| v.as_str()) {
-                // `pkg.mod:func` → `pkg.mod`; a bare `pkg.mod` counts too.
-                let module = target.split(':').next().unwrap_or(target).trim();
-                if !module.is_empty() {
-                    modules.insert(module.to_string());
-                }
-            }
+    for target in entry_point_targets(root) {
+        // `pkg.mod:func` → `pkg.mod`; a bare `pkg.mod` counts too.
+        let module = target.split(':').next().unwrap_or(&target).trim();
+        if !module.is_empty() {
+            modules.insert(module.to_string());
         }
-    };
-    harvest(val.get("project").and_then(|p| p.get("scripts")));
-    harvest(val.get("project").and_then(|p| p.get("gui-scripts")));
-    harvest(
-        val.get("tool")
-            .and_then(|t| t.get("poetry"))
-            .and_then(|p| p.get("scripts")),
-    );
+    }
     let mut out: Vec<String> = modules.into_iter().collect();
     out.sort();
     out
 }
 
-/// The `(module, function)` pairs named by console-script entry points
-/// (`pkg.mod:func`). The function is invoked by the installed script, so it is a
-/// reachability root and must not be reported `unused-export`.
+/// The `(module, function)` pairs named by console-script and uvicorn entry
+/// points (`pkg.mod:func`). The function is invoked outside the import graph,
+/// so it must not be reported `unused-export`.
 pub fn entry_point_symbols(root: &Utf8Path) -> Vec<(String, String)> {
-    let Ok(text) = std::fs::read_to_string(root.join("pyproject.toml")) else {
-        return Vec::new();
-    };
-    let Ok(table) = text.parse::<toml::Table>() else {
-        return Vec::new();
-    };
-    let val = toml::Value::Table(table);
     let mut pairs = FxHashSet::default();
-    let mut harvest = |tbl: Option<&toml::Value>| {
-        if let Some(t) = tbl.and_then(|t| t.as_table()) {
-            for target in t.values().filter_map(|v| v.as_str()) {
-                if let Some((module, func)) = target.split_once(':') {
-                    let module = module.trim();
-                    // `pkg.mod:obj.method` → take the first attribute as the root.
-                    let func = func.trim().split('.').next().unwrap_or("").trim();
-                    if !module.is_empty() && !func.is_empty() {
-                        pairs.insert((module.to_string(), func.to_string()));
-                    }
-                }
+    for target in entry_point_targets(root) {
+        if let Some((module, func)) = target.split_once(':') {
+            let module = module.trim();
+            // `pkg.mod:obj.method` → take the first attribute as the root.
+            let func = func.trim().split('.').next().unwrap_or("").trim();
+            if !module.is_empty() && !func.is_empty() {
+                pairs.insert((module.to_string(), func.to_string()));
             }
         }
-    };
-    harvest(val.get("project").and_then(|p| p.get("scripts")));
-    harvest(val.get("project").and_then(|p| p.get("gui-scripts")));
-    harvest(
-        val.get("tool")
-            .and_then(|t| t.get("poetry"))
-            .and_then(|p| p.get("scripts")),
-    );
+    }
     let mut out: Vec<(String, String)> = pairs.into_iter().collect();
     out.sort();
     out
+}
+
+/// `pkg.mod:func` (or bare `pkg.mod`) strings that name a process entry point.
+fn entry_point_targets(root: &Utf8Path) -> Vec<String> {
+    let mut targets = FxHashSet::default();
+    if let Ok(text) = std::fs::read_to_string(root.join("pyproject.toml")) {
+        if let Ok(table) = text.parse::<toml::Table>() {
+            let val = toml::Value::Table(table);
+            let mut harvest = |tbl: Option<&toml::Value>| {
+                if let Some(t) = tbl.and_then(|t| t.as_table()) {
+                    for target in t.values().filter_map(|v| v.as_str()) {
+                        let target = target.trim();
+                        if !target.is_empty() {
+                            targets.insert(target.to_string());
+                        }
+                    }
+                }
+            };
+            harvest(val.get("project").and_then(|p| p.get("scripts")));
+            harvest(val.get("project").and_then(|p| p.get("gui-scripts")));
+            harvest(
+                val.get("tool")
+                    .and_then(|t| t.get("poetry"))
+                    .and_then(|p| p.get("scripts")),
+            );
+            if let Some(app) = val
+                .get("tool")
+                .and_then(|t| t.get("uvicorn"))
+                .and_then(|u| u.get("app"))
+                .and_then(|a| a.as_str())
+            {
+                let app = app.trim();
+                if !app.is_empty() {
+                    targets.insert(app.to_string());
+                }
+            }
+        }
+    }
+    harvest_uvicorn_factories(root, &mut targets);
+    let mut out: Vec<String> = targets.into_iter().collect();
+    out.sort();
+    out
+}
+
+const ENTRY_SKIP_DIRS: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".mypy_cache",
+    "dist",
+    "build",
+    "site-packages",
+];
+
+/// `uvicorn --factory pkg.mod:attr` in a shell script, Dockerfile, Procfile,
+/// or Python file. The module is started by the process, not by an import.
+fn harvest_uvicorn_factories(root: &Utf8Path, targets: &mut FxHashSet<String>) {
+    let mut stack = vec![root.to_path_buf()];
+    let mut seen = 0u32;
+    while let Some(dir) = stack.pop() {
+        if seen > 4_000 {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            seen += 1;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || ENTRY_SKIP_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            let Ok(path) = camino::Utf8PathBuf::from_path_buf(entry.path()) else {
+                continue;
+            };
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let deploy = name.ends_with(".sh")
+                || name == "Dockerfile"
+                || name.starts_with("Dockerfile.")
+                || name == "Procfile"
+                || name.ends_with(".py");
+            if !deploy {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for line in text.lines() {
+                if line.contains("uvicorn") {
+                    push_factory_tokens(line, targets);
+                }
+            }
+        }
+    }
+}
+
+/// Pull `pkg.mod:func` tokens out of one line.
+fn push_factory_tokens(line: &str, targets: &mut FxHashSet<String>) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if !is_ident_start(bytes[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        while i < bytes.len() && (is_ident_cont(bytes[i]) || bytes[i] == b'.') {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b':' {
+            continue;
+        }
+        let module = &line[start..i];
+        i += 1;
+        let func_start = i;
+        while i < bytes.len() && is_ident_cont(bytes[i]) {
+            i += 1;
+        }
+        let func = &line[func_start..i];
+        if !func.is_empty() && looks_like_module(module) {
+            targets.insert(format!("{module}:{func}"));
+        }
+    }
+}
+
+fn is_ident_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_'
+}
+
+fn is_ident_cont(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn looks_like_module(module: &str) -> bool {
+    !module.is_empty()
+        && module.split('.').all(|seg| {
+            let mut chars = seg.chars();
+            match chars.next() {
+                Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+                }
+                _ => false,
+            }
+        })
 }
 
 /// One distinct external import, with every distribution that plausibly

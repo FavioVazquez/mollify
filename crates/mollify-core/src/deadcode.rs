@@ -1589,4 +1589,94 @@ def view():
         assert!(!f.iter().any(|x| x.reason.contains("`api`")));
         std::fs::remove_dir_all(&d).ok();
     }
+
+    #[test]
+    fn string_loaders_and_uvicorn_entry_points_are_reachable() {
+        // A plugin module whose only reference is a string passed to
+        // importlib.import_module or a project load_hook is reachable.
+        // A uvicorn factory named in pyproject or an entrypoint script is an
+        // entry point. A module that never appears is still unused.
+        let d = temp("dynentry");
+        write(&d, "pkg/__init__.py", "");
+        write(&d, "pkg/hooks/__init__.py", "");
+        write(&d, "pkg/hooks/evaluate.py", "def run():\n    return 1\n");
+        write(&d, "pkg/hooks/export.py", "def dump():\n    return 2\n");
+        write(&d, "pkg/hooks/orphan.py", "def nowhere():\n    return 3\n");
+        write(&d, "pkg/api.py", "def build_prod_app():\n    return None\n");
+        write(&d, "pkg/worker.py", "def serve():\n    return None\n");
+        write(
+            &d,
+            "app.py",
+            "import importlib\n\
+             \n\
+             def load_hook(name):\n\
+             \treturn importlib.import_module(name)\n\
+             \n\
+             def main():\n\
+             \timportlib.import_module(\"pkg.hooks.evaluate\")\n\
+             \tload_hook(\"pkg.hooks.export\")\n\
+             \n\
+             if __name__ == \"__main__\":\n\
+             \tmain()\n",
+        );
+        write(
+            &d,
+            "pyproject.toml",
+            "[project]\nname = \"pkg\"\n\n[tool.uvicorn]\napp = \"pkg.api:build_prod_app\"\n",
+        );
+        write(
+            &d,
+            "deploy/entrypoint.sh",
+            "#!/bin/sh\nexec uvicorn --factory pkg.worker:serve\n",
+        );
+        let report = crate::dead_code_report(&d);
+        let unused = |needle: &str| {
+            report.findings.iter().any(|f| {
+                f.rule == "unused-file"
+                    && (f.reason.contains(needle) || f.location.path.as_str().contains(needle))
+            })
+        };
+        assert!(
+            !unused("evaluate"),
+            "import_module target looks unused: {:?}",
+            report.findings
+        );
+        assert!(
+            !unused("export"),
+            "load_hook target looks unused: {:?}",
+            report.findings
+        );
+        assert!(
+            unused("orphan"),
+            "unnamed module should stay unused: {:?}",
+            report.findings
+        );
+        assert!(
+            !unused("api"),
+            "uvicorn app should be an entry: {:?}",
+            report.findings
+        );
+        assert!(
+            !unused("worker"),
+            "shell uvicorn factory should be an entry: {:?}",
+            report.findings
+        );
+        let export_unused = |name: &str| {
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == "unused-export" && f.reason.contains(name))
+        };
+        assert!(
+            !export_unused("build_prod_app"),
+            "factory should be reachable: {:?}",
+            report.findings
+        );
+        assert!(
+            !export_unused("serve"),
+            "shell factory should be reachable: {:?}",
+            report.findings
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
 }
