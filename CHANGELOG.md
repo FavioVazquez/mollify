@@ -4,6 +4,32 @@ All notable changes to Mollify. This project follows the spirit of
 [Keep a Changelog](https://keepachangelog.com/) and the JSON contract is
 versioned by `schema_version` (currently `0.1`).
 
+## Unreleased
+
+### Added
+- **`duplication.mirrors`** names a pair of paths that intentionally copy each
+  other. A clone whose only two locations are that pair is not reported.
+  Other clones are.
+- **`severity_paths`** overrides `severity` for findings under a path prefix.
+  A project can leave `type-health` off and still warn on one directory.
+- CI docs show `mollify supply-chain` as its own networked job. The audit
+  gate stays offline.
+
+### Fixed
+- Versioned Google Cloud imports (`google.cloud.run_v2`, `pubsub_v1`) count
+  as the unversioned distribution (`google-cloud-run`, `google-cloud-pubsub`).
+  An installed package that owns the shared `google` namespace no longer hides
+  the other Google distributions.
+- A module named only by `importlib.import_module`, `load_hook`, or
+  `load_plugin` is reachable. A uvicorn `module:attr` factory in
+  `[tool.uvicorn]`, a shell entrypoint, a Dockerfile, or a Procfile is an
+  entry point.
+- SQL `ATTACH`, `COPY`, and `CREATE` that interpolate only an identifier
+  quote-escaped in the same function are not `sql-injection`. A value
+  predicate still is.
+- The agent report script prints likely findings when a new-only audit has
+  none that are certain. It still exits 0.
+
 ## 0.1.7 - 2026-09-21
 
 ### Security
