@@ -41,6 +41,26 @@ jobs:
         with: { sarif_file: mollify.sarif }
 ```
 
+`mollify audit` does not use the network. Keep that job offline.
+
+## Supply chain
+
+`mollify supply-chain` queries the OSV registry, so it is a networked command.
+Run it as its own job. A registry timeout then fails the advisory check and
+leaves the offline audit gate green. Pass `--offline` only when a vendored
+advisory file is the source of truth (`--advisory-db`).
+
+```yaml
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install mollify-cli
+      - name: Advisories
+        run: mollify supply-chain
+```
+
 ## GitLab CI
 
 ```yaml

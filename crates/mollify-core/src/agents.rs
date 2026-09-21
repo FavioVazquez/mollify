@@ -266,4 +266,21 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn ci_docs_keep_supply_chain_off_the_offline_audit_gate() {
+        let doc = include_str!("../../../docs/ci-integration.md");
+        assert!(
+            doc.contains("mollify supply-chain"),
+            "document the networked command"
+        );
+        assert!(
+            doc.contains("offline"),
+            "say that the audit gate stays offline and supply-chain is the networked job"
+        );
+        assert!(
+            doc.contains("supply-chain:"),
+            "the networked command is its own job, not a step of the audit job"
+        );
+    }
 }
