@@ -235,7 +235,11 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "sql-injection" => {
             "SQL built from an f-string/concatenation/.format passed to an \
-            execute-style sink (CWE-89). Action: use parameterized queries."
+            execute-style sink (CWE-89). An f-string that only interpolates an \
+            identifier quote-escaped in the same function, inside ATTACH, COPY, \
+            or CREATE, is not flagged — those statements cannot take a parameter \
+            for the identifier. A value predicate (WHERE, VALUES, SET) still is. \
+            Action: use parameterized queries for values."
         }
         "request-without-timeout" => {
             "An HTTP request without a timeout can block indefinitely \

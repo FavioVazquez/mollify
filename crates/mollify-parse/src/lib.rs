@@ -366,7 +366,11 @@ impl PyParser {
         m.nested_imports = nested.out;
 
         // Calls, dynamic sinks, security candidates (whole-tree walk).
-        let mut main = MainVisitor { li: &li, m: &mut m };
+        let mut main = MainVisitor {
+            li: &li,
+            m: &mut m,
+            sanitized_idents: vec![HashSet::new()],
+        };
         for stmt in &module.body {
             main.visit_stmt(stmt);
         }
@@ -1890,11 +1894,29 @@ fn param_names(params: &Parameters) -> Vec<String> {
 struct MainVisitor<'a, 'm> {
     li: &'a LineIndex,
     m: &'m mut ParsedModule,
+    /// Names quote-sanitized (`s = s.replace("'", "''")`) in the current
+    /// function. Frame 0 is module scope; each function or class pushes one.
+    sanitized_idents: Vec<HashSet<String>>,
 }
 impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+            self.sanitized_idents.push(HashSet::new());
+            walk_stmt(self, stmt);
+            self.sanitized_idents.pop();
+            return;
+        }
         match stmt {
             Stmt::Assign(a) => {
+                if expr_is_quote_replace(&a.value) {
+                    if let Some(set) = self.sanitized_idents.last_mut() {
+                        for t in &a.targets {
+                            if let Expr::Name(n) = t {
+                                set.insert(n.id.to_string());
+                            }
+                        }
+                    }
+                }
                 if let [Expr::Name(t)] = a.targets.as_slice() {
                     security_secret(t.id.as_str(), &a.value, a.range(), self.li, self.m);
                 }
@@ -1965,7 +1987,14 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
                     end_line: line,
                 });
             }
-            security_call(c, &callee, line1(self.li, c.range().start()), self.m);
+            let sanitized = self.sanitized_idents.last().cloned().unwrap_or_default();
+            security_call(
+                c,
+                &callee,
+                line1(self.li, c.range().start()),
+                self.m,
+                &sanitized,
+            );
         }
         walk_expr(self, expr);
     }
@@ -2067,6 +2096,58 @@ fn loaded_module_literal(callee: &str, call: &ruff_python_ast::ExprCall) -> Opti
     }
 }
 
+/// `name = name.replace("'", "''")` (or any `.replace` whose first argument
+/// is a quote). The assignment target is the sanitized identifier.
+fn expr_is_quote_replace(expr: &Expr) -> bool {
+    let Expr::Call(c) = expr else {
+        return false;
+    };
+    let Expr::Attribute(attr) = c.func.as_ref() else {
+        return false;
+    };
+    if attr.attr.as_str() != "replace" {
+        return false;
+    }
+    c.arguments.args.first().is_some_and(string_contains_quote)
+}
+
+fn string_contains_quote(expr: &Expr) -> bool {
+    let Expr::StringLiteral(s) = expr else {
+        return false;
+    };
+    let text = s.value.to_str();
+    text.contains('\'') || text.contains('"')
+}
+
+/// An f-string whose holes are all names quote-sanitized in this function,
+/// and whose static SQL is identifier DDL (`ATTACH` / `COPY` / `CREATE`)
+/// rather than a value predicate (`WHERE` / `VALUES` / `SET`).
+fn is_sanitized_identifier_sql(arg: &Expr, sanitized: &HashSet<String>) -> bool {
+    let Expr::FString(f) = arg else {
+        return false;
+    };
+    let mut static_sql = String::new();
+    for el in f.value.elements() {
+        match el {
+            ruff_python_ast::InterpolatedStringElement::Literal(lit) => {
+                static_sql.push_str(&lit.value);
+            }
+            ruff_python_ast::InterpolatedStringElement::Interpolation(interp) => {
+                let Expr::Name(n) = interp.expression.as_ref() else {
+                    return false;
+                };
+                if !sanitized.contains(n.id.as_str()) {
+                    return false;
+                }
+            }
+        }
+    }
+    let upper = static_sql.to_ascii_uppercase();
+    let identifier = upper.contains("ATTACH") || upper.contains("COPY") || upper.contains("CREATE");
+    let value = upper.contains("WHERE") || upper.contains("VALUES") || upper.contains(" SET ");
+    identifier && !value
+}
+
 fn is_dynamic_string(arg: &Expr) -> bool {
     match arg {
         Expr::FString(_) => true,
@@ -2088,7 +2169,13 @@ fn args_reference_ecb(c: &ruff_python_ast::ExprCall) -> bool {
     c.arguments.args.iter().any(refs) || c.arguments.keywords.iter().any(|k| refs(&k.value))
 }
 
-fn security_call(c: &ruff_python_ast::ExprCall, f: &str, line: u32, m: &mut ParsedModule) {
+fn security_call(
+    c: &ruff_python_ast::ExprCall,
+    f: &str,
+    line: u32,
+    m: &mut ParsedModule,
+    sanitized_idents: &HashSet<String>,
+) {
     let last = f.rsplit('.').next().unwrap_or(f);
     let mut hit = |rule: &'static str, detail: String| {
         m.security_hits.push(SecurityHit { rule, line, detail });
@@ -2195,7 +2282,7 @@ fn security_call(c: &ruff_python_ast::ExprCall, f: &str, line: u32, m: &mut Pars
         "execute" | "executemany" | "executescript" | "raw" | "extra"
     ) {
         if let Some(arg) = c.arguments.args.first() {
-            if is_dynamic_string(arg) {
+            if is_dynamic_string(arg) && !is_sanitized_identifier_sql(arg, sanitized_idents) {
                 hit(
                     "sql-injection",
                     format!(
