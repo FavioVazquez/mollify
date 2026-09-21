@@ -585,8 +585,18 @@ fn used_distributions(
                 continue;
             }
             // The installed env names the exact providing dist; otherwise
-            // every plausible provider counts.
+            // every plausible provider counts. Namespace tops (`google`,
+            // `azure`, …) are shared by many distributions, and dist-info
+            // records only that shared top-level — keep the dotted candidates
+            // (`google.cloud.run_v2` → `google-cloud-run`) as well.
             let (cands, namespace) = match installed.and_then(|i| i.import_to_dist.get(top)) {
+                Some(d) if known.is_namespace_top(top) => {
+                    let mut c = known.dists_for_import(&imp.module);
+                    if !c.iter().any(|x| x == d) {
+                        c.push(d.clone());
+                    }
+                    (c, true)
+                }
                 Some(d) => (vec![d.clone()], false),
                 None => (
                     known.dists_for_import(&imp.module),
@@ -962,6 +972,58 @@ mod tests {
                 .any(|x| x.rule == "unused-dependency" && x.reason.contains("uvicorn")),
             "lazy import wrongly flagged unused: {f:?}"
         );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn versioned_google_imports_count_as_their_declared_dist() {
+        // `google.cloud.run_v2` / `pubsub_v1` are the module surfaces of
+        // `google-cloud-run` / `google-cloud-pubsub`. A declared dist that is
+        // imported that way is used. An installed env that records only the
+        // shared `google` top-level must not hide those dotted dists.
+        let d = temp("gcloud");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\n\
+             \"google-cloud-run\", \"google-cloud-pubsub\", \"google-cloud-firestore\",\n\
+             \"google-auth\", \"google-genai\",\n]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("app.py"),
+            "import google.cloud.run_v2\n\
+             import google.cloud.pubsub_v1\n\
+             import google.cloud.firestore\n\
+             import google.auth\n\
+             import google.genai\n",
+        )
+        .unwrap();
+        let sp = d.join(".venv/lib/python3.12/site-packages/protobuf-5.0.dist-info");
+        std::fs::create_dir_all(&sp).unwrap();
+        std::fs::write(sp.join("METADATA"), "Name: protobuf\nVersion: 5.0\n").unwrap();
+        std::fs::write(sp.join("top_level.txt"), "google\n").unwrap();
+
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        for dist in [
+            "google-cloud-run",
+            "google-cloud-pubsub",
+            "google-cloud-firestore",
+            "google-auth",
+            "google-genai",
+        ] {
+            assert!(
+                !f.iter()
+                    .any(|x| x.rule == "unused-dependency" && x.reason.contains(dist)),
+                "{dist} wrongly unused: {f:?}"
+            );
+            assert!(
+                !f.iter()
+                    .any(|x| x.rule == "missing-dependency" && x.reason.contains(dist)),
+                "{dist} wrongly missing: {f:?}"
+            );
+        }
         std::fs::remove_dir_all(&d).ok();
     }
 
