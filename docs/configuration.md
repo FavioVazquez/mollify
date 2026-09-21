@@ -92,7 +92,7 @@ category on for one directory while the rest of the tree stays `off`.
 ```json
 "severity": { "type-health": "off" },
 "severity_paths": [
-  { "path": "rosetta/service/", "type-health": "warn" }
+  { "path": "pkg/service/", "type-health": "warn" }
 ]
 ```
 
@@ -224,7 +224,7 @@ somewhere else, or that lives in a different pair of files, still is.
 
 ```json
 "duplication": {
-  "mirrors": [["providers/gemini_batch.py", "providers/claude_vertex_batch.py"]]
+  "mirrors": [["providers/client_a.py", "providers/client_b.py"]]
 }
 ```
 
