@@ -629,6 +629,29 @@ impl ModuleGraph {
         }
     }
 
+    /// Mark modules whose relative path is a plugin filename named somewhere
+    /// in the project (`hooks/export.py`, or a bare `export.py` that is a path
+    /// suffix). Then recompute reachability.
+    pub fn mark_path_entry_points(&mut self, rel_suffixes: &[String]) {
+        let mut changed = false;
+        for m in &mut self.modules {
+            if m.is_entry {
+                continue;
+            }
+            let rel = m.rel.as_str();
+            let hit = rel_suffixes
+                .iter()
+                .any(|suffix| rel == suffix.as_str() || rel.ends_with(&format!("/{suffix}")));
+            if hit {
+                m.is_entry = true;
+                changed = true;
+            }
+        }
+        if changed {
+            self.compute_reachability();
+        }
+    }
+
     /// Files that are neither entries nor reachable from any entry.
     pub fn unused_files(&self) -> Vec<&ModuleInfo> {
         self.modules

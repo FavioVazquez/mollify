@@ -16,17 +16,21 @@ versioned by `schema_version` (currently `0.1`).
   gate stays offline.
 
 ### Fixed
-- Versioned Google Cloud imports (`google.cloud.run_v2`, `pubsub_v1`) count
-  as the unversioned distribution (`google-cloud-run`, `google-cloud-pubsub`).
-  An installed package that owns the shared `google` namespace no longer hides
-  the other Google distributions.
+- Versioned Google Cloud imports (`google.cloud.run_v2`, `pubsub_v1`) and
+  `from google.cloud import run` (the imported name is the distribution leaf)
+  count as the unversioned distribution (`google-cloud-run`). The same join
+  covers `from google import genai`. An installed package that owns the shared
+  `google` namespace no longer hides the other Google distributions.
 - A module named only by `importlib.import_module`, `load_hook`, or
-  `load_plugin` is reachable. A uvicorn `module:attr` factory in
+  `load_plugin` is reachable. A string literal that is a relative Python path
+  (`hooks/export.py`, `schema.py`) marks the matching file as a root. An
+  f-string does not name a file. A uvicorn `module:attr` factory in
   `[tool.uvicorn]`, a shell entrypoint, a Dockerfile, or a Procfile is an
   entry point.
-- SQL `ATTACH`, `COPY`, and `CREATE` that interpolate only an identifier
-  quote-escaped in the same function are not `sql-injection`. A value
-  predicate still is.
+- SQL `ATTACH`, `COPY`, and `CREATE` that interpolate only an identifier made
+  safe in the same function are not `sql-injection`. Safe means quote-escaped
+  with `str.replace`, or rejected by `if "'" in name: raise`. A value predicate
+  still is, and so is an identifier that was never checked.
 - The agent report script prints likely findings when a new-only audit has
   none that are certain. It still exits 0.
 

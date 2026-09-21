@@ -247,4 +247,50 @@ def escaped_value(cur, user_id):\n\
         );
         std::fs::remove_dir_all(&d).ok();
     }
+
+    #[test]
+    fn quote_rejected_identifier_interpolation_is_not_sql_injection() {
+        // The field sanitizer is `if "'" in target: raise`, not str.replace.
+        // That name, used only as an identifier, is not sql-injection. A name
+        // that was not checked, and a WHERE value that was checked, still are.
+        // A check that does not abort the function does not count.
+        let d = temp("sqlreject");
+        write(
+            &d,
+            "__init__.py",
+            "def snapshot(con, target, catalog):\n\
+    \ttarget = str(target)\n\
+    \tif \"'\" in target or \";\" in target:\n\
+    \t\traise ValueError(\"bad\")\n\
+    \tcon.execute(f\"ATTACH '{target}' AS snap\")\n\
+    \tcon.execute(f\"COPY FROM DATABASE {catalog} TO snap\")\n\
+\n\
+def query(cur, user_id):\n\
+    \tif \"'\" in user_id:\n\
+    \t\traise ValueError(\"bad\")\n\
+    \tcur.execute(f\"SELECT * FROM t WHERE id = '{user_id}'\")\n\
+\n\
+def logged(con, target):\n\
+    \tif \"'\" in target:\n\
+    \t\tprint(\"nope\")\n\
+    \tcon.execute(f\"ATTACH '{target}'\")\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g, &[]);
+        let sql: Vec<_> = f.iter().filter(|x| x.rule == "sql-injection").collect();
+        assert_eq!(sql.len(), 3, "got {sql:?}");
+        let lines: Vec<u32> = sql.iter().map(|x| x.location.line).collect();
+        assert!(
+            !lines.contains(&5),
+            "quote-rejected ATTACH should be quiet: {sql:?}"
+        );
+        assert!(lines.contains(&6), "unchecked catalog should stay: {sql:?}");
+        assert!(lines.contains(&11), "WHERE value should stay: {sql:?}");
+        assert!(
+            lines.contains(&16),
+            "a check that does not abort should stay: {sql:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
 }

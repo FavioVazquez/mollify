@@ -1436,7 +1436,10 @@ mod tests {
         assert_eq!(gated.exit, 1);
         let json = serde_json::to_value(Report::Audit(gated.report)).unwrap();
         let findings = json["findings"].as_array().expect("findings array");
-        assert!(!findings.is_empty(), "regression should list the new findings");
+        assert!(
+            !findings.is_empty(),
+            "regression should list the new findings"
+        );
         for finding in findings {
             let path = finding["location"]["path"].as_str().unwrap();
             assert!(

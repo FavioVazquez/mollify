@@ -647,6 +647,17 @@ fn is_ident_cont(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+/// An imported name that can be a module segment (`firestore`, not `*`).
+fn is_import_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    }
+}
+
 fn looks_like_module(module: &str) -> bool {
     !module.is_empty()
         && module.split('.').all(|seg| {
@@ -702,43 +713,53 @@ fn used_distributions(
             if top.is_empty() || internal.contains(top) || known.is_stdlib(top) {
                 continue;
             }
-            // The installed env names the exact providing dist; otherwise
-            // every plausible provider counts. Namespace tops (`google`,
-            // `azure`, …) are shared by many distributions, and dist-info
-            // records only that shared top-level — keep the dotted candidates
-            // (`google.cloud.run_v2` → `google-cloud-run`) as well.
-            let (cands, namespace) = match installed.and_then(|i| i.import_to_dist.get(top)) {
-                Some(d) if known.is_namespace_top(top) => {
-                    let mut c = known.dists_for_import(&imp.module);
-                    if !c.iter().any(|x| x == d) {
-                        c.push(d.clone());
+            // `from google.cloud import firestore` names the distribution
+            // leaf. Only namespace tops get that join: `from requests import
+            // Session` is not a `requests-session` distribution.
+            let mut modules = vec![imp.module.clone()];
+            if known.is_namespace_top(top) {
+                for name in &imp.names {
+                    if is_import_name(name) {
+                        modules.push(format!("{}.{}", imp.module, name));
                     }
-                    (c, true)
                 }
-                Some(d) => (vec![d.clone()], false),
-                None => (
-                    known.dists_for_import(&imp.module),
-                    known.is_namespace_top(top),
-                ),
-            };
-            candidates.extend(cands.iter().cloned());
-            let primary = cands[0].clone();
-            by_primary
-                .entry(primary.clone())
-                .and_modify(|u| {
-                    // Merge candidate lists from different dotted imports of
-                    // the same top level.
-                    for c in &cands {
-                        if !u.candidates.contains(c) {
-                            u.candidates.push(c.clone());
+            }
+            for module in modules {
+                // The installed env names the exact providing dist; otherwise
+                // every plausible provider counts. Namespace tops (`google`,
+                // `azure`, …) are shared by many distributions, and dist-info
+                // records only that shared top-level — keep the dotted
+                // candidates (`google.cloud.run` → `google-cloud-run`) as well.
+                let (cands, namespace) = match installed.and_then(|i| i.import_to_dist.get(top)) {
+                    Some(d) if known.is_namespace_top(top) => {
+                        let mut c = known.dists_for_import(&module);
+                        if !c.iter().any(|x| x == d) {
+                            c.push(d.clone());
                         }
+                        (c, true)
                     }
-                })
-                .or_insert(UsedImport {
-                    primary,
-                    candidates: cands,
-                    unresolvable_namespace: namespace,
-                });
+                    Some(d) => (vec![d.clone()], false),
+                    None => (known.dists_for_import(&module), known.is_namespace_top(top)),
+                };
+                candidates.extend(cands.iter().cloned());
+                let primary = cands[0].clone();
+                by_primary
+                    .entry(primary.clone())
+                    .and_modify(|u| {
+                        // Merge candidate lists from different dotted imports of
+                        // the same top level.
+                        for c in &cands {
+                            if !u.candidates.contains(c) {
+                                u.candidates.push(c.clone());
+                            }
+                        }
+                    })
+                    .or_insert(UsedImport {
+                        primary,
+                        candidates: cands,
+                        unresolvable_namespace: namespace,
+                    });
+            }
         }
     }
     let mut imports: Vec<UsedImport> = by_primary.into_values().collect();
@@ -1142,6 +1163,58 @@ mod tests {
                 "{dist} wrongly missing: {f:?}"
             );
         }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn from_google_cloud_import_counts_as_the_declared_dist() {
+        // The live import is `from google.cloud import run`, not
+        // `import google.cloud.run_v2`. The imported name is the distribution
+        // leaf. A declared dist that is not imported stays unused.
+        let d = temp("gcloud-attr");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\n\
+             \"google-cloud-run\", \"google-cloud-pubsub\", \"google-cloud-firestore\",\n\
+             \"google-cloud-storage\", \"google-cloud-bigquery\",\n\
+             \"google-auth\", \"google-genai\", \"google-cloud-spanner\",\n]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("app.py"),
+            "from google.cloud import run, pubsub, firestore, storage, bigquery\n\
+             from google import genai\n\
+             import google.auth\n",
+        )
+        .unwrap();
+        let sp = d.join(".venv/lib/python3.12/site-packages/protobuf-5.0.dist-info");
+        std::fs::create_dir_all(&sp).unwrap();
+        std::fs::write(sp.join("METADATA"), "Name: protobuf\nVersion: 5.0\n").unwrap();
+        std::fs::write(sp.join("top_level.txt"), "google\n").unwrap();
+
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        for dist in [
+            "google-cloud-run",
+            "google-cloud-pubsub",
+            "google-cloud-firestore",
+            "google-cloud-storage",
+            "google-cloud-bigquery",
+            "google-auth",
+            "google-genai",
+        ] {
+            assert!(
+                !f.iter()
+                    .any(|x| x.rule == "unused-dependency" && x.reason.contains(dist)),
+                "{dist} wrongly unused: {f:?}"
+            );
+        }
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "unused-dependency" && x.reason.contains("google-cloud-spanner")),
+            "an unimported dist should stay unused: {f:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

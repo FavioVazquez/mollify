@@ -1679,4 +1679,75 @@ def view():
         );
         std::fs::remove_dir_all(&d).ok();
     }
+
+    #[test]
+    fn filename_string_marks_the_matching_module_reachable() {
+        // A plugin loader that stores relative paths (`hooks/export.py`) or
+        // passes a filename (`load_hook("export.py")`) reaches that file.
+        // An f-string (`f"{module}.py"`) does not name a file, and a module
+        // that no string names stays unused.
+        let d = temp("pathload");
+        write(&d, "pkg/__init__.py", "");
+        write(&d, "pkg/hooks/__init__.py", "");
+        write(&d, "pkg/hooks/evaluate.py", "def run():\n    return 1\n");
+        write(&d, "pkg/hooks/export.py", "def dump():\n    return 2\n");
+        write(&d, "pkg/schema.py", "FIELDS = []\n");
+        write(&d, "pkg/hooks/orphan.py", "def nowhere():\n    return 3\n");
+        write(
+            &d,
+            "pkg/hooks/dynamic_only.py",
+            "def later():\n    return 4\n",
+        );
+        write(
+            &d,
+            "app.py",
+            "_DOMAIN = [\n\
+             \t(\"models\", \"hooks/evaluate.py\"),\n\
+             \t(\"schema\", \"schema.py\"),\n\
+             ]\n\
+             \n\
+             def load_hook(self, filename):\n\
+             \treturn self.load_module(f\"hooks/{filename}\")\n\
+             \n\
+             def main():\n\
+             \tload_hook(\"export.py\")\n\
+             \tload_hook(f\"{module}.py\")\n\
+             \n\
+             if __name__ == \"__main__\":\n\
+             \tmain()\n",
+        );
+        let report = crate::dead_code_report(&d);
+        let unused = |needle: &str| {
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == "unused-file" && f.location.path.as_str().contains(needle))
+        };
+        assert!(
+            !unused("evaluate.py"),
+            "path table should reach evaluate: {:?}",
+            report.findings
+        );
+        assert!(
+            !unused("schema.py"),
+            "bare filename should reach schema: {:?}",
+            report.findings
+        );
+        assert!(
+            !unused("export.py"),
+            "load_hook filename should reach export: {:?}",
+            report.findings
+        );
+        assert!(
+            unused("orphan.py"),
+            "unnamed file should stay unused: {:?}",
+            report.findings
+        );
+        assert!(
+            unused("dynamic_only.py"),
+            "an f-string load does not name a file: {:?}",
+            report.findings
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
 }

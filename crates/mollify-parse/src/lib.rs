@@ -233,6 +233,10 @@ pub struct ParsedModule {
     /// True if the module has a top-level `if __name__ == "__main__":` guard —
     /// it's a runnable script, hence a reachability root.
     pub has_main_guard: bool,
+    /// Relative `.py` paths named by a string literal (`"hooks/export.py"`,
+    /// `"schema.py"`). A filename passed to a plugin loader is not an import,
+    /// but it is how the file is loaded. Sorted and deduped.
+    pub path_literals: Vec<String>,
     pub halstead_volume: f64,
     had_errors: bool,
 }
@@ -279,6 +283,7 @@ impl PyParser {
             name_counts: HashMap::new(),
             has_dynamic_sink: false,
             has_main_guard: false,
+            path_literals: Vec::new(),
             halstead_volume: 0.0,
             had_errors: false,
         };
@@ -374,6 +379,8 @@ impl PyParser {
         for stmt in &module.body {
             main.visit_stmt(stmt);
         }
+        m.path_literals.sort();
+        m.path_literals.dedup();
 
         // Identifiers used outside import statements (for unused-import), plus
         // the set of attribute-accessed names (for unused class/enum members).
@@ -1926,6 +1933,15 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
                     security_secret(t.id.as_str(), v, a.range(), self.li, self.m);
                 }
             }
+            Stmt::If(i) => {
+                // `if "'" in target: raise` rejects the quote and leaves the
+                // name safe for a later identifier interpolation.
+                if block_aborts(&i.body) {
+                    if let Some(set) = self.sanitized_idents.last_mut() {
+                        note_quote_rejection(&i.test, set);
+                    }
+                }
+            }
             Stmt::Try(t) => {
                 // try/except/pass (B110): a broad handler that silently swallows
                 // errors. Only flag bare `except:` or `except Exception/BaseException`.
@@ -1958,6 +1974,11 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
         walk_stmt(self, stmt);
     }
     fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::StringLiteral(s) = expr {
+            if let Some(path) = py_path_literal(s.value.to_str()) {
+                self.m.path_literals.push(path);
+            }
+        }
         if let Expr::Call(c) = expr {
             let callee = expr_path(&c.func).unwrap_or_default();
             if !callee.is_empty() {
@@ -2065,6 +2086,34 @@ fn first_positional_is_string(c: &ruff_python_ast::ExprCall) -> bool {
     matches!(c.arguments.args.first(), Some(Expr::StringLiteral(_)))
 }
 
+/// A relative Python path named by a string literal: `hooks/export.py` or
+/// `schema.py`. Absolute paths, `..`, and `__init__.py` are not plugin files.
+fn py_path_literal(text: &str) -> Option<String> {
+    let text = text.trim().strip_prefix("./").unwrap_or(text.trim());
+    if text.is_empty()
+        || text.starts_with('/')
+        || text.contains('\\')
+        || text.contains("..")
+        || text.contains('\n')
+        || !text.ends_with(".py")
+        || text == "__init__.py"
+        || text.ends_with("/__init__.py")
+    {
+        return None;
+    }
+    let ok = text.split('/').all(|seg| {
+        !seg.is_empty()
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')
+    });
+    if ok {
+        Some(text.to_string())
+    } else {
+        None
+    }
+}
+
 /// A string-literal module path passed to `importlib.import_module`,
 /// `__import__`, or a callable named `load_hook` / `load_plugin`.
 fn loaded_module_literal(callee: &str, call: &ruff_python_ast::ExprCall) -> Option<String> {
@@ -2093,6 +2142,35 @@ fn loaded_module_literal(callee: &str, call: &ruff_python_ast::ExprCall) -> Opti
         Some(module.to_string())
     } else {
         None
+    }
+}
+
+/// `if "'" in name: raise` / `return`. The body aborts, so a later use of
+/// `name` has already rejected a quote. A check that only logs does not.
+fn block_aborts(body: &[Stmt]) -> bool {
+    !body.is_empty()
+        && body
+            .iter()
+            .all(|s| matches!(s, Stmt::Raise(_) | Stmt::Return(_)))
+}
+
+fn note_quote_rejection(test: &Expr, set: &mut HashSet<String>) {
+    match test {
+        Expr::BoolOp(b) => {
+            for v in &b.values {
+                note_quote_rejection(v, set);
+            }
+        }
+        Expr::Compare(c) => {
+            if let Some((left, op, right)) = c.as_single() {
+                if *op == ruff_python_ast::CmpOp::In && string_contains_quote(left) {
+                    if let Expr::Name(n) = right {
+                        set.insert(n.id.to_string());
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
