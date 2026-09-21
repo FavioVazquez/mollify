@@ -12,14 +12,14 @@ name = "mollify"
 path = "src/main.rs"
 
 [dependencies]
-mollify-types = { path = "../mollify-types", version = "0.1.6" }
-mollify-core = { path = "../mollify-core", version = "0.1.6" }
-mollify-mcp = { path = "../mollify-mcp", version = "0.1.6" }
-mollify-lsp = { path = "../mollify-lsp", version = "0.1.6" }
+mollify-types = { path = "../mollify-types", version = "0.1.7" }
+mollify-core = { path = "../mollify-core", version = "0.1.7" }
+mollify-mcp = { path = "../mollify-mcp", version = "0.1.7" }
+mollify-lsp = { path = "../mollify-lsp", version = "0.1.7" }
 clap.workspace = true
 serde_json.workspace = true
 camino.workspace = true
 anyhow.workspace = true
 # Live supply-chain advisory fetch (OSV). Kept out of mollify-core so the
 # analysis core stays pure/offline/deterministic; the CLI does the network I/O.
-ureq = { version = "3", features = ["json"] }
+ureq = { version = "3.4", features = ["json"] }

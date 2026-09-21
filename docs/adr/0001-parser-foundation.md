@@ -1,13 +1,15 @@
 # ADR-0001: Parser foundation — ruff_python_parser / ruff_python_ast
 
 - **Status:** Accepted (2026-06-24); **revised 2026-06-26** to adopt the ruff
-  parser (the original tree-sitter decision is superseded — see History).
+  parser (the original tree-sitter decision is superseded — see History);
+  **revised 2026-09-21** to pin `=0.0.14` (the crates move together; a partial
+  bump splits `ruff_text_size` and the AST types stop matching).
 - **Context:** `PLAN.md` §3.2 specifies building on Astral's `ruff_python_parser`
   / `ruff_python_ast` crates — the de-facto, full-fidelity Rust Python parser
   foundation (the same one that powers `ruff`).
 - **Decision:** Build `mollify-parse` on **`ruff_python_parser` + `ruff_python_ast`**
   (with `ruff_source_file` for line indexing), pinned to an exact **crates.io**
-  release (`=0.0.3`). The crate exposes parser-agnostic types (`ParsedModule`,
+  release (`=0.0.14`). The crate exposes parser-agnostic types (`ParsedModule`,
   `Definition`, `Import`, `FunctionComplexity`, …), so the concrete parser stays
   an implementation detail confined to one crate.
 - **Consequences:**
@@ -16,7 +18,7 @@
     coarse token counting.
   - ✅ Published on crates.io, so **every** distribution channel — crates.io
     publish, PyPI (maturin), and source — builds the identical binary. No
-    git dependency, fully reproducible (pinned `=0.0.3`).
+    git dependency, fully reproducible (pinned `=0.0.14`).
   - ✅ The rest of the engine depends only on `mollify-parse`'s types, so the
     backend swap was localized to one crate (all downstream tests passed
     unchanged).
