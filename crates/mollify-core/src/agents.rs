@@ -283,4 +283,54 @@ mod tests {
             "the networked command is its own job, not a step of the audit job"
         );
     }
+
+    /// The hook is advisory. When a new-only audit has likely findings and no
+    /// certain ones, the summary prints the likely lines and still exits 0.
+    #[cfg(unix)]
+    #[test]
+    fn report_script_prints_likely_findings_when_none_are_certain() {
+        let root = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let script = root.join("scripts/mollify-report.sh");
+        if !script.exists() {
+            return;
+        }
+        let bin_dir =
+            std::env::temp_dir().join(format!("mollify-report-bin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bin_dir);
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let fake = bin_dir.join("mollify");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ncat <<'JSON'\n{\"summary\":{\"total\":1},\"findings\":[{\"confidence\":\"likely\",\"rule\":\"unused-export\",\"reason\":\"never used\",\"location\":{\"path\":\"a.py\",\"line\":3}}]}\nJSON\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let path = format!(
+            "{}:{}",
+            bin_dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let out = std::process::Command::new("bash")
+            .arg(script.as_std_path())
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            stdout.contains("a.py") && stdout.contains("unused-export"),
+            "likely findings should be printed when nothing is certain: {stdout}"
+        );
+        std::fs::remove_dir_all(&bin_dir).ok();
+    }
 }

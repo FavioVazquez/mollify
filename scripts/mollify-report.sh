@@ -36,14 +36,28 @@ if command -v jq >/dev/null 2>&1; then
   # wired into agent hooks where a nonzero exit blocks the action).
   TOTAL=$(printf '%s' "$REPORT" | jq -r '.summary.total // 0' 2>/dev/null || echo 0)
   CERTAIN=$(printf '%s' "$REPORT" | jq -r '[.findings[]? | select(.confidence=="certain")] | length' 2>/dev/null || echo 0)
+  LIKELY=$(printf '%s' "$REPORT" | jq -r '[.findings[]? | select(.confidence=="likely")] | length' 2>/dev/null || echo 0)
   # Normalize anything non-numeric (e.g. jq output on malformed input) to 0.
   case "$TOTAL" in '' | *[!0-9]*) TOTAL=0 ;; esac
   case "$CERTAIN" in '' | *[!0-9]*) CERTAIN=0 ;; esac
+  case "$LIKELY" in '' | *[!0-9]*) LIKELY=0 ;; esac
   [ "$TOTAL" -eq 0 ] && exit 0
-  echo "mollify: ${TOTAL} finding(s), ${CERTAIN} high-confidence. Top items:"
-  printf '%s' "$REPORT" | jq -r \
-    '[.findings[]? | select(.confidence=="certain")][:5][] | "  \(.location.path):\(.location.line) \(.rule) — \(.reason)"' \
-    2>/dev/null || true
+  # The gate is already new-only. Certain findings stay the headline. When a
+  # change introduces only likely findings — most of the debt this hook is
+  # asked to surface — print those instead of an empty list.
+  if [ "$CERTAIN" -gt 0 ]; then
+    echo "mollify: ${TOTAL} finding(s), ${CERTAIN} high-confidence. Top items:"
+    printf '%s' "$REPORT" | jq -r \
+      '[.findings[]? | select(.confidence=="certain")][:5][] | "  \(.location.path):\(.location.line) \(.rule) — \(.reason)"' \
+      2>/dev/null || true
+  elif [ "$LIKELY" -gt 0 ]; then
+    echo "mollify: ${TOTAL} finding(s), 0 high-confidence, ${LIKELY} likely. Top items:"
+    printf '%s' "$REPORT" | jq -r \
+      '[.findings[]? | select(.confidence=="likely")][:5][] | "  \(.location.path):\(.location.line) \(.rule) — \(.reason)"' \
+      2>/dev/null || true
+  else
+    echo "mollify: ${TOTAL} finding(s), 0 high-confidence."
+  fi
 else
   echo "mollify: audit complete (install jq for a detailed summary)."
 fi
