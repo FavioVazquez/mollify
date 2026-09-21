@@ -285,7 +285,12 @@ pub fn dupes_report_with_includes(root: &Utf8Path, includes: &[String]) -> Findi
     let cfg = config::load(root);
     let mut findings = Vec::new();
     run_engine("dupes", Category::Duplication, &mut findings, || {
-        dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines)
+        dupes::analyze_with(
+            &graph,
+            cfg.dup_min_tokens,
+            cfg.dup_min_lines,
+            &cfg.dup_mirrors,
+        )
     });
     finalize(root, &cfg, &graph, findings)
 }
@@ -602,7 +607,12 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
         complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive)
     });
     run_engine("dupes", Category::Duplication, &mut findings, || {
-        dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines)
+        dupes::analyze_with(
+            &graph,
+            cfg.dup_min_tokens,
+            cfg.dup_min_lines,
+            &cfg.dup_mirrors,
+        )
     });
     run_engine("type-health", Category::TypeHealth, &mut findings, || {
         typehealth::analyze(&graph)

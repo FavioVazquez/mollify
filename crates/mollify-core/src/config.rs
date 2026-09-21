@@ -22,6 +22,9 @@ pub struct Config {
     pub dup_min_tokens: usize,
     /// Minimum line span for a duplication clone (default 5).
     pub dup_min_lines: u32,
+    /// Intentional clone pairs (path substrings, either order). A two-copy
+    /// clone whose paths match a pair is not reported.
+    pub dup_mirrors: Vec<(String, String)>,
     /// Architecture preset name (informational): layered | hexagonal | feature-sliced | bulletproof.
     pub arch_preset: Option<String>,
     /// Ordered layer names, top (most dependent) → bottom. A layer may import
@@ -75,6 +78,7 @@ impl Default for Config {
             max_cognitive: crate::complexity::DEFAULT_COGNITIVE,
             dup_min_tokens: crate::dupes::MIN_TOKENS,
             dup_min_lines: crate::dupes::MIN_LINES,
+            dup_mirrors: Vec::new(),
             arch_preset: None,
             arch_layers: Vec::new(),
             policies: Vec::new(),
@@ -124,6 +128,18 @@ pub fn load(root: &Utf8Path) -> Config {
         }
         if let Some(n) = dup.get("min_lines").and_then(|x| x.as_u64()) {
             cfg.dup_min_lines = n as u32;
+        }
+        if let Some(pairs) = dup.get("mirrors").and_then(|m| m.as_array()) {
+            for pair in pairs {
+                let Some(arr) = pair.as_array() else {
+                    continue;
+                };
+                if arr.len() == 2 {
+                    if let (Some(a), Some(b)) = (arr[0].as_str(), arr[1].as_str()) {
+                        cfg.dup_mirrors.push((a.to_string(), b.to_string()));
+                    }
+                }
+            }
         }
     }
     if let Some(arch) = v.get("architecture").and_then(|a| a.as_object()) {

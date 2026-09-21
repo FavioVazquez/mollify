@@ -30,12 +30,19 @@ struct Tok {
 
 /// Duplication analysis with the default thresholds.
 pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
-    analyze_with(graph, MIN_TOKENS, MIN_LINES)
+    analyze_with(graph, MIN_TOKENS, MIN_LINES, &[])
 }
 
-/// Duplication analysis with a configurable `min_tokens` clone window and
-/// minimum clone line `min_lines` span.
-pub fn analyze_with(graph: &ModuleGraph, min_tokens: usize, min_lines: u32) -> Vec<Finding> {
+/// Duplication analysis with a configurable `min_tokens` clone window,
+/// minimum clone line `min_lines` span, and intentional mirror pairs.
+/// A mirror pair is two path substrings; a clone whose only two copies match
+/// that pair (either order) is not reported.
+pub fn analyze_with(
+    graph: &ModuleGraph,
+    min_tokens: usize,
+    min_lines: u32,
+    mirrors: &[(String, String)],
+) -> Vec<Finding> {
     let min_tokens = min_tokens.max(8) as u32;
 
     // Tokenize each module (deterministic order via sorted modules).
@@ -145,6 +152,13 @@ pub fn analyze_with(graph: &ModuleGraph, min_tokens: usize, min_lines: u32) -> V
         if instances.len() < 2 || span < min_lines {
             continue;
         }
+        let rels: Vec<&str> = instances
+            .iter()
+            .map(|(mi, _, _)| graph.modules[*mi].rel.as_str())
+            .collect();
+        if is_configured_mirror(&rels, mirrors) {
+            continue;
+        }
 
         // Stable fingerprint from the clone's normalized content + length.
         let (cfi, cti) = occ[0];
@@ -210,6 +224,18 @@ fn clone_hash(toks: &[Tok]) -> u64 {
 /// A minimal Python tokenizer for clone detection. Skips comments/whitespace;
 /// blinds string and number literals (`STR`/`NUM`); keeps identifiers, keywords,
 /// operators, and punctuation verbatim. Tracks 1-based line numbers.
+/// True when a clone is exactly two copies and those paths are one configured
+/// mirror pair, in either order.
+fn is_configured_mirror(rels: &[&str], mirrors: &[(String, String)]) -> bool {
+    if rels.len() != 2 {
+        return false;
+    }
+    mirrors.iter().any(|(a, b)| {
+        let hit = |path: &str, needle: &str| !needle.is_empty() && path.contains(needle);
+        (hit(rels[0], a) && hit(rels[1], b)) || (hit(rels[0], b) && hit(rels[1], a))
+    })
+}
+
 fn tokenize(src: &str) -> Vec<Tok> {
     let b = src.as_bytes();
     let mut i = 0;
@@ -521,6 +547,59 @@ mod tests {
             dups[0].reason.contains("3 locations"),
             "reason: {}",
             dups[0].reason
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn configured_mirror_pair_is_not_a_clone_finding() {
+        // Provider modules that intentionally mirror each other can be named
+        // once. A clone whose two copies are that pair is dropped. A clone
+        // in any other pair is still reported.
+        let d = temp("mirrors");
+        let mirror = "\
+def decide(decision, reason, confidence):\n\
+    if decision == \"accept\":\n\
+        return reason\n\
+    if decision == \"reject\":\n\
+        return confidence\n\
+    if decision == \"skip\":\n\
+        return None\n\
+    return decision\n";
+        let other = "\
+def score(label, weight, note):\n\
+    if label == \"high\":\n\
+        return weight\n\
+    if label == \"low\":\n\
+        return note\n\
+    if label == \"none\":\n\
+        return None\n\
+    return label\n";
+        write(&d, "providers/gemini.py", mirror);
+        write(&d, "providers/claude.py", mirror);
+        write(&d, "stages/left.py", other);
+        write(&d, "stages/right.py", other);
+        std::fs::write(
+            d.join(".mollifyrc.json"),
+            r#"{"duplication":{"min_tokens":12,"min_lines":5,"mirrors":[["providers/gemini.py","providers/claude.py"]]}}"#,
+        )
+        .unwrap();
+        let report = crate::dupes_report(&d);
+        let dups: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.rule == "duplication")
+            .collect();
+        assert!(
+            !dups
+                .iter()
+                .any(|f| f.reason.contains("gemini.py") && f.reason.contains("claude.py")),
+            "mirror pair should be dropped: {dups:?}"
+        );
+        assert!(
+            dups.iter()
+                .any(|f| f.reason.contains("left.py") && f.reason.contains("right.py")),
+            "unrelated clone should stay: {dups:?}"
         );
         std::fs::remove_dir_all(&d).ok();
     }

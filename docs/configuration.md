@@ -204,6 +204,17 @@ Tune the clone detector: `min_tokens` (normalized-token window, default 40) and
 "duplication": { "min_tokens": 50, "min_lines": 6 }
 ```
 
+`mirrors` names pairs of path substrings that are intentional copies (provider
+modules that share a shape, for example). A clone whose only two locations
+match a pair, in either order, is not reported. A clone that also appears
+somewhere else, or that lives in a different pair of files, still is.
+
+```json
+"duplication": {
+  "mirrors": [["providers/gemini_batch.py", "providers/claude_vertex_batch.py"]]
+}
+```
+
 ## `max_cyclomatic` / `max_cognitive`
 
 Thresholds for the complexity engine. Functions strictly above either threshold
