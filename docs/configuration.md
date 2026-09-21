@@ -83,6 +83,19 @@ Rule ids: `unused-file`, `unused-export`, `unused-import`, `unused-variable`,
 Categories: `dead-code`, `dependency-hygiene`, `circular-dependency`,
 `complexity`, `architecture`, `duplication`, `type-health`, `security`.
 
+## `severity_paths`
+
+The same overrides, limited to findings whose path contains `path`. The
+longest match wins over the global `severity` map. Use it to turn a noisy
+category on for one directory while the rest of the tree stays `off`.
+
+```json
+"severity": { "type-health": "off" },
+"severity_paths": [
+  { "path": "rosetta/service/", "type-health": "warn" }
+]
+```
+
 ## `architecture`
 
 Opt into **layer-boundary** checking. `layers` is an ordered list, top

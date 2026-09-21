@@ -275,4 +275,42 @@ mod tests {
         assert!(f[0].reason.contains("untyped"));
         std::fs::remove_dir_all(&d).ok();
     }
+
+    #[test]
+    fn path_severity_enables_type_health_for_one_directory() {
+        // The category stays off for the tree. A path override turns it on
+        // for one directory, so new code there is visible without reporting
+        // every untyped function in the rest of the project.
+        let d = temp("paths");
+        write(&d, "svc/api.py", "def handle(x):\n    return x\n");
+        write(&d, "other/util.py", "def helper(x):\n    return x\n");
+        std::fs::write(
+            d.join(".mollifyrc.json"),
+            r#"{"severity":{"type-health":"off"},"severity_paths":[{"path":"svc/","type-health":"warn"}]}"#,
+        )
+        .unwrap();
+        let report = crate::types_report(&d);
+        let untyped: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.rule == "untyped-function")
+            .collect();
+        assert!(
+            untyped
+                .iter()
+                .any(|f| f.location.path.as_str().contains("svc/")),
+            "svc should keep type-health: {untyped:?}"
+        );
+        assert!(
+            untyped
+                .iter()
+                .all(|f| f.location.path.as_str().contains("svc/")),
+            "the rest of the tree stays off: {untyped:?}"
+        );
+        assert!(
+            untyped.iter().all(|f| f.severity == Severity::Warn),
+            "path override is warn: {untyped:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
 }
