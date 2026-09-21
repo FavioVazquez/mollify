@@ -250,6 +250,12 @@ mod tests {
         );
         for f in files {
             let rel = path_of(f);
+            let rel_str = rel.as_str();
+            assert!(
+                !rel_str.contains(".claude/skills/tdd/")
+                    && !rel_str.contains(".claude/skills/codebase-design/"),
+                "local dev skill must not ship in embedded assets: {rel_str}"
+            );
             let src = root.join(&rel);
             let on_disk = std::fs::read(src.as_std_path()).unwrap_or_else(|_| {
                 panic!("canonical source missing for {rel}; run scripts/sync-agent-assets.sh")

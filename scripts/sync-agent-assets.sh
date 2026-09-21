@@ -42,4 +42,10 @@ for item in "${ITEMS[@]}"; do
   fi
 done
 
+# Local-only skills (see .gitignore). They live under .claude/skills for the
+# people working on this repo and must not be embedded or published.
+rm -rf \
+  "$DEST/.claude/skills/tdd" \
+  "$DEST/.claude/skills/codebase-design"
+
 echo "Synced ${#ITEMS[@]} agent artifact roots into $DEST"
