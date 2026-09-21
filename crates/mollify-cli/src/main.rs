@@ -560,16 +560,23 @@ fn rescore_audit(report: &mut mollify_types::AuditReport) {
         mollify_core::quality_score(&report.findings, report.summary.files_analyzed);
 }
 
-fn run_audit(s: &Scope) -> i32 {
+/// The audit a single process emits: baseline filtering already applied, so
+/// `--format json --baseline --fail-on-regression` prints only the new findings.
+struct GatedAudit {
+    report: mollify_types::AuditReport,
+    exit: i32,
+}
+
+fn gated_audit(s: &Scope) -> Result<GatedAudit, i32> {
     if let Some(code) = validate_root(&s.path) {
-        return code;
+        return Err(code);
     }
     let mut report = mollify_core::audit_report_with_includes(&s.path, &s.include);
     apply_gate(s, &mut report.findings);
     apply_min_confidence(s, &mut report.findings);
     let outcome = handle_baseline(s, &mut report.findings);
     if let Some(code) = baseline_failure_exit(&outcome) {
-        return code;
+        return Err(code);
     }
     if let BaselineOutcome::Saved(p) = &outcome {
         // stderr, so `--format json` stdout stays pure protocol.
@@ -579,7 +586,16 @@ fn run_audit(s: &Scope) -> i32 {
         );
     }
     rescore_audit(&mut report);
-    let errors = report.summary.errors;
+    let exit = gated_exit(s, report.summary.errors, &outcome);
+    Ok(GatedAudit { report, exit })
+}
+
+fn run_audit(s: &Scope) -> i32 {
+    let gated = match gated_audit(s) {
+        Ok(gated) => gated,
+        Err(code) => return code,
+    };
+    let GatedAudit { report, exit } = gated;
     match s.format {
         Format::Json => println!(
             "{}",
@@ -603,7 +619,7 @@ fn run_audit(s: &Scope) -> i32 {
             update_check::maybe_nudge();
         }
     }
-    gated_exit(s, errors, &outcome)
+    exit
 }
 
 fn run_findings(
@@ -1398,6 +1414,38 @@ mod tests {
             Some(&Severity::Off),
             "starter rc should silence type-health by default"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fail_on_regression_json_is_only_the_new_findings() {
+        // One process: `--format json --baseline --fail-on-regression` filters
+        // to the new findings and exits 1. The JSON already carries path, rule,
+        // and reason, so a gate does not need a second audit to print them.
+        let dir = temp_project("regress-json");
+        let baseline = dir.join("baseline.json");
+        let mut save = scope(dir.clone());
+        save.save_baseline = Some(baseline.clone());
+        assert_eq!(run_audit(&save), 0);
+        std::fs::write(dir.join("extra.py"), "def extra():\n    return 1\n").unwrap();
+        let mut check = scope(dir.clone());
+        check.baseline = Some(baseline);
+        check.fail_on_regression = true;
+        check.format = Format::Json;
+        let gated = gated_audit(&check).expect("audit runs");
+        assert_eq!(gated.exit, 1);
+        let json = serde_json::to_value(Report::Audit(gated.report)).unwrap();
+        let findings = json["findings"].as_array().expect("findings array");
+        assert!(!findings.is_empty(), "regression should list the new findings");
+        for finding in findings {
+            let path = finding["location"]["path"].as_str().unwrap();
+            assert!(
+                path.ends_with("extra.py"),
+                "filtered report should be only the new file, got {path}"
+            );
+            assert!(!finding["rule"].as_str().unwrap().is_empty());
+            assert!(!finding["reason"].as_str().unwrap().is_empty());
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 }
