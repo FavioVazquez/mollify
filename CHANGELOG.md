@@ -4,6 +4,24 @@ All notable changes to Mollify. This project follows the spirit of
 [Keep a Changelog](https://keepachangelog.com/) and the JSON contract is
 versioned by `schema_version` (currently `0.1`).
 
+## Unreleased
+
+### Security
+- **`rustls` 0.23.45** (via `ureq` 3.4.2). Closes the TLS 1.3 handshake
+  advisory RUSTSEC-2026-0285. `anyhow` 1.0.104 stays on the patched side of
+  RUSTSEC-2026-0190 (`>= 1.0.103`).
+
+### Changed
+- **Ruff parser crates pinned to `=0.0.14`**, moved together
+  (`ruff_python_parser`, `ruff_python_ast`, `ruff_source_file`,
+  `ruff_text_size`). MSRV is 1.96. A one-crate bump splits `ruff_text_size`
+  and the AST `Ranged` impls no longer match.
+- Also current: `xxhash-rust` 0.8.18, `toml` 1.1.6, `rustc-hash` 2.1.3.
+- Repo-root audits skip `cookbook/sample-project` (`.mollifyrc.json`
+  `exclude_dirs`). That tree is the cookbook fixture; scan it with
+  `--path cookbook/sample-project`. `scripts/fetch-advisories.py` is split
+  so it sits under the complexity and duplication thresholds.
+
 ## 0.1.6 - 2026-07-07
 
 The pre-announcement precision series: a second and third calibration sweep

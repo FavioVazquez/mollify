@@ -8,9 +8,9 @@ edition = "2021"
 license = "MIT"
 authors = ["Favio Vázquez <favio.vazquezp@gmail.com>"]
 repository = "https://github.com/FavioVazquez/mollify"
-# MSRV is driven by the ruff parser crates (edition 2024, rustc 1.94). The
+# MSRV is driven by the ruff parser crates (edition 2024, rustc 1.96). The
 # `rust-toolchain.toml` pins `stable`, which satisfies this on CI and locally.
-rust-version = "1.94"
+rust-version = "1.96"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -21,10 +21,10 @@ clap = { version = "4", features = ["derive"] }
 # Astral's ruff Python parser/AST (full-fidelity) — published on crates.io, so
 # every distribution channel (crates.io publish, PyPI, source) builds it.
 # Pinned for reproducibility. See docs/adr/0001-parser-foundation.md.
-ruff_python_parser = "=0.0.3"
-ruff_python_ast = "=0.0.3"
-ruff_source_file = "=0.0.3"
-ruff_text_size = "=0.0.3"
+ruff_python_parser = "=0.0.14"
+ruff_python_ast = "=0.0.14"
+ruff_source_file = "=0.0.14"
+ruff_text_size = "=0.0.14"
 rayon = "1"
 ignore = "0.4"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

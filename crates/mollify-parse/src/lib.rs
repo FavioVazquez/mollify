@@ -4,7 +4,7 @@
 //! never touches the concrete parser directly.
 //!
 //! ## ADR-0001: full-fidelity ruff AST
-//! Built on Astral's `ruff_python_parser` / `ruff_python_ast` (pinned git rev) —
+//! Built on Astral's `ruff_python_parser` / `ruff_python_ast` (pinned crates.io release) —
 //! the same battle-tested, error-resilient parser that powers `ruff`. The types
 //! below (`ParsedModule`, `Definition`, `Import`, …) are parser-agnostic, so the
 //! concrete parser remains an implementation detail confined to this crate.
@@ -763,14 +763,16 @@ fn is_main_guard(test: &Expr) -> bool {
     let Expr::Compare(c) = test else {
         return false;
     };
-    if c.ops.as_ref() != [ruff_python_ast::CmpOp::Eq] || c.comparators.len() != 1 {
+    let Some((left, op, right)) = c.as_single() else {
+        return false;
+    };
+    if *op != ruff_python_ast::CmpOp::Eq {
         return false;
     }
     let is_name = |e: &Expr| matches!(e, Expr::Name(n) if n.id.as_str() == "__name__");
     let is_main_str =
         |e: &Expr| matches!(e, Expr::StringLiteral(s) if s.value.to_str() == "__main__");
-    (is_name(&c.left) && is_main_str(&c.comparators[0]))
-        || (is_main_str(&c.left) && is_name(&c.comparators[0]))
+    (is_name(left) && is_main_str(right)) || (is_main_str(left) && is_name(right))
 }
 
 /// `if TYPE_CHECKING:` / `if typing.TYPE_CHECKING:` / `if False:` guard.

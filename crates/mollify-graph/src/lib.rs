@@ -260,14 +260,13 @@ pub fn read_source(path: &Utf8Path) -> Option<String> {
     let mut cells: Vec<&serde_json::Value> = Vec::new();
     if let Some(v4) = nb.get("cells").and_then(|c| c.as_array()) {
         cells.extend(v4);
-    } else if let Some(sheets) = nb.get("worksheets").and_then(|w| w.as_array()) {
+    } else {
+        let sheets = nb.get("worksheets").and_then(|w| w.as_array())?;
         for sheet in sheets {
             if let Some(v3) = sheet.get("cells").and_then(|c| c.as_array()) {
                 cells.extend(v3);
             }
         }
-    } else {
-        return None;
     }
     let mut src = String::new();
     for cell in cells {

@@ -58,6 +58,25 @@ def _get(url: str, attempts: int = 4) -> bytes:
     raise last  # type: ignore[misc]
 
 
+def _window(introduced: str | None, op: str, bound: str) -> str:
+    """One introduced..bound window as an AND spec (`>=a,<b` or a single side)."""
+    lo = f">={introduced}" if introduced else ""
+    hi = f"{op}{bound}"
+    return ",".join(part for part in (lo, hi) if part)
+
+
+def _consume_event(introduced: str | None, ev: dict) -> tuple[str | None, str | None]:
+    """Apply one OSV range event. Returns `(next_introduced, spec_or_none)`."""
+    if "introduced" in ev:
+        value = ev["introduced"]
+        return (None if value == "0" else value), None
+    if "fixed" in ev:
+        return None, _window(introduced, "<", ev["fixed"])
+    if "last_affected" in ev:
+        return None, _window(introduced, "<=", ev["last_affected"])
+    return introduced, None
+
+
 def _osv_ranges_to_specs(affected: dict) -> list[str]:
     """Convert one OSV `affected` entry's ranges/versions into spec strings.
 
@@ -69,26 +88,55 @@ def _osv_ranges_to_specs(affected: dict) -> list[str]:
     for rng in affected.get("ranges", []):
         introduced = None
         for ev in rng.get("events", []):
-            if "introduced" in ev:
-                introduced = ev["introduced"]
-                if introduced == "0":
-                    introduced = None
-            elif "fixed" in ev:
-                lo = f">={introduced}" if introduced else ""
-                hi = f"<{ev['fixed']}"
-                specs.append(",".join(p for p in (lo, hi) if p))
-                introduced = None
-            elif "last_affected" in ev:
-                lo = f">={introduced}" if introduced else ""
-                hi = f"<={ev['last_affected']}"
-                specs.append(",".join(p for p in (lo, hi) if p))
-                introduced = None
+            introduced, spec = _consume_event(introduced, ev)
+            if spec:
+                specs.append(spec)
         if introduced is not None:  # introduced with no fix yet → open-ended
             specs.append(f">={introduced}")
-    for v in affected.get("versions", []) or []:
-        specs.append(f"=={v}")
+    for version in affected.get("versions", []) or []:
+        specs.append(f"=={version}")
     # An advisory with neither ranges nor versions affects all versions.
     return sorted(set(specs))
+
+
+def _osv_summary(data: dict) -> str:
+    summary = data.get("summary") or data.get("details", "") or ""
+    if not summary:
+        return ""
+    return summary.strip().splitlines()[0][:200]
+
+
+def _osv_severity(data: dict) -> str | None:
+    severity = None
+    for item in data.get("severity", []) or []:
+        severity = item.get("type") or severity
+    return severity
+
+
+def _pypi_advisories(data: dict) -> list[dict]:
+    aliases = data.get("aliases", []) or []
+    cves = [alias for alias in aliases if alias.startswith("CVE-")]
+    summary = _osv_summary(data)
+    severity = _osv_severity(data)
+    advisories: list[dict] = []
+    for aff in data.get("affected", []) or []:
+        pkg = aff.get("package", {})
+        if pkg.get("ecosystem") != "PyPI":
+            continue
+        name = pkg.get("name")
+        if not name:
+            continue
+        advisories.append(
+            {
+                "id": data.get("id", ""),
+                "package": name,
+                "specs": _osv_ranges_to_specs(aff),
+                "summary": summary,
+                "aliases": cves,
+                "severity": severity,
+            }
+        )
+    return advisories
 
 
 def from_osv(local_zip: str | None = None) -> list[dict]:
@@ -98,30 +146,7 @@ def from_osv(local_zip: str | None = None) -> list[dict]:
         for name in zf.namelist():
             if not name.endswith(".json"):
                 continue
-            data = json.loads(zf.read(name))
-            aliases = data.get("aliases", []) or []
-            summary = data.get("summary") or data.get("details", "") or ""
-            summary = summary.strip().splitlines()[0][:200] if summary else ""
-            severity = None
-            for s in data.get("severity", []) or []:
-                severity = s.get("type") or severity
-            for aff in data.get("affected", []) or []:
-                pkg = aff.get("package", {})
-                if pkg.get("ecosystem") != "PyPI":
-                    continue
-                name_ = pkg.get("name")
-                if not name_:
-                    continue
-                advisories.append(
-                    {
-                        "id": data.get("id", ""),
-                        "package": name_,
-                        "specs": _osv_ranges_to_specs(aff),
-                        "summary": summary,
-                        "aliases": [a for a in aliases if a.startswith("CVE-")],
-                        "severity": severity,
-                    }
-                )
+            advisories.extend(_pypi_advisories(json.loads(zf.read(name))))
     return advisories
 
 
@@ -146,33 +171,40 @@ def from_safety() -> list[dict]:
     return advisories
 
 
-def main() -> int:
+def _parse_args(args: list[str]) -> tuple[str, str, str | None]:
     out = "advisories.json"
     source = "osv"
     local_zip = None
-    args = sys.argv[1:]
     i = 0
     while i < len(args):
-        if args[i] == "--source" and i + 1 < len(args):
-            source = args[i + 1]
+        nxt = args[i + 1] if i + 1 < len(args) else None
+        if nxt is not None and args[i] == "--source":
+            source = nxt
             i += 2
-        elif args[i] == "--zip" and i + 1 < len(args):
-            local_zip = args[i + 1]
+        elif nxt is not None and args[i] == "--zip":
+            local_zip = nxt
             i += 2
         else:
             out = args[i]
             i += 1
+    return out, source, local_zip
 
+
+def _load(source: str, local_zip: str | None) -> tuple[list[dict], str]:
+    if source == "osv":
+        return from_osv(local_zip), OSV_PYPI_ALL
+    return from_safety(), SAFETY_DB
+
+
+def main() -> int:
+    out, source, local_zip = _parse_args(sys.argv[1:])
     try:
-        advisories = from_osv(local_zip) if source == "osv" else from_safety()
-        src_url = OSV_PYPI_ALL if source == "osv" else SAFETY_DB
+        advisories, src_url = _load(source, local_zip)
     except Exception as exc:  # noqa: BLE001
-        if source == "osv":
-            print(f"OSV fetch failed ({exc}); falling back to safety-db.", file=sys.stderr)
-            advisories = from_safety()
-            src_url = SAFETY_DB
-        else:
+        if source != "osv":
             raise
+        print(f"OSV fetch failed ({exc}); falling back to safety-db.", file=sys.stderr)
+        advisories, src_url = from_safety(), SAFETY_DB
 
     advisories.sort(key=lambda a: (a["package"], a["id"]))
     db = {"schema": "mollify-advisories/1", "source": src_url, "advisories": advisories}
