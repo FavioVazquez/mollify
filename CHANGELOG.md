@@ -23,6 +23,17 @@ versioned by `schema_version` (currently `0.1`).
   file pins dev and docs tools. An import of one of those names still counts
   as declared. A project with no runtime declaration in pyproject still uses
   `requirements*.txt` as its manifest.
+- A package directory named `env` or `venv` is source code when it contains
+  `__init__.py`. A virtualenv of that name, which has no package init, stays
+  out of the scan. `pyvenv.cfg` still excludes a directory either way.
+- `annotationlib` (Python 3.14 standard library) is not `missing-dependency`.
+- `sql-injection` on `execute`, `executemany`, and `executescript` requires a
+  database-handle receiver (`cursor`, `cur`, `connection`, `conn`, `con`,
+  `db`, `session`, `engine`). `QuerySet.raw` and `.extra` are unchanged.
+- A URL or a sentence assigned to a secret-named variable is not
+  `hardcoded-secret`.
+- An unresolved import whose `.py` would sit beside a same-stem `.pyx`,
+  `.pxd`, `.pxi`, `.c`, `.cpp`, or `.pyi` is not `unresolved-import`.
 
 ## 0.2.0 - 2026-09-22
 

@@ -127,6 +127,12 @@ fn is_excluded_dir(
     if includes.iter().any(|i| i == name) {
         return false;
     }
+    // `env` and `venv` are virtualenv names, and also ordinary package names
+    // (`poetry.utils.env`). A package has `__init__.py`; a virtualenv does not.
+    // `pyvenv.cfg` above still excludes a directory that is both.
+    if matches!(name, "env" | "venv") && entry.path().join("__init__.py").is_file() {
+        return false;
+    }
     DEFAULT_EXCLUDE_DIRS.contains(&name) || extra_excludes.iter().any(|e| e == name)
 }
 
@@ -528,6 +534,50 @@ impl ModuleGraph {
         false
     }
 
+    /// Where `target`'s `.py` file would sit, using the longest in-tree package
+    /// prefix as the anchor.
+    fn would_be_py_path(&self, target: &str) -> Option<Utf8PathBuf> {
+        let segs: Vec<&str> = target.split('.').filter(|s| !s.is_empty()).collect();
+        if segs.len() < 2 {
+            return None;
+        }
+        let mut anchor: Option<(usize, &ModuleInfo)> = None;
+        for i in 1..segs.len() {
+            let prefix = segs[..i].join(".");
+            if let Some(m) = self.module_by_dotted(&prefix) {
+                if m.is_package {
+                    anchor = Some((i, m));
+                }
+            }
+        }
+        let (i, m) = anchor?;
+        let mut path = m.path.parent()?.to_path_buf();
+        let rest = &segs[i..];
+        for (j, seg) in rest.iter().enumerate() {
+            if j + 1 == rest.len() {
+                path.push(format!("{seg}.py"));
+            } else {
+                path.push(*seg);
+            }
+        }
+        Some(path)
+    }
+
+    fn has_extension_companion(&self, target: &str) -> bool {
+        let Some(py) = self.would_be_py_path(target) else {
+            return false;
+        };
+        let Some(dir) = py.parent() else {
+            return false;
+        };
+        let Some(stem) = py.file_stem() else {
+            return false;
+        };
+        const EXTS: &[&str] = &["pyx", "pxd", "pxi", "c", "cpp", "pyi"];
+        EXTS.iter()
+            .any(|ext| dir.join(format!("{stem}.{ext}")).is_file())
+    }
+
     /// Imports that *look* internal but resolve to no module in the project:
     /// every relative import that fails to resolve, plus absolute imports under a
     /// first-party top-level package that fail to resolve. These are typically a
@@ -568,6 +618,12 @@ impl ModuleGraph {
                     if !self.extends_local_module(&target) {
                         continue;
                     }
+                }
+                // A Cython/C/stub file with this module's stem is the
+                // implementation. `foo.pyx` next to where `foo.py` would be
+                // is not a missing Python module.
+                if self.has_extension_companion(&target) {
+                    continue;
                 }
                 let display = if relative {
                     format!("{}{}", ".".repeat(imp.relative_dots as usize), imp.module)
@@ -1058,6 +1114,41 @@ mod tests {
     }
 
     #[test]
+    fn extension_companion_is_not_an_unresolved_import() {
+        // Cython and stub files stand in for the missing .py. A name with no
+        // companion is still unresolved.
+        let d = temp("extcomp");
+        write(&d, "pkg/__init__.py", "");
+        write(
+            &d,
+            "pkg/app.py",
+            "import pkg._speedups\nimport pkg._ufuncs\nimport pkg.missing_mod\n",
+        );
+        write(&d, "pkg/_speedups.pyx", "# cython\n");
+        write(&d, "pkg/_ufuncs.pyi", "def f() -> int: ...\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let unresolved: Vec<_> = g
+            .unresolved_imports()
+            .iter()
+            .map(|u| u.display.clone())
+            .collect();
+        assert!(
+            !unresolved.iter().any(|n| n.contains("_speedups")),
+            "cython module flagged unresolved: {unresolved:?}"
+        );
+        assert!(
+            !unresolved.iter().any(|n| n.contains("_ufuncs")),
+            "stubbed module flagged unresolved: {unresolved:?}"
+        );
+        assert!(
+            unresolved.iter().any(|n| n.contains("missing_mod")),
+            "real missing module not flagged: {unresolved:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
     fn shared_namespace_import_is_not_an_unresolved_first_party_import() {
         // A local `google.cloud.storage` module makes the top `google` look
         // first-party. `google.api_core` is a different distribution on that
@@ -1382,6 +1473,45 @@ import b
             .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn package_named_env_is_source_not_a_virtualenv() {
+        // `pkg/utils/env/` is a real package. A root `env/` with no package
+        // init is still a virtualenv and stays out of the scan.
+        let d = temp("envpkg");
+        write(&d, "pkg/__init__.py", "");
+        write(&d, "pkg/app.py", "import pkg.utils.env\n");
+        write(&d, "pkg/utils/__init__.py", "");
+        write(&d, "pkg/utils/env/__init__.py", "NAME = 'env'\n");
+        write(&d, "env/pyvenv.cfg", "home = /usr/bin\n");
+        write(&d, "env/lib/mod.py", "x = 1\n");
+        write(&d, "venv/lib/mod.py", "x = 1\n");
+        let files = discover_python_files(&d);
+        let rel: Vec<String> = files
+            .iter()
+            .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
+            .collect();
+        assert!(
+            rel.iter().any(|p| p == "pkg/utils/env/__init__.py"),
+            "source package not discovered: {rel:?}"
+        );
+        assert!(
+            !rel.iter()
+                .any(|p| p.starts_with("env/") || p.starts_with("venv/")),
+            "virtualenv was scanned: {rel:?}"
+        );
+        let g = ModuleGraph::build(&d, &files);
+        let unresolved: Vec<_> = g
+            .unresolved_imports()
+            .iter()
+            .map(|u| u.display.clone())
+            .collect();
+        assert!(
+            !unresolved.iter().any(|d| d.contains("utils.env")),
+            "source package flagged unresolved: {unresolved:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

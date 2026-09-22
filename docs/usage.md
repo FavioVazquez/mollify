@@ -53,7 +53,9 @@ dependencies. When pyproject does, names that appear only in
 docs pin list — but an import of one of those names still counts as declared.
 An import that merely shares a namespace top with a local package
 (`google.api_core` next to `google.cloud.storage`) is not an unresolved
-first-party import.
+first-party import. Neither is an import whose module file is a same-stem
+`.pyx`, `.pxd`, `.pxi`, `.c`, `.cpp`, or `.pyi`. A package named `env` or
+`venv` is scanned when it has an `__init__.py`.
 
 ### Regression baselines (CI gate without git)
 

@@ -15,6 +15,7 @@ const STDLIB: &[&str] = &[
     "__future__",
     "abc",
     "aifc",
+    "annotationlib",
     "antigravity",
     "argparse",
     "array",
@@ -397,6 +398,7 @@ mod tests {
         // (flask flagged codecs/code/readline/rlcompleter; tomllib is 3.11+).
         let k = Known::new();
         for m in [
+            "annotationlib",
             "atexit",
             "binascii",
             "code",
