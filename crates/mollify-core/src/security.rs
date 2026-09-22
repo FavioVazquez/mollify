@@ -156,11 +156,11 @@ mod tests {
             .collect();
         assert!(
             !secrets.iter().any(|r| r.contains("apiKey")),
-            "enum token flagged as a secret: {secrets:?}"
+            "enum token flagged as a secret"
         );
         assert!(
             secrets.iter().any(|r| r.contains("password")),
-            "real secret not flagged: {secrets:?}"
+            "real secret not flagged"
         );
         std::fs::remove_dir_all(&d).ok();
     }
@@ -185,17 +185,17 @@ mod tests {
             .collect();
         assert!(
             !secrets.iter().any(|r| r.contains("TOKEN_URL")),
-            "URL flagged as a secret: {secrets:?}"
+            "URL flagged as a secret"
         );
         assert!(
             !secrets
                 .iter()
                 .any(|r| r.contains("SECRETSTORAGE_UNAVAILABLE_REASON")),
-            "error sentence flagged as a secret: {secrets:?}"
+            "error sentence flagged as a secret"
         );
         assert!(
             secrets.iter().any(|r| r.contains("password")),
-            "real secret not flagged: {secrets:?}"
+            "real secret not flagged"
         );
         std::fs::remove_dir_all(&d).ok();
     }
