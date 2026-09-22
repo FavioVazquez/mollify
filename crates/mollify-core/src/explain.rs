@@ -114,10 +114,12 @@ pub fn text(rule: &str) -> Option<&'static str> {
             Action: move it to your runtime dependencies."
         }
         "unresolved-import" => {
-            "An import that looks internal — relative (`from . import x`) or under \
-            a first-party top-level package — but resolves to no module in the \
-            project. Confidence: likely — a relative import may still resolve to \
-            an in-tree C extension or a build-generated module the `.py` walk \
+            "An import that looks internal — relative (`from . import x`) or \
+            extending a module this project contains — but resolves to no module \
+            in the tree. Sharing a namespace top (`google`, `azure`) with a local \
+            package does not make every other distribution on that namespace \
+            first-party. Confidence: likely — a relative import may still resolve \
+            to an in-tree C extension or a build-generated module the `.py` walk \
             can't see. Action: fix the module path or remove the broken import."
         }
         "duplicate-export" => {
@@ -221,7 +223,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "hardcoded-secret" => {
             "A literal that looks like a credential assigned to a \
-            secret-named variable. Action: load it from the environment or a secret manager."
+            secret-named variable. A literal equal to the name itself \
+            (`apiKey = \"apiKey\"`) is a schema token, not a secret. \
+            Action: load a real credential from the environment or a secret manager."
         }
         "weak-hash" => {
             "Use of a broken hash (md5/sha1) (CWE-327). Action: use sha256+ \

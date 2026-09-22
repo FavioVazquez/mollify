@@ -17,6 +17,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// Analyze dependency hygiene. `root` is the project root. Declared dependencies
 /// are gathered from `pyproject.toml` (PEP 621 + Poetry + uv + pdm + PEP 735) and
 /// any `requirements*.txt` files, so projects without a pyproject still work.
+/// When pyproject already declares a runtime dependency, names that appear
+/// only in `requirements*.txt` are not reported `unused-dependency` (that
+/// file pins dev and docs tools). Imports of those names still count as
+/// declared.
 pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     let pyproject_path = root.join("pyproject.toml");
@@ -27,12 +31,20 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     let mut manifest = pyproject_path.clone();
 
     let mut has_manifest = false;
+    let mut pyproject_declares_runtime = false;
+    // Names that appear only in requirements*.txt once pyproject already
+    // declares the runtime set. They satisfy imports (so they are not
+    // missing) but are not unused-dependency: that file is the dev/docs pin
+    // list, and tools in it are invoked rather than imported.
+    let mut req_only: FxHashSet<String> = FxHashSet::default();
     if let Ok(text) = std::fs::read_to_string(&pyproject_path) {
         has_manifest = true;
         if let Ok(table) = text.parse::<toml::Table>() {
             let val = toml::Value::Table(table);
             declared.extend(declared_dependencies(&val));
             let prod = prod_dependencies(&val);
+            // `python` alone is the interpreter pin, not a runtime distribution.
+            pyproject_declares_runtime = prod.iter().any(|d| d != "python");
             for d in dev_dependencies(&val) {
                 if !prod.contains(&d) {
                     dev_only.insert(d);
@@ -60,6 +72,9 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
             let before = declared.len();
             for line in text.lines() {
                 if let Some(name) = requirement_name(line) {
+                    if pyproject_declares_runtime && !declared.contains(&name) {
+                        req_only.insert(name.clone());
+                    }
                     declared.insert(name);
                 }
             }
@@ -96,7 +111,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     // pre-commit, pytest plugins…) are invoked, not imported — deptry exempts
     // dev dependencies from this check for the same reason.
     for dist in &declared {
-        if dist == "python" || dev_only.contains(dist) {
+        if dist == "python" || dev_only.contains(dist) || req_only.contains(dist) {
             continue;
         }
         if !used.candidates.contains(dist) {
@@ -1085,6 +1100,72 @@ mod tests {
         // requests is declared and used → no finding; os is stdlib → ignored.
         assert!(!f.iter().any(|x| x.reason.contains("requests")));
         assert!(!f.iter().any(|x| x.reason.contains("`os`")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn markdown_it_import_counts_as_markdown_it_py() {
+        let d = temp("mdit");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\"markdown-it-py\"]\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("app.py"), "import markdown_it\n").unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        assert!(
+            !f.iter().any(|x| x.rule == "unused-dependency"),
+            "markdown-it-py wrongly unused: {f:?}"
+        );
+        assert!(
+            !f.iter().any(|x| x.rule == "missing-dependency"),
+            "markdown_it wrongly missing: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn requirements_txt_is_dev_tooling_when_pyproject_declares_runtime_deps() {
+        // A project that already declares runtime deps in pyproject uses
+        // requirements.txt to pin docs and test tools. A pin that is never
+        // imported is not an unused runtime dependency. A pin that is imported
+        // still counts as declared.
+        let d = temp("reqdev");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\"httpx\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("requirements.txt"),
+            "mkdocs==1.6.1\nchardet==5.2.0\nhttpx>=0.27\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("app.py"), "import httpx\nimport chardet\n").unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-dependency" && x.reason.contains("mkdocs")),
+            "docs pin wrongly unused: {f:?}"
+        );
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "unused-dependency" && x.reason.contains("httpx")),
+            "declared runtime dep wrongly unused: {f:?}"
+        );
+        assert!(
+            !f.iter()
+                .any(|x| x.rule == "missing-dependency" && x.reason.contains("chardet")),
+            "imported requirements pin wrongly missing: {f:?}"
+        );
+        assert!(
+            !f.iter().any(|x| x.rule == "misplaced-dev-dependency"),
+            "requirements pin wrongly misplaced: {f:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

@@ -137,6 +137,35 @@ mod tests {
     }
 
     #[test]
+    fn identifier_equal_to_its_literal_is_not_a_secret() {
+        // OpenAPI enums assign the member name to itself (`apiKey = "apiKey"`).
+        // That is a schema token, not a credential. A different literal still is.
+        let d = temp("seceq");
+        write(
+            &d,
+            "models.py",
+            "class SecuritySchemeType:\n    apiKey = \"apiKey\"\npassword = \"s3cret-value\"\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g, &[]);
+        let secrets: Vec<_> = f
+            .iter()
+            .filter(|x| x.rule == "hardcoded-secret")
+            .map(|x| x.reason.clone())
+            .collect();
+        assert!(
+            !secrets.iter().any(|r| r.contains("apiKey")),
+            "enum token flagged as a secret: {secrets:?}"
+        );
+        assert!(
+            secrets.iter().any(|r| r.contains("password")),
+            "real secret not flagged: {secrets:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
     fn surfaces_candidates() {
         let d = temp("sec");
         write(

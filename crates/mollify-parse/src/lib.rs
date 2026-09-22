@@ -2047,6 +2047,10 @@ fn security_secret(
     }
     if let Expr::StringLiteral(s) = value {
         let val = s.value.to_str();
+        // `apiKey = "apiKey"` is an enum/schema token, not a credential.
+        if val.eq_ignore_ascii_case(name) {
+            return;
+        }
         if val.len() >= 4 && !val.contains("${") && !val.eq_ignore_ascii_case("changeme") {
             m.security_hits.push(SecurityHit {
                 rule: "hardcoded-secret",

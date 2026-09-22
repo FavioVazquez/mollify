@@ -6,6 +6,24 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+## 0.2.1 - 2026-09-22
+
+### Fixed
+- An import that only shares a namespace top with this tree is not
+  `unresolved-import`. `import google` and `google.api_core` next to a local
+  `google.cloud.storage` are the namespace and another distribution, not
+  missing modules. An import that extends a module this project contains
+  still is, and so is `pkg.missing` when `pkg` itself is in the tree.
+- `import markdown_it` counts as the declared distribution `markdown-it-py`.
+- A string literal equal to the name it is assigned to (`apiKey = "apiKey"`)
+  is not `hardcoded-secret`. A different literal on a secret-named variable
+  still is.
+- When `pyproject.toml` already declares a runtime dependency, a name that
+  appears only in root `requirements*.txt` is not `unused-dependency`. That
+  file pins dev and docs tools. An import of one of those names still counts
+  as declared. A project with no runtime declaration in pyproject still uses
+  `requirements*.txt` as its manifest.
+
 ## 0.2.0 - 2026-09-22
 
 ### Added

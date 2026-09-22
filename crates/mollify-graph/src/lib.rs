@@ -507,6 +507,27 @@ impl ModuleGraph {
             .any(|n| self.lookup(&join_dotted(target, n)).is_some())
     }
 
+    /// True when some module in this graph is a strict dotted prefix of `target`.
+    /// `google.cloud.storage` extends a local `google.cloud.storage` module;
+    /// `google.api_core` does not, even though both start with `google`.
+    fn extends_local_module(&self, target: &str) -> bool {
+        let segs: Vec<&str> = target.split('.').collect();
+        if segs.len() < 2 {
+            return false;
+        }
+        let mut prefix = String::new();
+        for seg in &segs[..segs.len() - 1] {
+            if !prefix.is_empty() {
+                prefix.push('.');
+            }
+            prefix.push_str(seg);
+            if self.by_dotted.contains_key(prefix.as_str()) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Imports that *look* internal but resolve to no module in the project:
     /// every relative import that fails to resolve, plus absolute imports under a
     /// first-party top-level package that fail to resolve. These are typically a
@@ -537,6 +558,15 @@ impl ModuleGraph {
                     let top = target.split('.').next().unwrap_or(&target);
                     if !first_party.contains(top) {
                         continue; // third-party → handled by dependency hygiene
+                    }
+                    // Sharing a top-level name is not enough. `google.cloud.storage`
+                    // in this tree does not make `import google` or
+                    // `google.api_core` a broken first-party import — those
+                    // names are the namespace and another distribution on it.
+                    // Flag only an import that extends a module this project
+                    // actually contains.
+                    if !self.extends_local_module(&target) {
+                        continue;
                     }
                 }
                 let display = if relative {
@@ -1023,6 +1053,44 @@ mod tests {
         assert!(
             g.symbol_used(helper.id, "go", 1),
             "lazily-imported symbol wrongly unused"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn shared_namespace_import_is_not_an_unresolved_first_party_import() {
+        // A local `google.cloud.storage` module makes the top `google` look
+        // first-party. `google.api_core` is a different distribution on that
+        // namespace, not a missing file in this tree. An import that extends a
+        // module we actually have still is.
+        let d = temp("nsunres");
+        write(
+            &d,
+            "google/cloud/storage.py",
+            "import google\nimport google.api_core.exceptions\nimport google.cloud.storage.missing_mod\n",
+        );
+        write(&d, "pkg/__init__.py", "");
+        write(&d, "pkg/app.py", "import pkg.no_such_module\n");
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let unresolved: Vec<_> = g
+            .unresolved_imports()
+            .iter()
+            .map(|u| u.display.clone())
+            .collect();
+        assert!(
+            !unresolved
+                .iter()
+                .any(|d| d == "google" || d.contains("api_core")),
+            "third-party namespace import flagged as unresolved: {unresolved:?}"
+        );
+        assert!(
+            unresolved.iter().any(|d| d.contains("missing_mod")),
+            "broken import under a local module not flagged: {unresolved:?}"
+        );
+        assert!(
+            unresolved.iter().any(|d| d.contains("no_such_module")),
+            "broken import under a local package not flagged: {unresolved:?}"
         );
         std::fs::remove_dir_all(&d).ok();
     }

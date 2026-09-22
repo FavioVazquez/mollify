@@ -258,6 +258,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("psycopg2", "psycopg2-binary"),
     ("docx", "python-docx"),
     ("pptx", "python-pptx"),
+    ("markdown_it", "markdown-it-py"),
 ];
 
 /// Namespace-package top levels claimed by many unrelated distributions
