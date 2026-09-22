@@ -6,6 +6,8 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+## 0.2.0 - 2026-09-22
+
 ### Added
 - **`duplication.mirrors`** names a pair of paths that intentionally copy each
   other. A clone whose only two locations are that pair is not reported.
