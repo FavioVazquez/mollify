@@ -105,7 +105,11 @@ pub fn text(rule: &str) -> Option<&'static str> {
             "A third-party module imported but absent from your declared \
             dependencies (not stdlib, not first-party). First-party test helpers \
             imported by bare leaf name (`conftest`, sibling modules on a test path) \
-            are treated as internal, not missing. Action: add it to your project metadata."
+            are treated as internal, not missing. A name passed to load_hook or \
+            load_plugin, and a `.py` filename passed to any loader, is a project \
+            file, not a distribution. An import that appears only in files under \
+            `.mollifyrc.json` `ignore` is not reported. \
+            Action: add it to your project metadata."
         }
         "misplaced-dev-dependency" => {
             "A distribution declared only in a dev/test group (PEP 735 \

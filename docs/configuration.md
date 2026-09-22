@@ -173,6 +173,11 @@ A list of path substrings. Any finding whose file path contains one is dropped.
 (Glob support is planned.) This is a post-analysis filter on findings, not a
 discovery-time exclusion — see `exclude_dirs` below for the latter.
 
+Dependency findings point at the manifest, so the file path alone would not
+drop them. An import that appears only in ignored files still counts as use of
+a declared dependency, but it does not produce `missing-dependency`,
+`transitive-dependency`, or `misplaced-dev-dependency`.
+
 ## `exclude_dirs`
 
 A list of extra directory **names** pruned from discovery entirely (the

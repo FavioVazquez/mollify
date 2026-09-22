@@ -226,9 +226,10 @@ pub fn deps_report(root: &Utf8Path) -> FindingsReport {
 /// Like [`deps_report`], honoring the CLI's `--include` override.
 pub fn deps_report_with_includes(root: &Utf8Path, includes: &[String]) -> FindingsReport {
     let graph = build_graph_with_includes(root, includes);
+    let cfg = config::load(root);
     let mut findings = Vec::new();
     run_engine("deps", Category::DependencyHygiene, &mut findings, || {
-        deps::analyze(root, &graph)
+        deps::analyze_with(root, &graph, &cfg.ignore)
     });
     run_engine(
         "unresolved-imports",
@@ -236,7 +237,7 @@ pub fn deps_report_with_includes(root: &Utf8Path, includes: &[String]) -> Findin
         &mut findings,
         || deps::unresolved(&graph),
     );
-    finalize(root, &config::load(root), &graph, findings)
+    finalize(root, &cfg, &graph, findings)
 }
 
 /// `mollify arch` — circular dependencies (boundary presets later).
@@ -599,7 +600,7 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
         commented::analyze(&graph)
     });
     run_engine("deps", Category::DependencyHygiene, &mut findings, || {
-        let mut f = deps::analyze(root, &graph);
+        let mut f = deps::analyze_with(root, &graph, &cfg.ignore);
         f.extend(deps::unresolved(&graph));
         f
     });

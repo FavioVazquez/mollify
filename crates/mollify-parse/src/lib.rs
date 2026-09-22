@@ -78,6 +78,10 @@ pub struct Import {
     /// switches (`try: import x / except: …`, `if flag: from y import z`).
     /// Removing a guarded arm changes behavior, so this is never a certain fix.
     pub in_try: bool,
+    /// True when the name is an argument to a project loader (`load_hook`,
+    /// `load_plugin`). The project resolves it against its own tree, so it
+    /// marks reachability but never names a distribution.
+    pub project_loader: bool,
     pub line: u32,
     /// Last line of the statement (inclusive) — multi-line `from x import (…)`
     /// spans several lines, and a `# noqa` on any of them counts.
@@ -831,6 +835,7 @@ fn parse_import(i: &StmtImport, li: &LineIndex, out: &mut Vec<Import>) {
                 is_star: false,
                 type_checking_only: false,
                 in_try: false,
+                project_loader: false,
                 line,
                 end_line,
             });
@@ -868,6 +873,7 @@ fn parse_import_from(i: &StmtImportFrom, li: &LineIndex) -> Import {
         is_star,
         type_checking_only: false,
         in_try: false,
+        project_loader: false,
         line,
         end_line,
     }
@@ -1993,7 +1999,7 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
             // `importlib.import_module("pkg.hooks.evaluate")` and a project
             // `load_hook("pkg.hooks.export")` name a real module. Record it as
             // a lazy import so reachability sees the plugin.
-            if let Some(module) = loaded_module_literal(&callee, c) {
+            if let Some((module, project_loader)) = loaded_module_literal(&callee, c) {
                 let line = line1(self.li, c.range().start());
                 self.m.nested_imports.push(Import {
                     module,
@@ -2004,6 +2010,7 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
                     type_checking_only: false,
                     redundant: Vec::new(),
                     in_try: false,
+                    project_loader,
                     line,
                     end_line: line,
                 });
@@ -2128,21 +2135,24 @@ fn py_path_literal(text: &str) -> Option<String> {
 }
 
 /// A string-literal module path passed to `importlib.import_module`,
-/// `__import__`, or a callable named `load_hook` / `load_plugin`.
-fn loaded_module_literal(callee: &str, call: &ruff_python_ast::ExprCall) -> Option<String> {
+/// `__import__`, or a callable named `load_hook` / `load_plugin`. The flag is
+/// true for the project loaders. A `.py` filename is a path literal, not a
+/// module.
+fn loaded_module_literal(callee: &str, call: &ruff_python_ast::ExprCall) -> Option<(String, bool)> {
     let leaf = callee.rsplit('.').next().unwrap_or(callee);
-    let loader = matches!(
-        leaf,
-        "import_module" | "__import__" | "load_hook" | "load_plugin"
-    );
-    if !loader {
-        return None;
-    }
+    let project_loader = match leaf {
+        "import_module" | "__import__" => false,
+        "load_hook" | "load_plugin" => true,
+        _ => return None,
+    };
     let arg = call.arguments.args.first()?;
     let Expr::StringLiteral(s) = arg else {
         return None;
     };
     let module = s.value.to_str().trim();
+    if module.ends_with(".py") {
+        return None;
+    }
     if module.split('.').all(|seg| {
         let mut chars = seg.chars();
         match chars.next() {
@@ -2152,7 +2162,7 @@ fn loaded_module_literal(callee: &str, call: &ruff_python_ast::ExprCall) -> Opti
             _ => false,
         }
     }) {
-        Some(module.to_string())
+        Some((module.to_string(), project_loader))
     } else {
         None
     }
