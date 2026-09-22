@@ -233,6 +233,10 @@ pub struct ParsedModule {
     /// True if the module has a top-level `if __name__ == "__main__":` guard —
     /// it's a runnable script, hence a reachability root.
     pub has_main_guard: bool,
+    /// Relative `.py` paths named by a string literal (`"hooks/export.py"`,
+    /// `"schema.py"`). A filename passed to a plugin loader is not an import,
+    /// but it is how the file is loaded. Sorted and deduped.
+    pub path_literals: Vec<String>,
     pub halstead_volume: f64,
     had_errors: bool,
 }
@@ -279,6 +283,7 @@ impl PyParser {
             name_counts: HashMap::new(),
             has_dynamic_sink: false,
             has_main_guard: false,
+            path_literals: Vec::new(),
             halstead_volume: 0.0,
             had_errors: false,
         };
@@ -366,10 +371,16 @@ impl PyParser {
         m.nested_imports = nested.out;
 
         // Calls, dynamic sinks, security candidates (whole-tree walk).
-        let mut main = MainVisitor { li: &li, m: &mut m };
+        let mut main = MainVisitor {
+            li: &li,
+            m: &mut m,
+            sanitized_idents: vec![HashSet::new()],
+        };
         for stmt in &module.body {
             main.visit_stmt(stmt);
         }
+        m.path_literals.sort();
+        m.path_literals.dedup();
 
         // Identifiers used outside import statements (for unused-import), plus
         // the set of attribute-accessed names (for unused class/enum members).
@@ -1890,11 +1901,29 @@ fn param_names(params: &Parameters) -> Vec<String> {
 struct MainVisitor<'a, 'm> {
     li: &'a LineIndex,
     m: &'m mut ParsedModule,
+    /// Names quote-sanitized (`s = s.replace("'", "''")`) in the current
+    /// function. Frame 0 is module scope; each function or class pushes one.
+    sanitized_idents: Vec<HashSet<String>>,
 }
 impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+            self.sanitized_idents.push(HashSet::new());
+            walk_stmt(self, stmt);
+            self.sanitized_idents.pop();
+            return;
+        }
         match stmt {
             Stmt::Assign(a) => {
+                if expr_is_quote_replace(&a.value) {
+                    if let Some(set) = self.sanitized_idents.last_mut() {
+                        for t in &a.targets {
+                            if let Expr::Name(n) = t {
+                                set.insert(n.id.to_string());
+                            }
+                        }
+                    }
+                }
                 if let [Expr::Name(t)] = a.targets.as_slice() {
                     security_secret(t.id.as_str(), &a.value, a.range(), self.li, self.m);
                 }
@@ -1902,6 +1931,15 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
             Stmt::AnnAssign(a) => {
                 if let (Expr::Name(t), Some(v)) = (&*a.target, &a.value) {
                     security_secret(t.id.as_str(), v, a.range(), self.li, self.m);
+                }
+            }
+            Stmt::If(i) => {
+                // `if "'" in target: raise` rejects the quote and leaves the
+                // name safe for a later identifier interpolation.
+                if block_aborts(&i.body) {
+                    if let Some(set) = self.sanitized_idents.last_mut() {
+                        note_quote_rejection(&i.test, set);
+                    }
                 }
             }
             Stmt::Try(t) => {
@@ -1936,6 +1974,11 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
         walk_stmt(self, stmt);
     }
     fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::StringLiteral(s) = expr {
+            if let Some(path) = py_path_literal(s.value.to_str()) {
+                self.m.path_literals.push(path);
+            }
+        }
         if let Expr::Call(c) = expr {
             let callee = expr_path(&c.func).unwrap_or_default();
             if !callee.is_empty() {
@@ -1947,7 +1990,32 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
                     line: line1(self.li, c.func.range().start()),
                 });
             }
-            security_call(c, &callee, line1(self.li, c.range().start()), self.m);
+            // `importlib.import_module("pkg.hooks.evaluate")` and a project
+            // `load_hook("pkg.hooks.export")` name a real module. Record it as
+            // a lazy import so reachability sees the plugin.
+            if let Some(module) = loaded_module_literal(&callee, c) {
+                let line = line1(self.li, c.range().start());
+                self.m.nested_imports.push(Import {
+                    module,
+                    relative_dots: 0,
+                    names: Vec::new(),
+                    bindings: Vec::new(),
+                    is_star: false,
+                    type_checking_only: false,
+                    redundant: Vec::new(),
+                    in_try: false,
+                    line,
+                    end_line: line,
+                });
+            }
+            let sanitized = self.sanitized_idents.last().cloned().unwrap_or_default();
+            security_call(
+                c,
+                &callee,
+                line1(self.li, c.range().start()),
+                self.m,
+                &sanitized,
+            );
         }
         walk_expr(self, expr);
     }
@@ -2018,6 +2086,146 @@ fn first_positional_is_string(c: &ruff_python_ast::ExprCall) -> bool {
     matches!(c.arguments.args.first(), Some(Expr::StringLiteral(_)))
 }
 
+/// A relative Python path named by a string literal: `hooks/export.py` or
+/// `schema.py`. Absolute paths, `..`, and `__init__.py` are not plugin files.
+fn py_path_literal(text: &str) -> Option<String> {
+    let text = text.trim().strip_prefix("./").unwrap_or(text.trim());
+    if text.is_empty()
+        || text.starts_with('/')
+        || text.contains('\\')
+        || text.contains("..")
+        || text.contains('\n')
+        || !text.ends_with(".py")
+        || text == "__init__.py"
+        || text.ends_with("/__init__.py")
+    {
+        return None;
+    }
+    let ok = text.split('/').all(|seg| {
+        !seg.is_empty()
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')
+    });
+    if ok {
+        Some(text.to_string())
+    } else {
+        None
+    }
+}
+
+/// A string-literal module path passed to `importlib.import_module`,
+/// `__import__`, or a callable named `load_hook` / `load_plugin`.
+fn loaded_module_literal(callee: &str, call: &ruff_python_ast::ExprCall) -> Option<String> {
+    let leaf = callee.rsplit('.').next().unwrap_or(callee);
+    let loader = matches!(
+        leaf,
+        "import_module" | "__import__" | "load_hook" | "load_plugin"
+    );
+    if !loader {
+        return None;
+    }
+    let arg = call.arguments.args.first()?;
+    let Expr::StringLiteral(s) = arg else {
+        return None;
+    };
+    let module = s.value.to_str().trim();
+    if module.split('.').all(|seg| {
+        let mut chars = seg.chars();
+        match chars.next() {
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+            }
+            _ => false,
+        }
+    }) {
+        Some(module.to_string())
+    } else {
+        None
+    }
+}
+
+/// `if "'" in name: raise` / `return`. The body aborts, so a later use of
+/// `name` has already rejected a quote. A check that only logs does not.
+fn block_aborts(body: &[Stmt]) -> bool {
+    !body.is_empty()
+        && body
+            .iter()
+            .all(|s| matches!(s, Stmt::Raise(_) | Stmt::Return(_)))
+}
+
+fn note_quote_rejection(test: &Expr, set: &mut HashSet<String>) {
+    match test {
+        Expr::BoolOp(b) => {
+            for v in &b.values {
+                note_quote_rejection(v, set);
+            }
+        }
+        Expr::Compare(c) => {
+            if let Some((left, op, right)) = c.as_single() {
+                if *op == ruff_python_ast::CmpOp::In && string_contains_quote(left) {
+                    if let Expr::Name(n) = right {
+                        set.insert(n.id.to_string());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `name = name.replace("'", "''")` (or any `.replace` whose first argument
+/// is a quote). The assignment target is the sanitized identifier.
+fn expr_is_quote_replace(expr: &Expr) -> bool {
+    let Expr::Call(c) = expr else {
+        return false;
+    };
+    let Expr::Attribute(attr) = c.func.as_ref() else {
+        return false;
+    };
+    if attr.attr.as_str() != "replace" {
+        return false;
+    }
+    c.arguments.args.first().is_some_and(string_contains_quote)
+}
+
+fn string_contains_quote(expr: &Expr) -> bool {
+    let Expr::StringLiteral(s) = expr else {
+        return false;
+    };
+    let text = s.value.to_str();
+    text.contains('\'') || text.contains('"')
+}
+
+/// An f-string whose holes are all names quote-sanitized in this function,
+/// and whose static SQL is identifier DDL (`ATTACH` / `COPY` / `CREATE`)
+/// rather than a value predicate (`WHERE` / `VALUES` / `SET`).
+fn is_sanitized_identifier_sql(arg: &Expr, sanitized: &HashSet<String>) -> bool {
+    let Expr::FString(f) = arg else {
+        return false;
+    };
+    let mut static_sql = String::new();
+    for el in f.value.elements() {
+        match el {
+            ruff_python_ast::InterpolatedStringElement::Literal(lit) => {
+                static_sql.push_str(&lit.value);
+            }
+            ruff_python_ast::InterpolatedStringElement::Interpolation(interp) => {
+                let Expr::Name(n) = interp.expression.as_ref() else {
+                    return false;
+                };
+                if !sanitized.contains(n.id.as_str()) {
+                    return false;
+                }
+            }
+        }
+    }
+    let upper = static_sql.to_ascii_uppercase();
+    let identifier = upper.contains("ATTACH") || upper.contains("COPY") || upper.contains("CREATE");
+    let value = upper.contains("WHERE") || upper.contains("VALUES") || upper.contains(" SET ");
+    identifier && !value
+}
+
 fn is_dynamic_string(arg: &Expr) -> bool {
     match arg {
         Expr::FString(_) => true,
@@ -2039,7 +2247,13 @@ fn args_reference_ecb(c: &ruff_python_ast::ExprCall) -> bool {
     c.arguments.args.iter().any(refs) || c.arguments.keywords.iter().any(|k| refs(&k.value))
 }
 
-fn security_call(c: &ruff_python_ast::ExprCall, f: &str, line: u32, m: &mut ParsedModule) {
+fn security_call(
+    c: &ruff_python_ast::ExprCall,
+    f: &str,
+    line: u32,
+    m: &mut ParsedModule,
+    sanitized_idents: &HashSet<String>,
+) {
     let last = f.rsplit('.').next().unwrap_or(f);
     let mut hit = |rule: &'static str, detail: String| {
         m.security_hits.push(SecurityHit { rule, line, detail });
@@ -2146,7 +2360,7 @@ fn security_call(c: &ruff_python_ast::ExprCall, f: &str, line: u32, m: &mut Pars
         "execute" | "executemany" | "executescript" | "raw" | "extra"
     ) {
         if let Some(arg) = c.arguments.args.first() {
-            if is_dynamic_string(arg) {
+            if is_dynamic_string(arg) && !is_sanitized_identifier_sql(arg, sanitized_idents) {
                 hit(
                     "sql-injection",
                     format!(

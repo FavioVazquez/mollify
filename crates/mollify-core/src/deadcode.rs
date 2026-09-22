@@ -1589,4 +1589,165 @@ def view():
         assert!(!f.iter().any(|x| x.reason.contains("`api`")));
         std::fs::remove_dir_all(&d).ok();
     }
+
+    #[test]
+    fn string_loaders_and_uvicorn_entry_points_are_reachable() {
+        // A plugin module whose only reference is a string passed to
+        // importlib.import_module or a project load_hook is reachable.
+        // A uvicorn factory named in pyproject or an entrypoint script is an
+        // entry point. A module that never appears is still unused.
+        let d = temp("dynentry");
+        write(&d, "pkg/__init__.py", "");
+        write(&d, "pkg/hooks/__init__.py", "");
+        write(&d, "pkg/hooks/evaluate.py", "def run():\n    return 1\n");
+        write(&d, "pkg/hooks/export.py", "def dump():\n    return 2\n");
+        write(&d, "pkg/hooks/orphan.py", "def nowhere():\n    return 3\n");
+        write(&d, "pkg/api.py", "def build_prod_app():\n    return None\n");
+        write(&d, "pkg/worker.py", "def serve():\n    return None\n");
+        write(
+            &d,
+            "app.py",
+            "import importlib\n\
+             \n\
+             def load_hook(name):\n\
+             \treturn importlib.import_module(name)\n\
+             \n\
+             def main():\n\
+             \timportlib.import_module(\"pkg.hooks.evaluate\")\n\
+             \tload_hook(\"pkg.hooks.export\")\n\
+             \n\
+             if __name__ == \"__main__\":\n\
+             \tmain()\n",
+        );
+        write(
+            &d,
+            "pyproject.toml",
+            "[project]\nname = \"pkg\"\n\n[tool.uvicorn]\napp = \"pkg.api:build_prod_app\"\n",
+        );
+        write(
+            &d,
+            "deploy/entrypoint.sh",
+            "#!/bin/sh\nexec uvicorn --factory pkg.worker:serve\n",
+        );
+        let report = crate::dead_code_report(&d);
+        let unused = |needle: &str| {
+            report.findings.iter().any(|f| {
+                f.rule == "unused-file"
+                    && (f.reason.contains(needle) || f.location.path.as_str().contains(needle))
+            })
+        };
+        assert!(
+            !unused("evaluate"),
+            "import_module target looks unused: {:?}",
+            report.findings
+        );
+        assert!(
+            !unused("export"),
+            "load_hook target looks unused: {:?}",
+            report.findings
+        );
+        assert!(
+            unused("orphan"),
+            "unnamed module should stay unused: {:?}",
+            report.findings
+        );
+        assert!(
+            !unused("api"),
+            "uvicorn app should be an entry: {:?}",
+            report.findings
+        );
+        assert!(
+            !unused("worker"),
+            "shell uvicorn factory should be an entry: {:?}",
+            report.findings
+        );
+        let export_unused = |name: &str| {
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == "unused-export" && f.reason.contains(name))
+        };
+        assert!(
+            !export_unused("build_prod_app"),
+            "factory should be reachable: {:?}",
+            report.findings
+        );
+        assert!(
+            !export_unused("serve"),
+            "shell factory should be reachable: {:?}",
+            report.findings
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn filename_string_marks_the_matching_module_reachable() {
+        // A plugin loader that stores relative paths (`hooks/export.py`) or
+        // passes a filename (`load_hook("export.py")`) reaches that file.
+        // An f-string (`f"{module}.py"`) does not name a file, and a module
+        // that no string names stays unused.
+        let d = temp("pathload");
+        write(&d, "pkg/__init__.py", "");
+        write(&d, "pkg/hooks/__init__.py", "");
+        write(&d, "pkg/hooks/evaluate.py", "def run():\n    return 1\n");
+        write(&d, "pkg/hooks/export.py", "def dump():\n    return 2\n");
+        write(&d, "pkg/schema.py", "FIELDS = []\n");
+        write(&d, "pkg/hooks/orphan.py", "def nowhere():\n    return 3\n");
+        write(
+            &d,
+            "pkg/hooks/dynamic_only.py",
+            "def later():\n    return 4\n",
+        );
+        write(
+            &d,
+            "app.py",
+            "_DOMAIN = [\n\
+             \t(\"models\", \"hooks/evaluate.py\"),\n\
+             \t(\"schema\", \"schema.py\"),\n\
+             ]\n\
+             \n\
+             def load_hook(self, filename):\n\
+             \treturn self.load_module(f\"hooks/{filename}\")\n\
+             \n\
+             def main():\n\
+             \tload_hook(\"export.py\")\n\
+             \tload_hook(f\"{module}.py\")\n\
+             \n\
+             if __name__ == \"__main__\":\n\
+             \tmain()\n",
+        );
+        let report = crate::dead_code_report(&d);
+        let unused = |needle: &str| {
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == "unused-file" && f.location.path.as_str().contains(needle))
+        };
+        assert!(
+            !unused("evaluate.py"),
+            "path table should reach evaluate: {:?}",
+            report.findings
+        );
+        assert!(
+            !unused("schema.py"),
+            "bare filename should reach schema: {:?}",
+            report.findings
+        );
+        assert!(
+            !unused("export.py"),
+            "load_hook filename should reach export: {:?}",
+            report.findings
+        );
+        assert!(
+            unused("orphan.py"),
+            "unnamed file should stay unused: {:?}",
+            report.findings
+        );
+        assert!(
+            unused("dynamic_only.py"),
+            "an f-string load does not name a file: {:?}",
+            report.findings
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
 }

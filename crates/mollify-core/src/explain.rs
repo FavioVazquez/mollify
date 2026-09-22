@@ -14,6 +14,11 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "unused-file" => {
             "A module that nothing reachable from an entry point imports. \
+            String arguments of importlib.import_module, load_hook, and load_plugin \
+            count as imports. A string literal that is a relative Python path \
+            (`hooks/export.py`, `schema.py`) marks the matching file as a root. \
+            An f-string does not. Console-script or uvicorn module:attr entry points \
+            count as roots. \
             Confidence: certain when there is no dynamic import sink in the project. \
             Action: delete the file, or mark its module as an entry point."
         }
@@ -232,7 +237,13 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "sql-injection" => {
             "SQL built from an f-string/concatenation/.format passed to an \
-            execute-style sink (CWE-89). Action: use parameterized queries."
+            execute-style sink (CWE-89). An f-string that only interpolates an \
+            identifier made safe in the same function — quote-escaped with \
+            str.replace, or rejected by `if \"'\" in name: raise` — inside ATTACH, \
+            COPY, or CREATE, is not flagged. Those statements cannot take a \
+            parameter for the identifier. A value predicate (WHERE, VALUES, SET) \
+            still is, and so is an identifier that was never checked. \
+            Action: use parameterized queries for values."
         }
         "request-without-timeout" => {
             "An HTTP request without a timeout can block indefinitely \

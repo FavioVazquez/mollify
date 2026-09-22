@@ -140,4 +140,46 @@ mod tests {
         assert!(f.iter().any(|x| x.rule == "hotspot"), "got {f:?}");
         std::fs::remove_dir_all(&d).ok();
     }
+
+    #[test]
+    fn hotspot_fingerprint_does_not_move_when_churn_grows() {
+        // The id is the file. An extra commit changes the churn score in the
+        // reason, and must not change the fingerprint — otherwise a baseline
+        // gate fails on unrelated edits.
+        let d = temp("stable");
+        git(&d, &["init"]);
+        git(&d, &["config", "user.email", "t@t.co"]);
+        git(&d, &["config", "user.name", "t"]);
+        let mut body = String::from("def big(x):\n");
+        for i in 0..20 {
+            body.push_str(&format!("    if x == {i}:\n        x += {i}\n"));
+        }
+        body.push_str("    return x\n");
+        for n in 0..4 {
+            std::fs::write(d.join("hot.py"), format!("{body}# rev {n}\n")).unwrap();
+            git(&d, &["add", "-A"]);
+            git(&d, &["commit", "-m", &format!("c{n}")]);
+        }
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let before = analyze(&d, &g);
+        let fp = before
+            .iter()
+            .find(|x| x.rule == "hotspot")
+            .map(|x| x.fingerprint.clone())
+            .expect("hotspot");
+        std::fs::write(d.join("hot.py"), format!("{body}# rev extra\n")).unwrap();
+        git(&d, &["add", "-A"]);
+        git(&d, &["commit", "-m", "extra"]);
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let after = analyze(&d, &g);
+        let again = after
+            .iter()
+            .find(|x| x.rule == "hotspot")
+            .expect("hotspot after extra commit");
+        assert_eq!(again.fingerprint, fp);
+        assert!(again.reason.contains("churn 5"), "reason: {}", again.reason);
+        std::fs::remove_dir_all(&d).ok();
+    }
 }

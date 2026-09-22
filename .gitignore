@@ -29,3 +29,8 @@ __pycache__/
 # outputs, and the scripts/manifests that drive them. Kept out of history;
 # corpus findings are documented in the PRs that fix them.
 /eval/
+
+# Local development skills. Process for working on this repo, not part of
+# the agent integration `mollify init` ships.
+.claude/skills/tdd/
+.claude/skills/codebase-design/

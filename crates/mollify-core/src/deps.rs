@@ -468,78 +468,207 @@ fn internal_top_levels(graph: &ModuleGraph) -> FxHashSet<String> {
     set
 }
 
-/// Module names referenced by `[project.scripts]` / `[project.gui-scripts]` /
-/// `[tool.poetry.scripts]` console-script entry points (the `pkg.mod` half of a
-/// `pkg.mod:func` target). These are reachability roots even with no in-repo
-/// caller. Returns dotted module names.
+/// Module names referenced by console scripts, `[tool.uvicorn] app`, and
+/// `uvicorn … module:attr` lines in deploy scripts. These are reachability
+/// roots even with no in-repo caller. Returns dotted module names.
 pub fn entry_point_modules(root: &Utf8Path) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(root.join("pyproject.toml")) else {
-        return Vec::new();
-    };
-    let Ok(table) = text.parse::<toml::Table>() else {
-        return Vec::new();
-    };
-    let val = toml::Value::Table(table);
     let mut modules = FxHashSet::default();
-    let mut harvest = |tbl: Option<&toml::Value>| {
-        if let Some(t) = tbl.and_then(|t| t.as_table()) {
-            for target in t.values().filter_map(|v| v.as_str()) {
-                // `pkg.mod:func` → `pkg.mod`; a bare `pkg.mod` counts too.
-                let module = target.split(':').next().unwrap_or(target).trim();
-                if !module.is_empty() {
-                    modules.insert(module.to_string());
-                }
-            }
+    for target in entry_point_targets(root) {
+        // `pkg.mod:func` → `pkg.mod`; a bare `pkg.mod` counts too.
+        let module = target.split(':').next().unwrap_or(&target).trim();
+        if !module.is_empty() {
+            modules.insert(module.to_string());
         }
-    };
-    harvest(val.get("project").and_then(|p| p.get("scripts")));
-    harvest(val.get("project").and_then(|p| p.get("gui-scripts")));
-    harvest(
-        val.get("tool")
-            .and_then(|t| t.get("poetry"))
-            .and_then(|p| p.get("scripts")),
-    );
+    }
     let mut out: Vec<String> = modules.into_iter().collect();
     out.sort();
     out
 }
 
-/// The `(module, function)` pairs named by console-script entry points
-/// (`pkg.mod:func`). The function is invoked by the installed script, so it is a
-/// reachability root and must not be reported `unused-export`.
+/// The `(module, function)` pairs named by console-script and uvicorn entry
+/// points (`pkg.mod:func`). The function is invoked outside the import graph,
+/// so it must not be reported `unused-export`.
 pub fn entry_point_symbols(root: &Utf8Path) -> Vec<(String, String)> {
-    let Ok(text) = std::fs::read_to_string(root.join("pyproject.toml")) else {
-        return Vec::new();
-    };
-    let Ok(table) = text.parse::<toml::Table>() else {
-        return Vec::new();
-    };
-    let val = toml::Value::Table(table);
     let mut pairs = FxHashSet::default();
-    let mut harvest = |tbl: Option<&toml::Value>| {
-        if let Some(t) = tbl.and_then(|t| t.as_table()) {
-            for target in t.values().filter_map(|v| v.as_str()) {
-                if let Some((module, func)) = target.split_once(':') {
-                    let module = module.trim();
-                    // `pkg.mod:obj.method` → take the first attribute as the root.
-                    let func = func.trim().split('.').next().unwrap_or("").trim();
-                    if !module.is_empty() && !func.is_empty() {
-                        pairs.insert((module.to_string(), func.to_string()));
-                    }
-                }
+    for target in entry_point_targets(root) {
+        if let Some((module, func)) = target.split_once(':') {
+            let module = module.trim();
+            // `pkg.mod:obj.method` → take the first attribute as the root.
+            let func = func.trim().split('.').next().unwrap_or("").trim();
+            if !module.is_empty() && !func.is_empty() {
+                pairs.insert((module.to_string(), func.to_string()));
             }
         }
-    };
-    harvest(val.get("project").and_then(|p| p.get("scripts")));
-    harvest(val.get("project").and_then(|p| p.get("gui-scripts")));
-    harvest(
-        val.get("tool")
-            .and_then(|t| t.get("poetry"))
-            .and_then(|p| p.get("scripts")),
-    );
+    }
     let mut out: Vec<(String, String)> = pairs.into_iter().collect();
     out.sort();
     out
+}
+
+/// `pkg.mod:func` (or bare `pkg.mod`) strings that name a process entry point.
+fn entry_point_targets(root: &Utf8Path) -> Vec<String> {
+    let mut targets = FxHashSet::default();
+    if let Ok(text) = std::fs::read_to_string(root.join("pyproject.toml")) {
+        if let Ok(table) = text.parse::<toml::Table>() {
+            let val = toml::Value::Table(table);
+            let mut harvest = |tbl: Option<&toml::Value>| {
+                if let Some(t) = tbl.and_then(|t| t.as_table()) {
+                    for target in t.values().filter_map(|v| v.as_str()) {
+                        let target = target.trim();
+                        if !target.is_empty() {
+                            targets.insert(target.to_string());
+                        }
+                    }
+                }
+            };
+            harvest(val.get("project").and_then(|p| p.get("scripts")));
+            harvest(val.get("project").and_then(|p| p.get("gui-scripts")));
+            harvest(
+                val.get("tool")
+                    .and_then(|t| t.get("poetry"))
+                    .and_then(|p| p.get("scripts")),
+            );
+            if let Some(app) = val
+                .get("tool")
+                .and_then(|t| t.get("uvicorn"))
+                .and_then(|u| u.get("app"))
+                .and_then(|a| a.as_str())
+            {
+                let app = app.trim();
+                if !app.is_empty() {
+                    targets.insert(app.to_string());
+                }
+            }
+        }
+    }
+    harvest_uvicorn_factories(root, &mut targets);
+    let mut out: Vec<String> = targets.into_iter().collect();
+    out.sort();
+    out
+}
+
+const ENTRY_SKIP_DIRS: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".mypy_cache",
+    "dist",
+    "build",
+    "site-packages",
+];
+
+/// `uvicorn --factory pkg.mod:attr` in a shell script, Dockerfile, Procfile,
+/// or Python file. The module is started by the process, not by an import.
+fn harvest_uvicorn_factories(root: &Utf8Path, targets: &mut FxHashSet<String>) {
+    let mut stack = vec![root.to_path_buf()];
+    let mut seen = 0u32;
+    while let Some(dir) = stack.pop() {
+        if seen > 4_000 {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            seen += 1;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || ENTRY_SKIP_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            let Ok(path) = camino::Utf8PathBuf::from_path_buf(entry.path()) else {
+                continue;
+            };
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let deploy = name.ends_with(".sh")
+                || name == "Dockerfile"
+                || name.starts_with("Dockerfile.")
+                || name == "Procfile"
+                || name.ends_with(".py");
+            if !deploy {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for line in text.lines() {
+                if line.contains("uvicorn") {
+                    push_factory_tokens(line, targets);
+                }
+            }
+        }
+    }
+}
+
+/// Pull `pkg.mod:func` tokens out of one line.
+fn push_factory_tokens(line: &str, targets: &mut FxHashSet<String>) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if !is_ident_start(bytes[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        while i < bytes.len() && (is_ident_cont(bytes[i]) || bytes[i] == b'.') {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b':' {
+            continue;
+        }
+        let module = &line[start..i];
+        i += 1;
+        let func_start = i;
+        while i < bytes.len() && is_ident_cont(bytes[i]) {
+            i += 1;
+        }
+        let func = &line[func_start..i];
+        if !func.is_empty() && looks_like_module(module) {
+            targets.insert(format!("{module}:{func}"));
+        }
+    }
+}
+
+fn is_ident_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_'
+}
+
+fn is_ident_cont(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// An imported name that can be a module segment (`firestore`, not `*`).
+fn is_import_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    }
+}
+
+fn looks_like_module(module: &str) -> bool {
+    !module.is_empty()
+        && module.split('.').all(|seg| {
+            let mut chars = seg.chars();
+            match chars.next() {
+                Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+                }
+                _ => false,
+            }
+        })
 }
 
 /// One distinct external import, with every distribution that plausibly
@@ -584,33 +713,53 @@ fn used_distributions(
             if top.is_empty() || internal.contains(top) || known.is_stdlib(top) {
                 continue;
             }
-            // The installed env names the exact providing dist; otherwise
-            // every plausible provider counts.
-            let (cands, namespace) = match installed.and_then(|i| i.import_to_dist.get(top)) {
-                Some(d) => (vec![d.clone()], false),
-                None => (
-                    known.dists_for_import(&imp.module),
-                    known.is_namespace_top(top),
-                ),
-            };
-            candidates.extend(cands.iter().cloned());
-            let primary = cands[0].clone();
-            by_primary
-                .entry(primary.clone())
-                .and_modify(|u| {
-                    // Merge candidate lists from different dotted imports of
-                    // the same top level.
-                    for c in &cands {
-                        if !u.candidates.contains(c) {
-                            u.candidates.push(c.clone());
-                        }
+            // `from google.cloud import firestore` names the distribution
+            // leaf. Only namespace tops get that join: `from requests import
+            // Session` is not a `requests-session` distribution.
+            let mut modules = vec![imp.module.clone()];
+            if known.is_namespace_top(top) {
+                for name in &imp.names {
+                    if is_import_name(name) {
+                        modules.push(format!("{}.{}", imp.module, name));
                     }
-                })
-                .or_insert(UsedImport {
-                    primary,
-                    candidates: cands,
-                    unresolvable_namespace: namespace,
-                });
+                }
+            }
+            for module in modules {
+                // The installed env names the exact providing dist; otherwise
+                // every plausible provider counts. Namespace tops (`google`,
+                // `azure`, …) are shared by many distributions, and dist-info
+                // records only that shared top-level — keep the dotted
+                // candidates (`google.cloud.run` → `google-cloud-run`) as well.
+                let (cands, namespace) = match installed.and_then(|i| i.import_to_dist.get(top)) {
+                    Some(d) if known.is_namespace_top(top) => {
+                        let mut c = known.dists_for_import(&module);
+                        if !c.iter().any(|x| x == d) {
+                            c.push(d.clone());
+                        }
+                        (c, true)
+                    }
+                    Some(d) => (vec![d.clone()], false),
+                    None => (known.dists_for_import(&module), known.is_namespace_top(top)),
+                };
+                candidates.extend(cands.iter().cloned());
+                let primary = cands[0].clone();
+                by_primary
+                    .entry(primary.clone())
+                    .and_modify(|u| {
+                        // Merge candidate lists from different dotted imports of
+                        // the same top level.
+                        for c in &cands {
+                            if !u.candidates.contains(c) {
+                                u.candidates.push(c.clone());
+                            }
+                        }
+                    })
+                    .or_insert(UsedImport {
+                        primary,
+                        candidates: cands,
+                        unresolvable_namespace: namespace,
+                    });
+            }
         }
     }
     let mut imports: Vec<UsedImport> = by_primary.into_values().collect();
@@ -961,6 +1110,110 @@ mod tests {
             !f.iter()
                 .any(|x| x.rule == "unused-dependency" && x.reason.contains("uvicorn")),
             "lazy import wrongly flagged unused: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn versioned_google_imports_count_as_their_declared_dist() {
+        // `google.cloud.run_v2` / `pubsub_v1` are the module surfaces of
+        // `google-cloud-run` / `google-cloud-pubsub`. A declared dist that is
+        // imported that way is used. An installed env that records only the
+        // shared `google` top-level must not hide those dotted dists.
+        let d = temp("gcloud");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\n\
+             \"google-cloud-run\", \"google-cloud-pubsub\", \"google-cloud-firestore\",\n\
+             \"google-auth\", \"google-genai\",\n]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("app.py"),
+            "import google.cloud.run_v2\n\
+             import google.cloud.pubsub_v1\n\
+             import google.cloud.firestore\n\
+             import google.auth\n\
+             import google.genai\n",
+        )
+        .unwrap();
+        let sp = d.join(".venv/lib/python3.12/site-packages/protobuf-5.0.dist-info");
+        std::fs::create_dir_all(&sp).unwrap();
+        std::fs::write(sp.join("METADATA"), "Name: protobuf\nVersion: 5.0\n").unwrap();
+        std::fs::write(sp.join("top_level.txt"), "google\n").unwrap();
+
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        for dist in [
+            "google-cloud-run",
+            "google-cloud-pubsub",
+            "google-cloud-firestore",
+            "google-auth",
+            "google-genai",
+        ] {
+            assert!(
+                !f.iter()
+                    .any(|x| x.rule == "unused-dependency" && x.reason.contains(dist)),
+                "{dist} wrongly unused: {f:?}"
+            );
+            assert!(
+                !f.iter()
+                    .any(|x| x.rule == "missing-dependency" && x.reason.contains(dist)),
+                "{dist} wrongly missing: {f:?}"
+            );
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn from_google_cloud_import_counts_as_the_declared_dist() {
+        // The live import is `from google.cloud import run`, not
+        // `import google.cloud.run_v2`. The imported name is the distribution
+        // leaf. A declared dist that is not imported stays unused.
+        let d = temp("gcloud-attr");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\n\
+             \"google-cloud-run\", \"google-cloud-pubsub\", \"google-cloud-firestore\",\n\
+             \"google-cloud-storage\", \"google-cloud-bigquery\",\n\
+             \"google-auth\", \"google-genai\", \"google-cloud-spanner\",\n]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("app.py"),
+            "from google.cloud import run, pubsub, firestore, storage, bigquery\n\
+             from google import genai\n\
+             import google.auth\n",
+        )
+        .unwrap();
+        let sp = d.join(".venv/lib/python3.12/site-packages/protobuf-5.0.dist-info");
+        std::fs::create_dir_all(&sp).unwrap();
+        std::fs::write(sp.join("METADATA"), "Name: protobuf\nVersion: 5.0\n").unwrap();
+        std::fs::write(sp.join("top_level.txt"), "google\n").unwrap();
+
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        for dist in [
+            "google-cloud-run",
+            "google-cloud-pubsub",
+            "google-cloud-firestore",
+            "google-cloud-storage",
+            "google-cloud-bigquery",
+            "google-auth",
+            "google-genai",
+        ] {
+            assert!(
+                !f.iter()
+                    .any(|x| x.rule == "unused-dependency" && x.reason.contains(dist)),
+                "{dist} wrongly unused: {f:?}"
+            );
+        }
+        assert!(
+            f.iter()
+                .any(|x| x.rule == "unused-dependency" && x.reason.contains("google-cloud-spanner")),
+            "an unimported dist should stay unused: {f:?}"
         );
         std::fs::remove_dir_all(&d).ok();
     }

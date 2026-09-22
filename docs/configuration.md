@@ -83,6 +83,19 @@ Rule ids: `unused-file`, `unused-export`, `unused-import`, `unused-variable`,
 Categories: `dead-code`, `dependency-hygiene`, `circular-dependency`,
 `complexity`, `architecture`, `duplication`, `type-health`, `security`.
 
+## `severity_paths`
+
+The same overrides, limited to findings whose path contains `path`. The
+longest match wins over the global `severity` map. Use it to turn a noisy
+category on for one directory while the rest of the tree stays `off`.
+
+```json
+"severity": { "type-health": "off" },
+"severity_paths": [
+  { "path": "pkg/service/", "type-health": "warn" }
+]
+```
+
 ## `architecture`
 
 Opt into **layer-boundary** checking. `layers` is an ordered list, top
@@ -202,6 +215,17 @@ Tune the clone detector: `min_tokens` (normalized-token window, default 40) and
 
 ```json
 "duplication": { "min_tokens": 50, "min_lines": 6 }
+```
+
+`mirrors` names pairs of path substrings that are intentional copies (provider
+modules that share a shape, for example). A clone whose only two locations
+match a pair, in either order, is not reported. A clone that also appears
+somewhere else, or that lives in a different pair of files, still is.
+
+```json
+"duplication": {
+  "mirrors": [["providers/client_a.py", "providers/client_b.py"]]
+}
 ```
 
 ## `max_cyclomatic` / `max_cognitive`

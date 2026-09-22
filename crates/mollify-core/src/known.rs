@@ -316,6 +316,14 @@ impl Known {
         for n in [2usize, 3] {
             if segs.len() >= n {
                 push(normalize_dist(&segs[..n].join("-")));
+                // `google.cloud.run_v2` is the versioned module surface of
+                // `google-cloud-run`. The `_vN` suffix is an API version, not
+                // part of the distribution name.
+                if let Some(base) = without_api_version(segs[n - 1]) {
+                    let mut parts: Vec<&str> = segs[..n - 1].to_vec();
+                    parts.push(base);
+                    push(normalize_dist(&parts.join("-")));
+                }
             }
         }
         out
@@ -332,6 +340,16 @@ impl Default for Known {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// `run_v2` / `pubsub_v1` → `run` / `pubsub`. The suffix is a generated API
+/// version (`_v` + digits), not a different distribution.
+fn without_api_version(segment: &str) -> Option<&str> {
+    let (base, ver) = segment.rsplit_once("_v")?;
+    if base.is_empty() || ver.is_empty() || !ver.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(base)
 }
 
 /// PEP 503 name normalization.
@@ -424,5 +442,28 @@ mod tests {
         // ruamel.yaml → ruamel-yaml.
         let r = k.dists_for_import("ruamel.yaml");
         assert!(r.contains(&"ruamel-yaml".to_string()));
+    }
+
+    #[test]
+    fn versioned_google_cloud_surfaces_map_to_the_unversioned_dist() {
+        let k = Known::new();
+        // `google.cloud.run_v2` is the module surface of the `google-cloud-run`
+        // distribution. The `_vN` suffix is an API version, not part of the name.
+        let run = k.dists_for_import("google.cloud.run_v2");
+        assert!(run.contains(&"google-cloud-run".to_string()), "{run:?}");
+        let pubsub = k.dists_for_import("google.cloud.pubsub_v1");
+        assert!(
+            pubsub.contains(&"google-cloud-pubsub".to_string()),
+            "{pubsub:?}"
+        );
+        let firestore = k.dists_for_import("google.cloud.firestore");
+        assert!(
+            firestore.contains(&"google-cloud-firestore".to_string()),
+            "{firestore:?}"
+        );
+        let auth = k.dists_for_import("google.auth");
+        assert!(auth.contains(&"google-auth".to_string()), "{auth:?}");
+        let genai = k.dists_for_import("google.genai");
+        assert!(genai.contains(&"google-genai".to_string()), "{genai:?}");
     }
 }

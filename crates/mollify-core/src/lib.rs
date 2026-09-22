@@ -62,6 +62,16 @@ pub fn build_graph_with_includes(root: &Utf8Path, includes: &[String]) -> Module
     // Console-script entry points (`[project.scripts]` etc.) are reachability
     // roots even with no in-repo caller.
     graph.mark_entry_points(&deps::entry_point_modules(root));
+    // A string literal that is a relative `.py` path (`"hooks/export.py"`,
+    // `"schema.py"`) names a plugin file loaded by path, not by import.
+    let mut suffixes: Vec<String> = graph
+        .modules
+        .iter()
+        .flat_map(|m| m.parsed.path_literals.iter().cloned())
+        .collect();
+    suffixes.sort();
+    suffixes.dedup();
+    graph.mark_path_entry_points(&suffixes);
     graph
 }
 
@@ -285,7 +295,12 @@ pub fn dupes_report_with_includes(root: &Utf8Path, includes: &[String]) -> Findi
     let cfg = config::load(root);
     let mut findings = Vec::new();
     run_engine("dupes", Category::Duplication, &mut findings, || {
-        dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines)
+        dupes::analyze_with(
+            &graph,
+            cfg.dup_min_tokens,
+            cfg.dup_min_lines,
+            &cfg.dup_mirrors,
+        )
     });
     finalize(root, &cfg, &graph, findings)
 }
@@ -602,7 +617,12 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
         complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive)
     });
     run_engine("dupes", Category::Duplication, &mut findings, || {
-        dupes::analyze_with(&graph, cfg.dup_min_tokens, cfg.dup_min_lines)
+        dupes::analyze_with(
+            &graph,
+            cfg.dup_min_tokens,
+            cfg.dup_min_lines,
+            &cfg.dup_mirrors,
+        )
     });
     run_engine("type-health", Category::TypeHealth, &mut findings, || {
         typehealth::analyze(&graph)

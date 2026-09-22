@@ -10,6 +10,10 @@ pub struct Config {
     /// Override severity by rule id (e.g. "unused-export") or category
     /// ("dead-code"). Rule id wins over category.
     pub severity: FxHashMap<String, Severity>,
+    /// Path-scoped severity. The longest matching path substring wins over
+    /// the global map, so one directory can enable a category the rest of
+    /// the tree leaves off.
+    pub severity_paths: Vec<PathSeverity>,
     /// Path substrings to ignore (simple contains-match; globs later).
     pub ignore: Vec<String>,
     /// Extra directory names pruned from discovery, in addition to the
@@ -22,6 +26,9 @@ pub struct Config {
     pub dup_min_tokens: usize,
     /// Minimum line span for a duplication clone (default 5).
     pub dup_min_lines: u32,
+    /// Intentional clone pairs (path substrings, either order). A two-copy
+    /// clone whose paths match a pair is not reported.
+    pub dup_mirrors: Vec<(String, String)>,
     /// Architecture preset name (informational): layered | hexagonal | feature-sliced | bulletproof.
     pub arch_preset: Option<String>,
     /// Ordered layer names, top (most dependent) → bottom. A layer may import
@@ -31,6 +38,14 @@ pub struct Config {
     pub policies: Vec<Policy>,
     /// Declarative import contracts (import-linter / tach style).
     pub contracts: Contracts,
+}
+
+/// Severity overrides that apply only to findings whose path contains `path`.
+#[derive(Debug, Clone)]
+pub struct PathSeverity {
+    pub path: String,
+    /// Same keys as [`Config::severity`]: a rule id or a category.
+    pub severity: FxHashMap<String, Severity>,
 }
 
 /// Module-boundary contracts checked against the import graph.
@@ -69,12 +84,14 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             severity: FxHashMap::default(),
+            severity_paths: Vec::new(),
             ignore: Vec::new(),
             exclude_dirs: Vec::new(),
             max_cyclomatic: crate::complexity::DEFAULT_CYCLOMATIC,
             max_cognitive: crate::complexity::DEFAULT_COGNITIVE,
             dup_min_tokens: crate::dupes::MIN_TOKENS,
             dup_min_lines: crate::dupes::MIN_LINES,
+            dup_mirrors: Vec::new(),
             arch_preset: None,
             arch_layers: Vec::new(),
             policies: Vec::new(),
@@ -97,6 +114,34 @@ pub fn load(root: &Utf8Path) -> Config {
         for (k, val) in sev {
             if let Some(s) = val.as_str().and_then(parse_severity) {
                 cfg.severity.insert(k.clone(), s);
+            }
+        }
+    }
+    if let Some(paths) = v.get("severity_paths").and_then(|s| s.as_array()) {
+        for item in paths {
+            let Some(obj) = item.as_object() else {
+                continue;
+            };
+            let Some(path) = obj.get("path").and_then(|p| p.as_str()) else {
+                continue;
+            };
+            if path.is_empty() {
+                continue;
+            }
+            let mut severity = FxHashMap::default();
+            for (k, val) in obj {
+                if k == "path" {
+                    continue;
+                }
+                if let Some(s) = val.as_str().and_then(parse_severity) {
+                    severity.insert(k.clone(), s);
+                }
+            }
+            if !severity.is_empty() {
+                cfg.severity_paths.push(PathSeverity {
+                    path: path.to_string(),
+                    severity,
+                });
             }
         }
     }
@@ -124,6 +169,18 @@ pub fn load(root: &Utf8Path) -> Config {
         }
         if let Some(n) = dup.get("min_lines").and_then(|x| x.as_u64()) {
             cfg.dup_min_lines = n as u32;
+        }
+        if let Some(pairs) = dup.get("mirrors").and_then(|m| m.as_array()) {
+            for pair in pairs {
+                let Some(arr) = pair.as_array() else {
+                    continue;
+                };
+                if arr.len() == 2 {
+                    if let (Some(a), Some(b)) = (arr[0].as_str(), arr[1].as_str()) {
+                        cfg.dup_mirrors.push((a.to_string(), b.to_string()));
+                    }
+                }
+            }
         }
     }
     if let Some(arch) = v.get("architecture").and_then(|a| a.as_object()) {
@@ -267,7 +324,9 @@ fn category_key(c: Category) -> &'static str {
 }
 
 /// Apply config to findings: drop ignored paths and `off` findings, and override
-/// severities (rule id first, then category).
+/// severities (rule id first, then category). A `severity_paths` entry wins
+/// over the global map when the finding's path contains it; the longest
+/// matching path wins when several do.
 pub fn apply(cfg: &Config, findings: &mut Vec<Finding>) {
     for f in findings.iter_mut() {
         if let Some(s) = cfg
@@ -276,6 +335,26 @@ pub fn apply(cfg: &Config, findings: &mut Vec<Finding>) {
             .or_else(|| cfg.severity.get(category_key(f.category)))
         {
             f.severity = *s;
+        }
+        let path = f.location.path.as_str();
+        let mut best: Option<(usize, Severity)> = None;
+        for scoped in &cfg.severity_paths {
+            if scoped.path.is_empty() || !path.contains(scoped.path.as_str()) {
+                continue;
+            }
+            let Some(s) = scoped
+                .severity
+                .get(&f.rule)
+                .or_else(|| scoped.severity.get(category_key(f.category)))
+            else {
+                continue;
+            };
+            if best.is_none_or(|(len, _)| scoped.path.len() > len) {
+                best = Some((scoped.path.len(), *s));
+            }
+        }
+        if let Some((_, s)) = best {
+            f.severity = s;
         }
     }
     findings.retain(|f| {
