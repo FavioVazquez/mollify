@@ -22,6 +22,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// file pins dev and docs tools). Imports of those names still count as
 /// declared.
 pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
+    analyze_with(root, graph, &[])
+}
+
+/// Like [`analyze`], honoring `.mollifyrc.json` `ignore`. An import that
+/// appears only in ignored files still counts as use, but it cannot make a
+/// distribution missing or misplaced.
+pub fn analyze_with(root: &Utf8Path, graph: &ModuleGraph, ignore: &[String]) -> Vec<Finding> {
     let mut findings = Vec::new();
     let pyproject_path = root.join("pyproject.toml");
     let mut declared = FxHashSet::default();
@@ -99,7 +106,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     let internal_tops = internal_top_levels(graph);
     // Accurate import→dist mapping + installed set from a venv, if present.
     let installed = crate::installed::discover(root);
-    let used = used_distributions(graph, &known, &internal_tops, installed.as_ref());
+    let used = used_distributions(graph, &known, &internal_tops, installed.as_ref(), ignore);
 
     let confidence = if graph.global_dynamic {
         Confidence::Uncertain
@@ -144,7 +151,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     // can see the installed env, split into `transitive-dependency` (installed
     // as someone else's sub-dep) vs `missing-dependency` (not installed).
     for u in &used.imports {
-        if u.candidates.iter().any(|c| declared.contains(c)) {
+        if !u.outside_ignore || u.candidates.iter().any(|c| declared.contains(c)) {
             continue;
         }
         if u.unresolvable_namespace {
@@ -197,7 +204,7 @@ pub fn analyze(root: &Utf8Path, graph: &ModuleGraph) -> Vec<Finding> {
     if !dev_only.is_empty() {
         let mut seen: FxHashSet<String> = FxHashSet::default();
         for m in &graph.modules {
-            if is_test_module(&m.path) {
+            if is_test_module(&m.path) || module_ignored(m, ignore) {
                 continue;
             }
             for dist in module_imported_dists(m, &known, &internal_tops, installed.as_ref()) {
@@ -696,6 +703,8 @@ struct UsedImport {
     /// Namespace top (`google`, `azure`, …) with no installed env to name the
     /// real dist — `missing-dependency` stays silent for these.
     unresolvable_namespace: bool,
+    /// Imported by at least one file outside `.mollifyrc.json` `ignore`.
+    outside_ignore: bool,
 }
 
 struct UsedDistributions {
@@ -712,15 +721,17 @@ fn used_distributions(
     known: &Known,
     internal: &FxHashSet<String>,
     installed: Option<&crate::installed::Installed>,
+    ignore: &[String],
 ) -> UsedDistributions {
     let mut candidates = FxHashSet::default();
     let mut by_primary: FxHashMap<String, UsedImport> = FxHashMap::default();
     for m in &graph.modules {
+        let outside_ignore = !module_ignored(m, ignore);
         // Lazy/deferred imports inside functions count as usage too (a dep
         // imported only inside `main()` is not unused).
         for imp in m.parsed.imports.iter().chain(&m.parsed.nested_imports) {
-            if imp.relative_dots > 0 {
-                continue; // relative = internal
+            if imp.relative_dots > 0 || imp.project_loader {
+                continue; // relative or project-loader name = internal
             }
             let Some(top) = imp.module.split('.').next() else {
                 continue;
@@ -761,6 +772,7 @@ fn used_distributions(
                 by_primary
                     .entry(primary.clone())
                     .and_modify(|u| {
+                        u.outside_ignore |= outside_ignore;
                         // Merge candidate lists from different dotted imports of
                         // the same top level.
                         for c in &cands {
@@ -773,6 +785,7 @@ fn used_distributions(
                         primary,
                         candidates: cands,
                         unresolvable_namespace: namespace,
+                        outside_ignore,
                     });
             }
         }
@@ -894,7 +907,7 @@ fn module_imported_dists(
 ) -> FxHashSet<String> {
     let mut set = FxHashSet::default();
     for imp in m.parsed.imports.iter().chain(&m.parsed.nested_imports) {
-        if imp.relative_dots > 0 {
+        if imp.relative_dots > 0 || imp.project_loader {
             continue;
         }
         let Some(top) = imp.module.split('.').next() else {
@@ -913,6 +926,10 @@ fn module_imported_dists(
         }
     }
     set
+}
+
+fn module_ignored(m: &mollify_graph::ModuleInfo, ignore: &[String]) -> bool {
+    !ignore.is_empty() && crate::config::is_ignored(ignore, &m.rel.as_str().replace('\\', "/"))
 }
 
 /// True if a module path is test/dev code (so importing dev deps there is fine).
@@ -1122,6 +1139,79 @@ mod tests {
         assert!(
             !f.iter().any(|x| x.rule == "missing-dependency"),
             "markdown_it wrongly missing: {f:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn project_loader_names_are_not_distributions() {
+        let d = temp("loader");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("app.py"),
+            "import importlib\n\
+             from loader import load_hook, load_plugin\n\
+             load_hook(\"export.py\")\n\
+             load_hook(\"does_not_exist.py\")\n\
+             load_plugin(\"postprocess\")\n\
+             importlib.import_module(\"schema.py\")\n\
+             importlib.import_module(\"yaml\")\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("loader.py"),
+            "def load_hook(f): ...\ndef load_plugin(n): ...\n",
+        )
+        .unwrap();
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&d, &g);
+        let missing: Vec<&str> = f
+            .iter()
+            .filter(|x| x.rule == "missing-dependency")
+            .map(|x| x.reason.as_str())
+            .collect();
+        assert_eq!(
+            missing,
+            vec!["`pyyaml` is imported but not declared in the project manifest"],
+            "loader names reported as distributions"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn import_only_under_an_ignored_path_is_not_missing() {
+        let d = temp("ignored");
+        std::fs::write(
+            d.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\"requests\"]\n",
+        )
+        .unwrap();
+        std::fs::write(d.join(".mollifyrc.json"), r#"{"ignore":["tests/"]}"#).unwrap();
+        std::fs::write(d.join("app.py"), "import httpx\n").unwrap();
+        std::fs::create_dir_all(d.join("tests")).unwrap();
+        std::fs::write(
+            d.join("tests/test_app.py"),
+            "import requests\nimport responses\n",
+        )
+        .unwrap();
+        let report = crate::deps_report(&d);
+        let rules: Vec<(&str, &str)> = report
+            .findings
+            .iter()
+            .map(|f| (f.rule.as_str(), f.reason.as_str()))
+            .collect();
+        assert_eq!(
+            rules,
+            vec![(
+                "missing-dependency",
+                "`httpx` is imported but not declared in the project manifest"
+            )],
+            "ignored-path imports leaked into the manifest findings"
         );
         std::fs::remove_dir_all(&d).ok();
     }

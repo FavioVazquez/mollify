@@ -358,12 +358,13 @@ pub fn apply(cfg: &Config, findings: &mut Vec<Finding>) {
         }
     }
     findings.retain(|f| {
-        if f.severity == Severity::Off {
-            return false;
-        }
-        let p = f.location.path.as_str();
-        !cfg.ignore.iter().any(|ig| p.contains(ig.as_str()))
+        f.severity != Severity::Off && !is_ignored(&cfg.ignore, f.location.path.as_str())
     });
+}
+
+/// True if a root-relative, `/`-separated path contains an `ignore` entry.
+pub fn is_ignored(ignore: &[String], path: &str) -> bool {
+    ignore.iter().any(|ig| path.contains(ig.as_str()))
 }
 
 #[cfg(test)]

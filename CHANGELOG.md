@@ -6,6 +6,18 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+## 0.2.2 - 2026-09-22
+
+### Fixed
+- A name passed to `load_hook` or `load_plugin`, and a `.py` filename passed
+  to any loader (`load_hook("export.py")`), is not `missing-dependency`. The
+  loader still makes the named module reachable, and the path literal still
+  marks the file as a root. `importlib.import_module("yaml")` is still an
+  import of `pyyaml`.
+- An import that appears only in files under `.mollifyrc.json` `ignore` does
+  not produce `missing-dependency`, `transitive-dependency`, or
+  `misplaced-dev-dependency`. It still counts as use of a declared dependency.
+
 ## 0.2.1 - 2026-09-22
 
 ### Fixed
