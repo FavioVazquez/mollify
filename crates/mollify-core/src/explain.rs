@@ -114,11 +114,14 @@ pub fn text(rule: &str) -> Option<&'static str> {
             Action: move it to your runtime dependencies."
         }
         "unresolved-import" => {
-            "An import that looks internal — relative (`from . import x`) or under \
-            a first-party top-level package — but resolves to no module in the \
-            project. Confidence: likely — a relative import may still resolve to \
-            an in-tree C extension or a build-generated module the `.py` walk \
-            can't see. Action: fix the module path or remove the broken import."
+            "An import that looks internal — relative (`from . import x`) or \
+            extending a module this project contains — but resolves to no module \
+            in the tree. Sharing a namespace top (`google`, `azure`) with a local \
+            package does not make every other distribution on that namespace \
+            first-party. A same-stem `.pyx`, `.pxd`, `.pxi`, `.c`, `.cpp`, or \
+            `.pyi` beside the missing `.py` is the module. Confidence: likely — \
+            a relative import may still resolve to a build-generated module the \
+            walk can't see. Action: fix the module path or remove the broken import."
         }
         "duplicate-export" => {
             "An `__init__.py` re-exports the same name from two different \
@@ -221,7 +224,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
         }
         "hardcoded-secret" => {
             "A literal that looks like a credential assigned to a \
-            secret-named variable. Action: load it from the environment or a secret manager."
+            secret-named variable. A literal equal to the name itself \
+            (`apiKey = \"apiKey\"`), a URL, or a sentence is not a secret. \
+            Action: load a real credential from the environment or a secret manager."
         }
         "weak-hash" => {
             "Use of a broken hash (md5/sha1) (CWE-327). Action: use sha256+ \
@@ -236,8 +241,9 @@ pub fn text(rule: &str) -> Option<&'static str> {
             the `secrets` module for tokens/keys/nonces."
         }
         "sql-injection" => {
-            "SQL built from an f-string/concatenation/.format passed to an \
-            execute-style sink (CWE-89). An f-string that only interpolates an \
+            "SQL built from an f-string/concatenation/.format passed to \
+            `cursor.execute` / `connection.execute` (or `raw` / `extra`) (CWE-89). \
+            `tester.execute` on a CLI harness is not a database call. An f-string that only interpolates an \
             identifier made safe in the same function — quote-escaped with \
             str.replace, or rejected by `if \"'\" in name: raise` — inside ATTACH, \
             COPY, or CREATE, is not flagged. Those statements cannot take a \

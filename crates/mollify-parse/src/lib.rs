@@ -2047,6 +2047,19 @@ fn security_secret(
     }
     if let Expr::StringLiteral(s) = value {
         let val = s.value.to_str();
+        // `apiKey = "apiKey"` is an enum/schema token, not a credential.
+        if val.eq_ignore_ascii_case(name) {
+            return;
+        }
+        // A URL, or a sentence, is not a token. `_TOKEN_URL = "https://..."`
+        // and an ImportError message about the secretstorage package both
+        // contain a secret word in the name only.
+        if val.starts_with("http://")
+            || val.starts_with("https://")
+            || val.contains(char::is_whitespace)
+        {
+            return;
+        }
         if val.len() >= 4 && !val.contains("${") && !val.eq_ignore_ascii_case("changeme") {
             m.security_hits.push(SecurityHit {
                 rule: "hardcoded-secret",
@@ -2226,6 +2239,25 @@ fn is_sanitized_identifier_sql(arg: &Expr, sanitized: &HashSet<String>) -> bool 
     identifier && !value
 }
 
+/// `cursor.execute` / `con.execute`, not `tester.execute`. The receiver's last
+/// segment is a database handle: `cursor`, `cur`, `connection`, `conn`, `con`,
+/// `db`, `session`, or `engine`, or a name ending in those longer words.
+fn db_handle_call(path: &str) -> bool {
+    let Some((recv, _)) = path.rsplit_once('.') else {
+        return false;
+    };
+    let name = recv.rsplit('.').next().unwrap_or(recv).to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "cursor" | "cur" | "connection" | "conn" | "con" | "db" | "session" | "engine"
+    ) || name.ends_with("cursor")
+        || name.ends_with("connection")
+        || name.ends_with("_conn")
+        || name.ends_with("_db")
+        || name.ends_with("session")
+        || name.ends_with("engine")
+}
+
 fn is_dynamic_string(arg: &Expr) -> bool {
     match arg {
         Expr::FString(_) => true,
@@ -2355,10 +2387,9 @@ fn security_call(
             format!("`{f}` is not cryptographically secure; use the `secrets` module for tokens"),
         );
     }
-    if matches!(
-        last,
-        "execute" | "executemany" | "executescript" | "raw" | "extra"
-    ) {
+    let sql_method = matches!(last, "raw" | "extra")
+        || (matches!(last, "execute" | "executemany" | "executescript") && db_handle_call(f));
+    if sql_method {
         if let Some(arg) = c.arguments.args.first() {
             if is_dynamic_string(arg) && !is_sanitized_identifier_sql(arg, sanitized_idents) {
                 hit(

@@ -46,6 +46,17 @@ See the [README](../README.md#install) for the full matrix and the
 | `mollify init` | Write a starter `.mollifyrc.json`, or scaffold agent integrations with `--agent <name>` / `--all`. |
 | `mollify mcp` | Start the MCP server for coding agents (stdio). |
 
+`mollify deps` reads runtime dependencies from `pyproject.toml`. A root
+`requirements*.txt` is that manifest when pyproject declares no runtime
+dependencies. When pyproject does, names that appear only in
+`requirements*.txt` are not `unused-dependency` — that file is the dev and
+docs pin list — but an import of one of those names still counts as declared.
+An import that merely shares a namespace top with a local package
+(`google.api_core` next to `google.cloud.storage`) is not an unresolved
+first-party import. Neither is an import whose module file is a same-stem
+`.pyx`, `.pxd`, `.pxi`, `.c`, `.cpp`, or `.pyi`. A package named `env` or
+`venv` is scanned when it has an `__init__.py`.
+
 ### Regression baselines (CI gate without git)
 
 `--save-baseline <f>` snapshots the current finding fingerprints; later runs use

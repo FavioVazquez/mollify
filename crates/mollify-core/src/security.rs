@@ -137,6 +137,70 @@ mod tests {
     }
 
     #[test]
+    fn identifier_equal_to_its_literal_is_not_a_secret() {
+        // OpenAPI enums assign the member name to itself (`apiKey = "apiKey"`).
+        // That is a schema token, not a credential. A different literal still is.
+        let d = temp("seceq");
+        write(
+            &d,
+            "models.py",
+            "class SecuritySchemeType:\n    apiKey = \"apiKey\"\npassword = \"s3cret-value\"\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g, &[]);
+        let secrets: Vec<_> = f
+            .iter()
+            .filter(|x| x.rule == "hardcoded-secret")
+            .map(|x| x.reason.clone())
+            .collect();
+        assert!(
+            !secrets.iter().any(|r| r.contains("apiKey")),
+            "enum token flagged as a secret"
+        );
+        assert!(
+            secrets.iter().any(|r| r.contains("password")),
+            "real secret not flagged"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn url_and_sentence_are_not_hardcoded_secrets() {
+        // A URL whose name contains "token", and an error sentence whose name
+        // contains "secret", are not credentials. A token-like literal still is.
+        let d = temp("securl");
+        write(
+            &d,
+            "models.py",
+            "_TOKEN_URL = \"https://sso.example/token\"\n_SECRETSTORAGE_UNAVAILABLE_REASON = \"as the secretstorage module is not installed\"\npassword = \"s3cret-value\"\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g, &[]);
+        let secrets: Vec<_> = f
+            .iter()
+            .filter(|x| x.rule == "hardcoded-secret")
+            .map(|x| x.reason.clone())
+            .collect();
+        assert!(
+            !secrets.iter().any(|r| r.contains("TOKEN_URL")),
+            "URL flagged as a secret"
+        );
+        assert!(
+            !secrets
+                .iter()
+                .any(|r| r.contains("SECRETSTORAGE_UNAVAILABLE_REASON")),
+            "error sentence flagged as a secret"
+        );
+        assert!(
+            secrets.iter().any(|r| r.contains("password")),
+            "real secret not flagged"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
     fn surfaces_candidates() {
         let d = temp("sec");
         write(
@@ -204,6 +268,31 @@ mod tests {
             .expect("weak-cipher should be flagged");
         assert_eq!(wc.category, Category::Security);
         assert!(wc.reason.contains("CWE-327"), "got {}", wc.reason);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn cli_tester_execute_is_not_sql_injection() {
+        // `tester.execute(f"cache clear {name}")` is a CLI harness. A database
+        // handle's `cursor.execute` of a dynamic string still is sql-injection.
+        let d = temp("sqlexec");
+        write(
+            &d,
+            "app.py",
+            "def test_clear(tester, name):\n    tester.execute(f\"cache clear {name}\")\n\ndef query(cursor, name):\n    cursor.execute(f\"select {name}\")\n",
+        );
+        let files = discover_python_files(&d);
+        let g = ModuleGraph::build(&d, &files);
+        let f = analyze(&g, &[]);
+        let sql: Vec<_> = f.iter().filter(|x| x.rule == "sql-injection").collect();
+        assert!(
+            !sql.iter().any(|x| x.location.line == 2),
+            "CLI tester flagged as SQL: {sql:?}"
+        );
+        assert!(
+            sql.iter().any(|x| x.location.line == 5),
+            "cursor.execute not flagged: {sql:?}"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 
