@@ -134,11 +134,11 @@ pub fn apply_suppressions(graph: &ModuleGraph, findings: &mut Vec<Finding>) {
         return;
     }
     findings.retain(|f| {
-        if let Some(rules) = sup.get(&(f.location.path.as_str(), f.location.line)) {
-            !rules.iter().any(|r| *r == "*" || *r == f.rule)
-        } else {
-            true
-        }
+        let end = f.location.end_line.unwrap_or(f.location.line);
+        !(f.location.line..=end).any(|ln| {
+            sup.get(&(f.location.path.as_str(), ln))
+                .is_some_and(|rules| rules.iter().any(|r| *r == "*" || *r == f.rule))
+        })
     });
 }
 
@@ -296,11 +296,12 @@ pub fn dupes_report_with_includes(root: &Utf8Path, includes: &[String]) -> Findi
     let cfg = config::load(root);
     let mut findings = Vec::new();
     run_engine("dupes", Category::Duplication, &mut findings, || {
-        dupes::analyze_with(
+        dupes::analyze_with_ignore(
             &graph,
             cfg.dup_min_tokens,
             cfg.dup_min_lines,
             &cfg.dup_mirrors,
+            &cfg.ignore,
         )
     });
     finalize(root, &cfg, &graph, findings)
@@ -381,25 +382,35 @@ pub struct Inspection {
 
 /// Returns true if `path` matches the user's `file` argument: exact, or as a
 /// trailing path fragment anchored at a path-separator boundary (`b.py`
-/// matches `pkg/b.py` but never `lib.py`).
+/// matches `pkg/b.py` but never `lib.py`). Normalizes leading `./` and `\`
+/// separators so `./billing/app.py` matches `billing/app.py`.
 fn path_matches(path: &str, file: &str) -> bool {
-    path == file || path.ends_with(&format!("/{file}"))
+    let p = path.trim_start_matches("./").replace('\\', "/");
+    let f = file.trim_start_matches("./").replace('\\', "/");
+    p == f || p.ends_with(&format!("/{f}"))
 }
 
 /// Build the evidence bundle for a single file.
 pub fn inspect(root: &Utf8Path, file: &str) -> Inspection {
-    let report = audit_report(root);
-    let findings: Vec<Finding> = report
-        .findings
-        .into_iter()
-        .filter(|f| path_matches(f.location.path.as_str(), file))
-        .collect();
     let graph = build_graph(root);
-    let module = graph
+    let report = audit_report_from_graph(root, &graph);
+    let matched_mod = graph
         .modules
         .iter()
-        .find(|m| path_matches(m.path.as_str(), file))
-        .map(|m| m.dotted.clone());
+        .find(|m| path_matches(m.rel.as_str(), file) || path_matches(m.path.as_str(), file));
+    let findings: Vec<Finding> = match matched_mod {
+        Some(m) => report
+            .findings
+            .into_iter()
+            .filter(|f| f.location.path == m.rel)
+            .collect(),
+        None => report
+            .findings
+            .into_iter()
+            .filter(|f| path_matches(f.location.path.as_str(), file))
+            .collect(),
+    };
+    let module = matched_mod.map(|m| m.dotted.clone());
     let trace = module.as_deref().and_then(|d| trace::module(&graph, d));
     Inspection {
         file: file.to_string(),
@@ -418,10 +429,21 @@ pub fn inspect(root: &Utf8Path, file: &str) -> Inspection {
 
 /// File-local diagnostics from an in-memory buffer (no disk, no graph) — the
 /// live LSP path for `textDocument/didChange`. Covers the intra-file rules
-/// (security, unused variables/parameters, complexity, commented-out code);
+/// (security, unused imports/variables/parameters, unreachable code,
+/// untyped functions, private-type leaks, complexity, commented-out code);
 /// cross-file rules (dead exports, deps, architecture) are produced by the full
 /// audit on save. Returns sorted findings, honoring inline suppressions.
 pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
+    analyze_text_with_root(None, path, source)
+}
+
+/// Like [`analyze_text`], honoring the workspace `.mollifyrc.json` at `root`
+/// (custom complexity thresholds, severity overrides, and ignored paths).
+pub fn analyze_text_with_root(
+    root: Option<&Utf8Path>,
+    path: &Utf8Path,
+    source: &str,
+) -> Vec<Finding> {
     let mut parser = match mollify_parse::PyParser::new() {
         Ok(p) => p,
         Err(_) => return Vec::new(),
@@ -429,12 +451,115 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
     let Ok(parsed) = parser.parse(path, source) else {
         return Vec::new();
     };
+    let cfg = root.map(config::load).unwrap_or_default();
+    let rel_path = root
+        .and_then(|r| path.strip_prefix(r).ok())
+        .filter(|rel| !rel.as_str().is_empty())
+        .unwrap_or(path);
     let mut findings = Vec::new();
     findings.extend(security::analyze_parsed(path, &parsed));
-    findings.extend(commented::analyze_source(path, source));
-    // Unused local variables / parameters. (Live-buffer path: the display
-    // path doubles as the fingerprint identity; occurrence keeps the scheme
-    // aligned with the batch engines.)
+    findings.extend(commented::analyze_parsed_comments(
+        path,
+        rel_path,
+        &parsed.comments,
+    ));
+
+    // Module-local unused imports (non-`__init__.py`).
+    if path.file_name() != Some("__init__.py") {
+        let local: rustc_hash::FxHashSet<&str> =
+            parsed.local_uses.iter().map(|s| s.as_str()).collect();
+        let dunder_all = parsed.dunder_all.as_ref();
+        let mut occ = fingerprint::Occurrences::default();
+        let mut name_occ = fingerprint::Occurrences::default();
+        for imp in &parsed.imports {
+            let bindings_key = imp.bindings.join(",");
+            let stmt_occurrence = occ.next(&bindings_key);
+            let name_occurrences: Vec<String> = imp
+                .bindings
+                .iter()
+                .map(|b| name_occ.next(b.as_str()))
+                .collect();
+            if imp.is_star || imp.bindings.is_empty() || imp.type_checking_only {
+                continue;
+            }
+            if imp.module == "__future__" {
+                continue;
+            }
+            let is_used = |i: usize, b: &String| {
+                local.contains(b.as_str())
+                    || dunder_all.is_some_and(|all| all.contains(b))
+                    || imp.redundant.get(i).copied().unwrap_or(false)
+            };
+            let unused: Vec<&String> = imp
+                .bindings
+                .iter()
+                .enumerate()
+                .filter(|(i, b)| !is_used(*i, b))
+                .map(|(_, b)| b)
+                .collect();
+            if unused.is_empty() {
+                continue;
+            }
+            let rule = "unused-import";
+            if unused.len() == imp.bindings.len() {
+                let what = format!("`{}`", imp.bindings.join("`, `"));
+                let confidence =
+                    if imp.in_try || parsed.has_dynamic_sink || parsed.dunder_all_dynamic {
+                        mollify_types::Confidence::Uncertain
+                    } else {
+                        mollify_types::Confidence::Certain
+                    };
+                findings.push(Finding {
+                    fingerprint: fingerprint::fingerprint(
+                        rule,
+                        &[rel_path.as_str(), &bindings_key, &stmt_occurrence],
+                    ),
+                    rule: rule.into(),
+                    category: Category::DeadCode,
+                    severity: Severity::Warn,
+                    confidence,
+                    attribution: None,
+                    reason: format!("import {what} is never used in this module"),
+                    location: mollify_types::Location {
+                        path: path.to_owned(),
+                        line: imp.line,
+                        column: 0,
+                        end_line: (imp.end_line > imp.line).then_some(imp.end_line),
+                    },
+                    actions: vec![],
+                });
+            } else {
+                for (i, name) in imp.bindings.iter().enumerate() {
+                    if is_used(i, name) {
+                        continue;
+                    }
+                    findings.push(Finding {
+                        fingerprint: fingerprint::fingerprint(
+                            rule,
+                            &[rel_path.as_str(), name, &name_occurrences[i]],
+                        ),
+                        rule: rule.into(),
+                        category: Category::DeadCode,
+                        severity: Severity::Warn,
+                        confidence: mollify_types::Confidence::Likely,
+                        attribution: None,
+                        reason: format!(
+                            "imported name `{name}` is never used (other names on this import are)"
+                        ),
+                        location: mollify_types::Location {
+                            path: path.to_owned(),
+                            line: imp.line,
+                            column: 0,
+                            end_line: None,
+                        },
+                        actions: vec![],
+                    });
+                }
+            }
+        }
+    }
+
+    // Unused local variables / parameters.
     let mut occ = fingerprint::Occurrences::default();
     for s in &parsed.scope_findings {
         let (rule, kind, confidence) = if s.is_param {
@@ -453,7 +578,7 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
         findings.push(Finding {
             fingerprint: fingerprint::fingerprint(
                 rule,
-                &[path.as_str(), &s.name, &occ.next(&s.name)],
+                &[rel_path.as_str(), &s.name, &occ.next(&s.name)],
             ),
             rule: rule.into(),
             category: Category::DeadCode,
@@ -470,17 +595,41 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
             actions: vec![],
         });
     }
-    // High complexity over default thresholds.
+
+    // Unreachable code.
+    let mut ur_occ = fingerprint::Occurrences::default();
+    for u in &parsed.unreachable {
+        findings.push(Finding {
+            fingerprint: fingerprint::fingerprint(
+                "unreachable-code",
+                &[rel_path.as_str(), u.after, &ur_occ.next(u.after)],
+            ),
+            rule: "unreachable-code".into(),
+            category: Category::DeadCode,
+            severity: Severity::Warn,
+            confidence: mollify_types::Confidence::Certain,
+            attribution: None,
+            reason: format!("code after `{}` can never execute", u.after),
+            location: mollify_types::Location {
+                path: path.to_owned(),
+                line: u.line,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![],
+        });
+    }
+
+    // High complexity and untyped public functions.
     let mut fn_occ = fingerprint::Occurrences::default();
+    let mut ut_occ = fingerprint::Occurrences::default();
     for f in &parsed.functions {
         let occurrence = fn_occ.next(&f.name);
-        if f.cyclomatic > complexity::DEFAULT_CYCLOMATIC
-            || f.cognitive > complexity::DEFAULT_COGNITIVE
-        {
+        if f.cyclomatic > cfg.max_cyclomatic || f.cognitive > cfg.max_cognitive {
             findings.push(Finding {
                 fingerprint: fingerprint::fingerprint(
                     "high-complexity",
-                    &[path.as_str(), &f.name, &occurrence],
+                    &[rel_path.as_str(), &f.name, &occurrence],
                 ),
                 rule: "high-complexity".into(),
                 category: Category::Complexity,
@@ -488,8 +637,8 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
                 confidence: mollify_types::Confidence::Certain,
                 attribution: None,
                 reason: format!(
-                    "function `{}` is complex (cyclomatic {}, cognitive {})",
-                    f.name, f.cyclomatic, f.cognitive
+                    "function `{}` is complex (cyclomatic {}, cognitive {}); thresholds {}/{}",
+                    f.name, f.cyclomatic, f.cognitive, cfg.max_cyclomatic, cfg.max_cognitive
                 ),
                 location: mollify_types::Location {
                     path: path.to_owned(),
@@ -500,17 +649,95 @@ pub fn analyze_text(path: &Utf8Path, source: &str) -> Vec<Finding> {
                 actions: vec![],
             });
         }
+        let ut_occurrence = ut_occ.next(&f.name);
+        if !f.name.starts_with('_')
+            && f.params_total > 0
+            && f.params_annotated == 0
+            && !f.return_annotated
+        {
+            findings.push(Finding {
+                fingerprint: fingerprint::fingerprint(
+                    "untyped-function",
+                    &[rel_path.as_str(), &f.name, &ut_occurrence],
+                ),
+                rule: "untyped-function".into(),
+                category: Category::TypeHealth,
+                severity: Severity::Warn,
+                confidence: mollify_types::Confidence::Likely,
+                attribution: None,
+                reason: format!(
+                    "public function `{}` has no type annotations (0/{} params typed, no return type)",
+                    f.name, f.params_total
+                ),
+                location: mollify_types::Location {
+                    path: path.to_owned(),
+                    line: f.line,
+                    column: 0,
+                    end_line: None,
+                },
+                actions: vec![],
+            });
+        }
     }
+
+    // Private-type leaks.
+    let mut leak_occ = fingerprint::Occurrences::default();
+    for leak in &parsed.type_leaks {
+        let occ_key = format!("{}\u{1f}{}", leak.function, leak.type_name);
+        let occurrence = leak_occ.next(&occ_key);
+        let position = if leak.is_return {
+            "return type"
+        } else {
+            "a parameter"
+        };
+        findings.push(Finding {
+            fingerprint: fingerprint::fingerprint(
+                "private-type-leak",
+                &[
+                    rel_path.as_str(),
+                    &leak.function,
+                    &leak.type_name,
+                    &occurrence,
+                ],
+            ),
+            rule: "private-type-leak".into(),
+            category: Category::TypeHealth,
+            severity: Severity::Warn,
+            confidence: if parsed.has_dynamic_sink {
+                mollify_types::Confidence::Uncertain
+            } else {
+                mollify_types::Confidence::Likely
+            },
+            attribution: None,
+            reason: format!(
+                "public `{}` exposes private type `{}` in {position}",
+                leak.function, leak.type_name
+            ),
+            location: mollify_types::Location {
+                path: path.to_owned(),
+                line: leak.line,
+                column: 0,
+                end_line: None,
+            },
+            actions: vec![],
+        });
+    }
+
     // Honor inline `# mollify: ignore[...]` on the buffer's own lines.
     let mut sup: rustc_hash::FxHashMap<u32, Vec<&str>> = rustc_hash::FxHashMap::default();
     for (line, rule) in &parsed.ignores {
         sup.entry(*line).or_default().push(rule.as_str());
     }
     findings.retain(|f| {
-        sup.get(&f.location.line)
-            .map(|rules| !rules.iter().any(|r| *r == "*" || *r == f.rule))
-            .unwrap_or(true)
+        let end = f.location.end_line.unwrap_or(f.location.line);
+        !(f.location.line..=end).any(|ln| {
+            sup.get(&ln)
+                .is_some_and(|rules| rules.iter().any(|r| *r == "*" || *r == f.rule))
+        })
     });
+    if root.is_some() {
+        config::apply(&cfg, &mut findings);
+    }
     sort_findings(&mut findings);
     findings
 }
@@ -584,61 +811,66 @@ pub fn audit_report(root: &Utf8Path) -> AuditReport {
 /// Like [`audit_report`], honoring the CLI's `--include` override.
 pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> AuditReport {
     let graph = build_graph_with_includes(root, includes);
+    audit_report_from_graph(root, &graph)
+}
+
+fn audit_report_from_graph(root: &Utf8Path, graph: &ModuleGraph) -> AuditReport {
     let cfg = config::load(root);
     let mut findings: Vec<Finding> = Vec::new();
     run_engine("dead-code", Category::DeadCode, &mut findings, || {
         deadcode::analyze_with(
-            &graph,
+            graph,
             &paths::pytest_testpaths(root),
             &deps::entry_point_symbols(root),
         )
     });
     run_engine("members", Category::DeadCode, &mut findings, || {
-        members::analyze(&graph)
+        members::analyze(graph)
     });
     run_engine("commented-code", Category::DeadCode, &mut findings, || {
-        commented::analyze(&graph)
+        commented::analyze(graph)
     });
     run_engine("deps", Category::DependencyHygiene, &mut findings, || {
-        let mut f = deps::analyze_with(root, &graph, &cfg.ignore);
-        f.extend(deps::unresolved(&graph));
+        let mut f = deps::analyze_with(root, graph, &cfg.ignore);
+        f.extend(deps::unresolved(graph));
         f
     });
     run_engine("arch", Category::Architecture, &mut findings, || {
-        let mut f = arch::analyze(&graph);
-        f.extend(arch::analyze_layers(&graph, &cfg.arch_layers));
-        f.extend(arch::analyze_contracts(&graph, &cfg.contracts));
-        f.extend(arch::private_imports(&graph));
+        let mut f = arch::analyze(graph);
+        f.extend(arch::analyze_layers(graph, &cfg.arch_layers));
+        f.extend(arch::analyze_contracts(graph, &cfg.contracts));
+        f.extend(arch::private_imports(graph));
         f
     });
     run_engine("policy", Category::Architecture, &mut findings, || {
-        policy::analyze(&graph, &cfg.policies)
+        policy::analyze(graph, &cfg.policies)
     });
     run_engine("complexity", Category::Complexity, &mut findings, || {
-        complexity::analyze_with(&graph, cfg.max_cyclomatic, cfg.max_cognitive)
+        complexity::analyze_with(graph, cfg.max_cyclomatic, cfg.max_cognitive)
     });
     run_engine("dupes", Category::Duplication, &mut findings, || {
-        dupes::analyze_with(
-            &graph,
+        dupes::analyze_with_ignore(
+            graph,
             cfg.dup_min_tokens,
             cfg.dup_min_lines,
             &cfg.dup_mirrors,
+            &cfg.ignore,
         )
     });
     run_engine("type-health", Category::TypeHealth, &mut findings, || {
-        typehealth::analyze(&graph)
+        typehealth::analyze(graph)
     });
     run_engine("api-hygiene", Category::TypeHealth, &mut findings, || {
-        apihygiene::analyze(&graph)
+        apihygiene::analyze(graph)
     });
     run_engine("security", Category::Security, &mut findings, || {
-        security::analyze(&graph, &paths::pytest_testpaths(root))
+        security::analyze(graph, &paths::pytest_testpaths(root))
     });
     run_engine("hotspots", Category::Complexity, &mut findings, || {
-        hotspots::analyze(root, &graph)
+        hotspots::analyze(root, graph)
     });
     run_engine("cohesion", Category::Complexity, &mut findings, || {
-        cohesion::analyze(&graph)
+        cohesion::analyze(graph)
     });
     // Supply-chain runs only when a local advisory DB is present (keeps audit
     // offline + deterministic; no implicit network).
@@ -652,7 +884,7 @@ pub fn audit_report_with_includes(root: &Utf8Path, includes: &[String]) -> Audit
         );
     }
     relativize_paths(root, &mut findings);
-    apply_suppressions(&graph, &mut findings);
+    apply_suppressions(graph, &mut findings);
     config::apply(&cfg, &mut findings);
     sort_findings(&mut findings);
     let files = graph.modules.len();
@@ -940,6 +1172,23 @@ mod tests {
         assert!(
             dead.iter().any(|r| r.contains("_orphan")),
             "real dead code missed: {dead:?}"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn inspect_matches_dot_slash_prefixed_paths() {
+        let d = temp("inspect-dotslash");
+        std::fs::write(d.join("__main__.py"), "import pkg.app\n").unwrap();
+        std::fs::create_dir_all(d.join("pkg")).unwrap();
+        std::fs::write(d.join("pkg/__init__.py"), "").unwrap();
+        std::fs::write(d.join("pkg/app.py"), "import os\n").unwrap();
+        let ins = inspect(&d, "./pkg/app.py");
+        assert_eq!(ins.module.as_deref(), Some("pkg.app"));
+        assert!(
+            ins.findings.iter().any(|f| f.rule == "unused-import"),
+            "expected unused-import in ./pkg/app.py inspection, got {:?}",
+            ins.findings
         );
         std::fs::remove_dir_all(&d).ok();
     }

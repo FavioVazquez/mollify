@@ -38,8 +38,13 @@ fn untyped(f: &mollify_parse::FunctionComplexity) -> bool {
     f.params_annotated == 0 && !f.return_annotated
 }
 
-/// Top-level package key for a module (`requests.api` → `requests`).
-fn package_key(dotted: &str) -> &str {
+/// Top-level package key for a module (`requests.api` → `requests`). When the
+/// analysis root is itself a package (`graph.root_package`), all modules under
+/// it belong to that root package rather than their stripped submodule names.
+fn package_key<'a>(graph: &'a ModuleGraph, dotted: &'a str) -> &'a str {
+    if let Some(pkg) = graph.root_package.as_deref() {
+        return pkg;
+    }
     dotted.split('.').next().unwrap_or(dotted)
 }
 
@@ -47,9 +52,8 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
     // Pass 1 — census per top-level package (BTreeMap: deterministic order).
     let mut census: BTreeMap<String, PackageCensus> = BTreeMap::new();
     for m in &graph.modules {
-        let c = census
-            .entry(package_key(&m.dotted).to_string())
-            .or_default();
+        let key = package_key(graph, &m.dotted);
+        let c = census.entry(key.to_string()).or_default();
         for f in &m.parsed.functions {
             if eligible(f) {
                 c.total += 1;
@@ -58,7 +62,8 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
                 }
             }
         }
-        let is_pkg_init = m.is_package && m.dotted == package_key(&m.dotted);
+        let is_pkg_init = m.is_package
+            && (m.dotted == key || (graph.root_package.is_some() && m.dotted.is_empty()));
         let better = match &c.anchor {
             None => true,
             Some((_, anchored_on_init)) => is_pkg_init && !anchored_on_init,
@@ -68,7 +73,7 @@ pub fn analyze(graph: &ModuleGraph) -> Vec<Finding> {
         }
     }
     let rolled_up = |dotted: &str| {
-        census.get(package_key(dotted)).is_some_and(|c| {
+        census.get(package_key(graph, dotted)).is_some_and(|c| {
             c.total >= ROLLUP_MIN_FUNCS && f64::from(c.untyped) >= ROLLUP_RATIO * f64::from(c.total)
         })
     };

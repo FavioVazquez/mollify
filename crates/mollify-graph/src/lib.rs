@@ -53,6 +53,10 @@ pub struct UnresolvedImport {
 pub struct ModuleGraph {
     pub modules: Vec<ModuleInfo>,
     by_dotted: FxHashMap<String, FileId>,
+    /// When the analysis root is itself a package (`root/__init__.py` exists),
+    /// its directory name is the top-level package name for absolute imports
+    /// (`from mypkg.sub import x` resolves to `sub`).
+    pub root_package: Option<String>,
     /// Resolved internal import edges from **top-level** imports: importer →
     /// imported. These feed both reachability *and* architecture analysis
     /// (cycles, layers, contracts).
@@ -393,9 +397,23 @@ impl ModuleGraph {
             });
         }
 
+        let root_package = if by_dotted.contains_key("") {
+            root.file_name()
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    std::fs::canonicalize(root.as_std_path())
+                        .ok()
+                        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                })
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+
         let mut g = ModuleGraph {
             modules,
             by_dotted,
+            root_package,
             edges: Vec::new(),
             lazy_edges: Vec::new(),
             imported_symbols: FxHashMap::default(),
@@ -477,7 +495,21 @@ impl ModuleGraph {
     }
 
     fn lookup(&self, dotted: &str) -> Option<&FileId> {
-        self.by_dotted.get(dotted)
+        if let Some(id) = self.by_dotted.get(dotted) {
+            return Some(id);
+        }
+        if let Some(pkg) = &self.root_package {
+            if dotted == pkg {
+                return self.by_dotted.get("");
+            }
+            if let Some(rest) = dotted
+                .strip_prefix(pkg.as_str())
+                .and_then(|s| s.strip_prefix('.'))
+            {
+                return self.by_dotted.get(rest);
+            }
+        }
+        None
     }
 
     /// Look up a module by its dotted name.
@@ -1616,6 +1648,28 @@ import b
             .map(|f| f.strip_prefix(&d).unwrap().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(rel, vec!["src/app.py".to_string()], "got {rel:?}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn root_package_resolves_self_prefixed_absolute_imports() {
+        let d = temp("rootpkg-abs");
+        let pkg = d.join("mypkg");
+        write(&pkg, "__init__.py", "");
+        write(&pkg, "__main__.py", "from mypkg.sub import run\nrun()\n");
+        write(&pkg, "sub.py", "def run() -> int:\n    return 1\n");
+        let files = discover_python_files(&pkg);
+        let g = ModuleGraph::build(&pkg, &files);
+        assert!(
+            g.unused_files().is_empty(),
+            "unused files when root is package: {:?}",
+            g.unused_files()
+                .iter()
+                .map(|m| m.dotted.as_str())
+                .collect::<Vec<_>>()
+        );
+        let sub = g.modules.iter().find(|m| m.dotted == "sub").unwrap();
+        assert!(g.symbol_used(sub.id, "run", 1));
         std::fs::remove_dir_all(&d).ok();
     }
 }

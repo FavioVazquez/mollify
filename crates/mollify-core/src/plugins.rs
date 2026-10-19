@@ -99,9 +99,12 @@ mod tests {
         Definition {
             name: "x".into(),
             kind: DefKind::Function,
+            start_line: 1,
             line: 1,
             end_line: 2,
             private_by_convention: false,
+            in_suite: false,
+            shared_line: false,
             decorators: decorators.iter().map(|s| s.to_string()).collect(),
         }
     }

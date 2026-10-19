@@ -15,10 +15,7 @@ pub fn report(root: &Utf8Path) -> MetricsReport {
     let mut files: Vec<FileMetrics> = Vec::new();
     for m in &graph.modules {
         let (loc, blank, comment_lines) = line_counts(&m.path);
-        let sloc = loc
-            .saturating_sub(blank)
-            .saturating_sub(comment_lines)
-            .max(1);
+        let sloc = loc.saturating_sub(blank).saturating_sub(comment_lines);
         let total_cyclomatic: u32 = m.parsed.functions.iter().map(|f| f.cyclomatic).sum();
         let max_cyclomatic = m
             .parsed
@@ -29,7 +26,7 @@ pub fn report(root: &Utf8Path) -> MetricsReport {
             .unwrap_or(0);
         let cc = total_cyclomatic.max(1) as f64;
         let volume = m.parsed.halstead_volume.max(1.0);
-        let mi_raw = 171.0 - 5.2 * volume.ln() - 0.23 * cc - 16.2 * (sloc as f64).ln();
+        let mi_raw = 171.0 - 5.2 * volume.ln() - 0.23 * cc - 16.2 * (sloc.max(1) as f64).ln();
         let mi = (mi_raw * 100.0 / 171.0).clamp(0.0, 100.0);
         files.push(FileMetrics {
             path: m.rel.clone(),

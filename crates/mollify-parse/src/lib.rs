@@ -42,10 +42,17 @@ pub enum DefKind {
 pub struct Definition {
     pub name: String,
     pub kind: DefKind,
+    /// First line of the statement including any leading `@decorator` lines.
+    pub start_line: u32,
+    /// Line of the `def` / `class` keyword (or assignment).
     pub line: u32,
     pub end_line: u32,
     /// Convention: names starting with `_` are private by default.
     pub private_by_convention: bool,
+    /// True if defined inside a module-level `if`/`try`/`with`/`for`/`while`/`match` suite.
+    pub in_suite: bool,
+    /// True if any line of this definition shares a `;` multi-statement line.
+    pub shared_line: bool,
     /// Decorator paths applied to this def, normalized to the callable path
     /// without call args, e.g. `app.route`, `pytest.fixture`, `staticmethod`.
     pub decorators: Vec<String>,
@@ -78,6 +85,11 @@ pub struct Import {
     /// switches (`try: import x / except: …`, `if flag: from y import z`).
     /// Removing a guarded arm changes behavior, so this is never a certain fix.
     pub in_try: bool,
+    /// True when a `StmtImport` binds multiple comma-separated modules on one
+    /// statement (`import os, sys`).
+    pub multi_alias: bool,
+    /// True if any line of this import shares a `;` multi-statement line.
+    pub shared_line: bool,
     /// True when the name is an argument to a project loader (`load_hook`,
     /// `load_plugin`). The project resolves it against its own tree, so it
     /// marks reachability but never names a distribution.
@@ -225,6 +237,9 @@ pub struct ParsedModule {
     /// This is the precise signal for whether a top-level symbol is used
     /// internally, replacing coarse token-frequency counting. Sorted + deduped.
     pub module_used: Vec<String>,
+    /// `(1-based line, comment text)` for every real `TokenKind::Comment` in
+    /// the file (excludes `#` inside multiline strings/docstrings).
+    pub comments: Vec<(u32, String)>,
     pub ignores: Vec<(u32, String)>,
     pub scope_findings: Vec<ScopeFinding>,
     pub classes: Vec<ClassInfo>,
@@ -279,6 +294,7 @@ impl PyParser {
             local_uses: Vec::new(),
             attr_accessed: Vec::new(),
             module_used: Vec::new(),
+            comments: Vec::new(),
             ignores: Vec::new(),
             scope_findings: Vec::new(),
             classes: Vec::new(),
@@ -307,6 +323,7 @@ impl PyParser {
         // name occurrence counts, used-name set, Halstead volume, ignores, and a
         // per-position Name index for scope frequency.
         let mut name_tokens: Vec<(TextSize, &str)> = Vec::new();
+        let mut semi_lines: HashSet<u32> = HashSet::new();
         let mut h_total_ops = 0u64;
         let mut h_total_oprs = 0u64;
         let mut h_ops: HashSet<TokenKind> = HashSet::new();
@@ -319,8 +336,19 @@ impl PyParser {
                 m.used_names.push(text.to_string());
                 name_tokens.push((tok.range().start(), text));
             }
+            if kind == TokenKind::Semi {
+                semi_lines.insert(line1(&li, tok.range().start()));
+            }
             if kind == TokenKind::Comment {
                 let line = line1(&li, tok.range().start());
+                let start_off = usize::from(tok.range().start());
+                let line_start = source[..start_off].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                if source[line_start..start_off]
+                    .chars()
+                    .all(char::is_whitespace)
+                {
+                    m.comments.push((line, text.to_string()));
+                }
                 if let Some(rules) = parse_ignore_comment(text) {
                     for r in rules {
                         m.ignores.push((line, r));
@@ -360,7 +388,19 @@ impl PyParser {
         };
 
         // Top-level definitions / imports / __all__ / module vars.
-        scan_top_level(&module.body, &li, false, &mut m);
+        scan_top_level(&module.body, &li, false, false, &mut m);
+        if !semi_lines.is_empty() {
+            for d in &mut m.definitions {
+                if (d.start_line..=d.end_line).any(|ln| semi_lines.contains(&ln)) {
+                    d.shared_line = true;
+                }
+            }
+            for imp in &mut m.imports {
+                if (imp.line..=imp.end_line).any(|ln| semi_lines.contains(&ln)) {
+                    imp.shared_line = true;
+                }
+            }
+        }
 
         // Lazy/deferred imports inside function & class bodies (collected
         // separately — see `nested_imports`).
@@ -543,16 +583,25 @@ fn is_private(name: &str) -> bool {
 // Top-level scan: definitions, imports, __all__, module vars.
 // ---------------------------------------------------------------------------
 
-fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut ParsedModule) {
+fn scan_top_level(
+    stmts: &[Stmt],
+    li: &LineIndex,
+    type_checking: bool,
+    in_suite: bool,
+    m: &mut ParsedModule,
+) {
     for stmt in stmts {
         match stmt {
             Stmt::FunctionDef(f) => m.definitions.push(Definition {
                 private_by_convention: is_private(f.name.as_str()),
                 name: f.name.to_string(),
                 kind: DefKind::Function,
+                start_line: line1(li, f.range().start()),
                 // The full range includes decorators; point `line` at the `def`.
                 line: line1(li, f.name.range().start()),
                 end_line: end_line1(li, f.range()),
+                in_suite,
+                shared_line: false,
                 decorators: f
                     .decorator_list
                     .iter()
@@ -563,18 +612,50 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                 private_by_convention: is_private(c.name.as_str()),
                 name: c.name.to_string(),
                 kind: DefKind::Class,
+                start_line: line1(li, c.range().start()),
                 line: line1(li, c.name.range().start()),
                 end_line: end_line1(li, c.range()),
+                in_suite,
+                shared_line: false,
                 decorators: c
                     .decorator_list
                     .iter()
                     .filter_map(|d| decorator_path(&d.expression))
                     .collect(),
             }),
-            Stmt::Import(i) => parse_import(i, li, &mut m.imports),
+            Stmt::TypeAlias(ta) => {
+                if let Expr::Name(target) = &*ta.name {
+                    let name = target.id.as_str();
+                    let ln = line1(li, ta.range().start());
+                    m.definitions.push(Definition {
+                        private_by_convention: is_private(name),
+                        name: name.to_string(),
+                        kind: DefKind::Variable,
+                        start_line: ln,
+                        line: ln,
+                        end_line: end_line1(li, ta.range()),
+                        in_suite,
+                        shared_line: false,
+                        decorators: Vec::new(),
+                    });
+                }
+            }
+            Stmt::Import(i) => {
+                let before = m.imports.len();
+                parse_import(i, li, &mut m.imports);
+                for imp in m.imports[before..].iter_mut() {
+                    imp.type_checking_only = type_checking;
+                    if in_suite && !type_checking {
+                        imp.in_try = true;
+                    }
+                }
+            }
             Stmt::ImportFrom(i) => {
                 let mut imp = parse_import_from(i, li);
                 imp.type_checking_only = type_checking;
+                if in_suite && !type_checking {
+                    imp.in_try = true;
+                }
                 m.imports.push(imp);
             }
             Stmt::Assign(a) => {
@@ -587,12 +668,16 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                             None => m.dunder_all_dynamic = true,
                         }
                     } else {
+                        let ln = line1(li, a.range().start());
                         m.definitions.push(Definition {
                             private_by_convention: is_private(name),
                             name: name.to_string(),
                             kind: DefKind::Variable,
-                            line: line1(li, a.range().start()),
+                            start_line: ln,
+                            line: ln,
                             end_line: end_line1(li, a.range()),
+                            in_suite,
+                            shared_line: false,
                             decorators: Vec::new(),
                         });
                     }
@@ -609,12 +694,16 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                             }
                         }
                     } else {
+                        let ln = line1(li, a.range().start());
                         m.definitions.push(Definition {
                             private_by_convention: is_private(name),
                             name: name.to_string(),
                             kind: DefKind::Variable,
-                            line: line1(li, a.range().start()),
+                            start_line: ln,
+                            line: ln,
                             end_line: end_line1(li, a.range()),
+                            in_suite,
+                            shared_line: false,
                             decorators: Vec::new(),
                         });
                     }
@@ -681,7 +770,7 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                 let body_tc = type_checking || is_type_checking_guard(&i.test);
                 let else_tc = type_checking || is_not_type_checking_guard(&i.test);
                 let before = m.imports.len();
-                scan_top_level(&i.body, li, body_tc, m);
+                scan_top_level(&i.body, li, body_tc, true, m);
                 for imp in m.imports[before..].iter_mut() {
                     if body_tc {
                         imp.type_checking_only = true;
@@ -696,7 +785,7 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
                 }
                 for clause in &i.elif_else_clauses {
                     let before = m.imports.len();
-                    scan_top_level(&clause.body, li, else_tc, m);
+                    scan_top_level(&clause.body, li, else_tc, true, m);
                     for imp in m.imports[before..].iter_mut() {
                         if else_tc {
                             imp.type_checking_only = true;
@@ -709,33 +798,32 @@ fn scan_top_level(stmts: &[Stmt], li: &LineIndex, type_checking: bool, m: &mut P
             Stmt::Try(t) => {
                 // Imports in the `try:` body or an `except:` handler are the
                 // availability-probe idiom; mark them so unused-import analysis
-                // never grades them certain. The `else:`/`finally:` suites run
-                // unconditionally and carry no probe semantics.
+                // never grades them certain.
                 let before = m.imports.len();
-                scan_top_level(&t.body, li, type_checking, m);
+                scan_top_level(&t.body, li, type_checking, true, m);
                 for h in &t.handlers {
                     let ruff_python_ast::ExceptHandler::ExceptHandler(eh) = h;
-                    scan_top_level(&eh.body, li, type_checking, m);
+                    scan_top_level(&eh.body, li, type_checking, true, m);
                 }
                 for imp in m.imports[before..].iter_mut() {
                     imp.in_try = true;
                 }
-                scan_top_level(&t.orelse, li, type_checking, m);
-                scan_top_level(&t.finalbody, li, type_checking, m);
+                scan_top_level(&t.orelse, li, type_checking, true, m);
+                scan_top_level(&t.finalbody, li, type_checking, true, m);
             }
             // These suites also execute at module import time.
-            Stmt::With(w) => scan_top_level(&w.body, li, type_checking, m),
+            Stmt::With(w) => scan_top_level(&w.body, li, type_checking, true, m),
             Stmt::For(f) => {
-                scan_top_level(&f.body, li, type_checking, m);
-                scan_top_level(&f.orelse, li, type_checking, m);
+                scan_top_level(&f.body, li, type_checking, true, m);
+                scan_top_level(&f.orelse, li, type_checking, true, m);
             }
             Stmt::While(w) => {
-                scan_top_level(&w.body, li, type_checking, m);
-                scan_top_level(&w.orelse, li, type_checking, m);
+                scan_top_level(&w.body, li, type_checking, true, m);
+                scan_top_level(&w.orelse, li, type_checking, true, m);
             }
             Stmt::Match(mt) => {
                 for case in &mt.cases {
-                    scan_top_level(&case.body, li, type_checking, m);
+                    scan_top_level(&case.body, li, type_checking, true, m);
                 }
             }
             _ => {}
@@ -813,6 +901,7 @@ fn is_not_type_checking_guard(test: &Expr) -> bool {
 fn parse_import(i: &StmtImport, li: &LineIndex, out: &mut Vec<Import>) {
     let line = line1(li, i.range().start());
     let end_line = end_line1(li, i.range());
+    let multi_alias = i.names.len() > 1;
     for alias in &i.names {
         let module = alias.name.as_str().to_string();
         let redundant = matches!(&alias.asname, Some(a) if a.as_str() == alias.name.as_str());
@@ -835,6 +924,8 @@ fn parse_import(i: &StmtImport, li: &LineIndex, out: &mut Vec<Import>) {
                 is_star: false,
                 type_checking_only: false,
                 in_try: false,
+                multi_alias,
+                shared_line: false,
                 project_loader: false,
                 line,
                 end_line,
@@ -873,6 +964,8 @@ fn parse_import_from(i: &StmtImportFrom, li: &LineIndex) -> Import {
         is_star,
         type_checking_only: false,
         in_try: false,
+        multi_alias: false,
+        shared_line: false,
         project_loader: false,
         line,
         end_line,
@@ -1139,11 +1232,13 @@ fn analyze_scope(
     }
 
     // Unused local variables: top-level `name = expr` whose name occurs once.
+    // Variables prefixed with `_` (`_unused`, `_rich_traceback_guard`) are
+    // intentionally unused by convention (matching `unused-parameter`).
     for stmt in &f.body {
         if let Stmt::Assign(a) = stmt {
             if let [Expr::Name(target)] = a.targets.as_slice() {
                 let name = target.id.as_str();
-                if name == "_" || declared_global.contains(name) {
+                if name.starts_with('_') || declared_global.contains(name) {
                     continue;
                 }
                 if freq.get(name).copied().unwrap_or(0) == 1 {
@@ -1377,13 +1472,21 @@ fn scan_type_leaks(body: &[Stmt], li: &LineIndex, out: &mut Vec<TypeLeak>) {
     for stmt in body {
         match stmt {
             Stmt::FunctionDef(f) if !is_private(f.name.as_str()) => {
-                collect_fn_leaks(None, f, li, &typevars, out);
+                collect_fn_leaks(None, f, li, &typevars, &[], out);
             }
             Stmt::ClassDef(c) if !is_private(c.name.as_str()) => {
+                let class_tps = type_param_names(&c.type_params);
                 for s in &c.body {
                     if let Stmt::FunctionDef(f) = s {
                         if !is_private(f.name.as_str()) {
-                            collect_fn_leaks(Some(c.name.as_str()), f, li, &typevars, out);
+                            collect_fn_leaks(
+                                Some(c.name.as_str()),
+                                f,
+                                li,
+                                &typevars,
+                                &class_tps,
+                                out,
+                            );
                         }
                     }
                 }
@@ -1391,6 +1494,20 @@ fn scan_type_leaks(body: &[Stmt], li: &LineIndex, out: &mut Vec<TypeLeak>) {
             _ => {}
         }
     }
+}
+
+/// Extract PEP 695 generic type parameter names (`def f[T, *Ts, **P]:`).
+fn type_param_names(tp: &Option<Box<ruff_python_ast::TypeParams>>) -> Vec<String> {
+    let Some(tp) = tp else {
+        return Vec::new();
+    };
+    tp.iter()
+        .map(|p| match p {
+            ruff_python_ast::TypeParam::TypeVar(t) => t.name.as_str().to_string(),
+            ruff_python_ast::TypeParam::TypeVarTuple(t) => t.name.as_str().to_string(),
+            ruff_python_ast::TypeParam::ParamSpec(t) => t.name.as_str().to_string(),
+        })
+        .collect()
 }
 
 /// Collect names bound to `TypeVar`/`ParamSpec`/`TypeVarTuple` (anywhere),
@@ -1433,17 +1550,23 @@ fn collect_fn_leaks(
     f: &StmtFunctionDef,
     li: &LineIndex,
     typevars: &HashSet<String>,
+    class_type_params: &[String],
     out: &mut Vec<TypeLeak>,
 ) {
     let qualified = match class {
         Some(c) => format!("{c}.{}", f.name),
         None => f.name.to_string(),
     };
+    let fn_tps = type_param_names(&f.type_params);
     let push_leaks = |ann: &Expr, line: u32, is_return: bool, out: &mut Vec<TypeLeak>| {
         let mut idents = Vec::new();
         annotation_idents(ann, &mut idents);
         for id in idents {
-            if is_private_type(&id) && !typevars.contains(&id) {
+            if is_private_type(&id)
+                && !typevars.contains(&id)
+                && !fn_tps.contains(&id)
+                && !class_type_params.contains(&id)
+            {
                 out.push(TypeLeak {
                     function: qualified.clone(),
                     type_name: id,
@@ -1572,6 +1695,9 @@ impl<'a> Visitor<'a> for LocalUseVisitor {
                     collect_annotation_strings(v, &mut self.uses);
                 }
             }
+        }
+        if let Stmt::TypeAlias(ta) = stmt {
+            collect_annotation_strings(&ta.value, &mut self.uses);
         }
         if let Stmt::FunctionDef(f) = stmt {
             if let Some(r) = &f.returns {
@@ -1719,6 +1845,9 @@ impl Resolver {
             locals: HashSet::new(),
             globals: HashSet::new(),
         };
+        for tp in type_param_names(&f.type_params) {
+            bv.locals.insert(tp);
+        }
         for p in param_names(&f.parameters) {
             bv.locals.insert(p);
         }
@@ -1735,6 +1864,44 @@ impl Resolver {
         });
     }
 
+    fn resolve_annotation_expr(&mut self, ann: &Expr) {
+        self.visit_expr(ann);
+        let mut str_idents = Vec::new();
+        collect_annotation_strings(ann, &mut str_idents);
+        for id in str_idents {
+            self.resolve_load(&id);
+        }
+    }
+
+    /// Visit PEP 695 generic type parameter bounds and defaults (`[T: Bound = Default]`).
+    fn visit_type_param_bounds(&mut self, tp: &Option<Box<ruff_python_ast::TypeParams>>) {
+        let Some(tp) = tp else {
+            return;
+        };
+        for param in tp.iter() {
+            match param {
+                ruff_python_ast::TypeParam::TypeVar(t) => {
+                    if let Some(b) = &t.bound {
+                        self.resolve_annotation_expr(b);
+                    }
+                    if let Some(d) = &t.default {
+                        self.resolve_annotation_expr(d);
+                    }
+                }
+                ruff_python_ast::TypeParam::TypeVarTuple(t) => {
+                    if let Some(d) = &t.default {
+                        self.resolve_annotation_expr(d);
+                    }
+                }
+                ruff_python_ast::TypeParam::ParamSpec(t) => {
+                    if let Some(d) = &t.default {
+                        self.resolve_annotation_expr(d);
+                    }
+                }
+            }
+        }
+    }
+
     /// Parameter defaults and annotations (and the return annotation) evaluate
     /// in the *enclosing* scope, before the function/lambda scope exists.
     fn visit_signature_exprs(&mut self, params: &Parameters) {
@@ -1748,19 +1915,53 @@ impl Resolver {
                 self.visit_expr(d);
             }
             if let Some(a) = &p.parameter.annotation {
-                self.visit_expr(a);
+                self.resolve_annotation_expr(a);
             }
         }
         if let Some(v) = &params.vararg {
             if let Some(a) = &v.annotation {
-                self.visit_expr(a);
+                self.resolve_annotation_expr(a);
             }
         }
         if let Some(k) = &params.kwarg {
             if let Some(a) = &k.annotation {
-                self.visit_expr(a);
+                self.resolve_annotation_expr(a);
             }
         }
+    }
+
+    /// Visit a comprehension (`ListComp`/`SetComp`/`DictComp`/`Generator`) in
+    /// its own isolated scope so generator target variables (`[x for x in xs]`)
+    /// never resolve to module scope.
+    fn visit_comprehension(
+        &mut self,
+        generators: &[ruff_python_ast::Comprehension],
+        elts: &[&Expr],
+    ) {
+        // The outermost iterable evaluates in the enclosing scope.
+        if let Some(first) = generators.first() {
+            self.visit_expr(&first.iter);
+        }
+        let mut comp_locals = HashSet::new();
+        for g in generators {
+            collect_store_names(&g.target, &mut comp_locals);
+        }
+        self.scopes.push(FnScope {
+            locals: comp_locals,
+            globals: HashSet::new(),
+        });
+        for (i, g) in generators.iter().enumerate() {
+            if i > 0 {
+                self.visit_expr(&g.iter);
+            }
+            for cond in &g.ifs {
+                self.visit_expr(cond);
+            }
+        }
+        for e in elts {
+            self.visit_expr(e);
+        }
+        self.scopes.pop();
     }
 }
 
@@ -1768,14 +1969,27 @@ impl<'a> Visitor<'a> for Resolver {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
             Stmt::FunctionDef(f) => {
-                // Decorators / default values / annotations resolve in the
-                // current scope (visited before the function scope is pushed).
+                // Decorators / type-param bounds / default values / annotations
+                // resolve in the enclosing scope (though type-param names are
+                // in scope for the signature annotations and return type).
                 for d in &f.decorator_list {
                     self.visit_expr(&d.expression);
                 }
+                self.visit_type_param_bounds(&f.type_params);
+                let tp_names: HashSet<String> =
+                    type_param_names(&f.type_params).into_iter().collect();
+                if !tp_names.is_empty() {
+                    self.scopes.push(FnScope {
+                        locals: tp_names,
+                        globals: HashSet::new(),
+                    });
+                }
                 self.visit_signature_exprs(&f.parameters);
                 if let Some(r) = &f.returns {
-                    self.visit_expr(r);
+                    self.resolve_annotation_expr(r);
+                }
+                if f.type_params.is_some() {
+                    self.scopes.pop();
                 }
                 self.enter_function(f);
                 for stmt in &f.body {
@@ -1786,6 +2000,15 @@ impl<'a> Visitor<'a> for Resolver {
             Stmt::ClassDef(c) => {
                 for d in &c.decorator_list {
                     self.visit_expr(&d.expression);
+                }
+                self.visit_type_param_bounds(&c.type_params);
+                let tp_names: HashSet<String> =
+                    type_param_names(&c.type_params).into_iter().collect();
+                if !tp_names.is_empty() {
+                    self.scopes.push(FnScope {
+                        locals: tp_names,
+                        globals: HashSet::new(),
+                    });
                 }
                 if let Some(args) = &c.arguments {
                     for a in args.args.iter() {
@@ -1799,6 +2022,33 @@ impl<'a> Visitor<'a> for Resolver {
                 for stmt in &c.body {
                     self.visit_stmt(stmt);
                 }
+                if c.type_params.is_some() {
+                    self.scopes.pop();
+                }
+            }
+            Stmt::TypeAlias(ta) => {
+                self.visit_type_param_bounds(&ta.type_params);
+                let tp_names: HashSet<String> =
+                    type_param_names(&ta.type_params).into_iter().collect();
+                if !tp_names.is_empty() {
+                    self.scopes.push(FnScope {
+                        locals: tp_names,
+                        globals: HashSet::new(),
+                    });
+                }
+                self.resolve_annotation_expr(&ta.value);
+                if ta.type_params.is_some() {
+                    self.scopes.pop();
+                }
+            }
+            Stmt::AnnAssign(a) => {
+                self.resolve_annotation_expr(&a.annotation);
+                if is_type_alias_annotation(&a.annotation) {
+                    if let Some(v) = &a.value {
+                        self.resolve_annotation_expr(v);
+                    }
+                }
+                walk_stmt(self, stmt);
             }
             _ => walk_stmt(self, stmt),
         }
@@ -1810,6 +2060,21 @@ impl<'a> Visitor<'a> for Resolver {
                 if matches!(n.ctx, ExprContext::Load) {
                     self.resolve_load(n.id.as_str());
                 }
+            }
+            Expr::Call(c) => {
+                let is_cast = expr_path(&c.func)
+                    .map(|p| p == "cast" || p.ends_with(".cast"))
+                    .unwrap_or(false);
+                if is_cast {
+                    if let Some(first) = c.arguments.args.first() {
+                        let mut str_idents = Vec::new();
+                        collect_annotation_strings(first, &mut str_idents);
+                        for id in str_idents {
+                            self.resolve_load(&id);
+                        }
+                    }
+                }
+                walk_expr(self, expr);
             }
             Expr::Lambda(l) => {
                 let mut locals = HashSet::new();
@@ -1827,8 +2092,27 @@ impl<'a> Visitor<'a> for Resolver {
                 self.visit_expr(&l.body);
                 self.scopes.pop();
             }
+            Expr::ListComp(c) => self.visit_comprehension(&c.generators, &[&c.elt]),
+            Expr::SetComp(c) => self.visit_comprehension(&c.generators, &[&c.elt]),
+            Expr::Generator(c) => self.visit_comprehension(&c.generators, &[&c.elt]),
+            Expr::DictComp(c) => match &c.key {
+                Some(k) => self.visit_comprehension(&c.generators, &[k, &c.value]),
+                None => self.visit_comprehension(&c.generators, &[&c.value]),
+            },
             _ => walk_expr(self, expr),
         }
+    }
+}
+
+fn collect_store_names(expr: &Expr, out: &mut HashSet<String>) {
+    match expr {
+        Expr::Name(n) if matches!(n.ctx, ExprContext::Store) => {
+            out.insert(n.id.as_str().to_string());
+        }
+        Expr::Tuple(t) => t.elts.iter().for_each(|e| collect_store_names(e, out)),
+        Expr::List(l) => l.elts.iter().for_each(|e| collect_store_names(e, out)),
+        Expr::Starred(s) => collect_store_names(&s.value, out),
+        _ => {}
     }
 }
 
@@ -1847,6 +2131,20 @@ impl<'a> Visitor<'a> for BindingVisitor {
             }
             Stmt::ClassDef(c) => {
                 self.locals.insert(c.name.to_string());
+            }
+            Stmt::TypeAlias(ta) => {
+                if let Expr::Name(n) = &*ta.name {
+                    self.locals.insert(n.id.to_string());
+                }
+            }
+            Stmt::Try(t) => {
+                for h in &t.handlers {
+                    let ruff_python_ast::ExceptHandler::ExceptHandler(eh) = h;
+                    if let Some(name) = &eh.name {
+                        self.locals.insert(name.as_str().to_string());
+                    }
+                }
+                walk_stmt(self, stmt);
             }
             Stmt::Global(g) => {
                 for n in &g.names {
@@ -1869,15 +2167,32 @@ impl<'a> Visitor<'a> for BindingVisitor {
             }
             // Don't descend into nested scopes: their bindings aren't ours.
             // Python 3 comprehensions have their own scope, so their targets
-            // are not locals here either. (Their iterables/conditions do
-            // evaluate in this scope, but they only load, never bind.)
-            Expr::Lambda(_)
-            | Expr::ListComp(_)
-            | Expr::SetComp(_)
-            | Expr::DictComp(_)
-            | Expr::Generator(_) => {}
+            // are not locals here either — except PEP 572 assignment
+            // expressions (`:=`), which bind in the enclosing function scope.
+            Expr::Lambda(_) => {}
+            Expr::ListComp(_) | Expr::SetComp(_) | Expr::DictComp(_) | Expr::Generator(_) => {
+                let mut wv = WalrusBindingVisitor {
+                    locals: &mut self.locals,
+                };
+                wv.visit_expr(expr);
+            }
             _ => walk_expr(self, expr),
         }
+    }
+}
+
+struct WalrusBindingVisitor<'s> {
+    locals: &'s mut HashSet<String>,
+}
+impl<'a, 's> Visitor<'a> for WalrusBindingVisitor<'s> {
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::Named(n) = expr {
+            collect_store_names(&n.target, self.locals);
+        }
+        if matches!(expr, Expr::Lambda(_)) {
+            return;
+        }
+        walk_expr(self, expr);
     }
 }
 
@@ -2010,6 +2325,8 @@ impl<'a, 'm> Visitor<'a> for MainVisitor<'a, 'm> {
                     type_checking_only: false,
                     redundant: Vec::new(),
                     in_try: false,
+                    multi_alias: false,
+                    shared_line: false,
                     project_loader,
                     line,
                     end_line: line,
@@ -2052,10 +2369,41 @@ fn security_secret(
     if !SECRET_NAMES.iter().any(|s| lname.contains(s)) {
         return;
     }
+    // Metadata / config-key / lexer-token variable names (`token_type`,
+    // `API_KEY_HEADER`, `PASSWORD_ENV`, `SECRET_FIELD`) are not credentials.
+    if lname == "token_type"
+        || [
+            "_type",
+            "_header",
+            "_env",
+            "_env_var",
+            "_var",
+            "_field",
+            "_name",
+            "_key_name",
+            "_label",
+            "_prefix",
+            "_suffix",
+            "_url",
+            "_uri",
+            "_path",
+            "_file",
+            "_dir",
+        ]
+        .iter()
+        .any(|suf| lname.ends_with(suf))
+    {
+        return;
+    }
     if let Expr::StringLiteral(s) = value {
         let val = s.value.to_str();
         // `apiKey = "apiKey"` is an enum/schema token, not a credential.
         if val.eq_ignore_ascii_case(name) {
+            return;
+        }
+        // A redaction mask (`":****"`, `"****"`) with no alphanumeric chars is
+        // not a credential.
+        if !val.chars().any(|c| c.is_ascii_alphanumeric()) {
             return;
         }
         // A URL, or a sentence, is not a token. `_TOKEN_URL = "https://..."`
@@ -2366,7 +2714,9 @@ fn security_call(
             "ssl._create_unverified_context disables certificate validation".into(),
         );
     }
-    if matches!(f, "hashlib.md5" | "hashlib.sha1" | "md5.new") {
+    if matches!(f, "hashlib.md5" | "hashlib.sha1" | "md5.new")
+        && !kwarg_bool(c, "usedforsecurity", false)
+    {
         hit(
             "weak-hash",
             format!("`{f}` is a weak hash; use sha256+ (or pass usedforsecurity=False)"),
@@ -3043,6 +3393,73 @@ mod tests {
         assert!(
             m.security_hits.iter().any(|h| h.rule == "weak-cipher"),
             "nested import must be scanned: {:?}",
+            m.security_hits
+        );
+    }
+
+    #[test]
+    fn pep695_bounds_resolve_and_type_params_are_not_leaks() {
+        let m = parse(
+            "class _Bound:\n    pass\n\ndef f[T: _Bound](x: T) -> T:\n    return x\n\ndef pub[_T](x: _T) -> _T:\n    return x\n",
+        );
+        assert!(
+            m.module_used.iter().any(|s| s == "_Bound"),
+            "PEP 695 bound must resolve to module scope: {:?}",
+            m.module_used
+        );
+        assert!(
+            m.type_leaks.is_empty(),
+            "PEP 695 type param `_T` must not be flagged as a private-type-leak: {:?}",
+            m.type_leaks
+        );
+    }
+
+    #[test]
+    fn string_forward_ref_annotations_feed_module_used() {
+        let m = parse(
+            "from typing import Optional\ndef make(x: 'Optional[_Node]') -> 'Optional[_Node]':\n    return x\nclass _Node:\n    pass\n",
+        );
+        assert!(
+            m.module_used.iter().any(|s| s == "_Node"),
+            "quoted forward-ref annotation must mark `_Node` used in module_used: {:?}",
+            m.module_used
+        );
+    }
+
+    #[test]
+    fn comprehension_loop_var_does_not_leak_to_module_used() {
+        let m = parse(
+            "def _item():\n    return 999\ndef run(xs):\n    return [_item for _item in xs]\n",
+        );
+        assert!(
+            !m.module_used.iter().any(|s| s == "_item"),
+            "comprehension loop target must not resolve to module scope: {:?}",
+            m.module_used
+        );
+    }
+
+    #[test]
+    fn underscore_prefixed_local_variables_are_exempt() {
+        let m = parse("def f():\n    _rich_traceback_guard = True\n    return 1\n");
+        assert!(
+            m.scope_findings.is_empty(),
+            "underscore-prefixed local variable wrongly flagged: {:?}",
+            m.scope_findings
+        );
+    }
+
+    #[test]
+    fn weak_hash_honors_usedforsecurity_false_and_secret_ignores_metadata() {
+        let m = parse(
+            "import hashlib\n\
+             d = hashlib.md5(b'x', usedforsecurity=False)\n\
+             token_type = 'cfws'\n\
+             API_KEY_HEADER = 'X-API-Key'\n\
+             password = ':****'\n",
+        );
+        assert!(
+            m.security_hits.is_empty(),
+            "unexpected security hits: {:?}",
             m.security_hits
         );
     }

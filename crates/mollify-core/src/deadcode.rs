@@ -44,10 +44,19 @@ fn duplicate_exports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
         let mut first: FxHashMap<&str, (&str, u32)> = FxHashMap::default();
         let mut occ = Occurrences::default();
         for imp in &m.parsed.imports {
-            if imp.is_star {
+            if imp.is_star || imp.in_try || imp.type_checking_only {
                 continue;
             }
             for b in &imp.bindings {
+                // Plain dotted imports (`import pkg.a` + `import pkg.b`) bind
+                // the top-level package `pkg` and attach submodules to it;
+                // they do not shadow `pkg`.
+                if imp.names.is_empty()
+                    && imp.module.contains('.')
+                    && imp.module.starts_with(&format!("{b}."))
+                {
+                    continue;
+                }
                 match first.get(b.as_str()) {
                     None => {
                         first.insert(b.as_str(), (imp.module.as_str(), imp.line));
@@ -385,15 +394,16 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
             if imp.module == "__future__" {
                 continue; // future imports have a compiler effect; never "unused"
             }
-            let is_used = |i: usize, b: &String| {
+            let is_used_for = |target_imp: &mollify_parse::Import, i: usize, b: &String| {
                 local.contains(b.as_str())
                     || dunder_all.is_some_and(|all| all.contains(b))
                     // `import x as x` / `from m import y as y`: explicit re-export.
-                    || imp.redundant.get(i).copied().unwrap_or(false)
+                    || target_imp.redundant.get(i).copied().unwrap_or(false)
                     // Another module does `from <here> import <b>` — the binding
                     // is this module's export surface (compat/shim idiom).
                     || graph.name_imported_by_others(m.id, b)
             };
+            let is_used = |i: usize, b: &String| is_used_for(imp, i, b);
             let unused: Vec<&String> = imp
                 .bindings
                 .iter()
@@ -404,7 +414,18 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
             if unused.is_empty() {
                 continue;
             }
-            let whole = unused.len() == imp.bindings.len();
+            let multi_alias_has_used_sibling = imp.multi_alias
+                && m.parsed
+                    .imports
+                    .iter()
+                    .filter(|sib| sib.multi_alias && sib.line == imp.line)
+                    .any(|sib| {
+                        sib.bindings
+                            .iter()
+                            .enumerate()
+                            .any(|(i, b)| is_used_for(sib, i, b))
+                    });
+            let whole = unused.len() == imp.bindings.len() && !multi_alias_has_used_sibling;
             let rule = "unused-import";
             if whole {
                 // Entire statement unused → safe to delete the line, unless a
@@ -435,6 +456,7 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                 } else if !graph.module_reachable(m.id)
                     || crate::paths::is_fixture_tree(&m.rel)
                     || registers
+                    || imp.shared_line
                 {
                     Confidence::Likely
                 } else {
@@ -442,7 +464,7 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                 };
                 // Notebook line numbers are relative to the concatenated code
                 // cells, not the raw .ipynb JSON — never auto-edit those files.
-                let fixable_file = m.path.extension() == Some("py");
+                let fixable_file = m.path.extension() == Some("py") && !imp.shared_line;
                 out.push(Finding {
                     fingerprint: fingerprint(
                         rule,
@@ -468,7 +490,7 @@ fn unused_imports(graph: &ModuleGraph, out: &mut Vec<Finding>) {
                         path: m.path.clone(),
                         line: imp.line,
                         column: 0,
-                        end_line: None,
+                        end_line: (imp.end_line > imp.line).then_some(imp.end_line),
                     },
                     actions: vec![Action {
                         kind: "remove-import".into(),
@@ -643,6 +665,8 @@ fn unused_symbols(
             let confidence = if m.parsed.has_dynamic_sink || graph.global_dynamic {
                 Confidence::Uncertain
             } else if d.private_by_convention
+                && !d.in_suite
+                && !d.shared_line
                 && graph.module_reachable(m.id)
                 && !crate::paths::is_fixture_tree(&m.rel)
                 // A dynamically-built `__all__` can export anything, so

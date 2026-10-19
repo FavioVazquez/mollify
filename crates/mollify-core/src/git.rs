@@ -43,12 +43,12 @@ pub fn changed_files(root: &Utf8Path, base: Option<&str>) -> Option<FxHashSet<St
         }
     };
 
-    add(&["diff", "--name-only"]); // unstaged
-    add(&["diff", "--name-only", "--cached"]); // staged
+    add(&["diff", "--relative", "--name-only"]); // unstaged
+    add(&["diff", "--relative", "--name-only", "--cached"]); // staged
     add(&["ls-files", "--others", "--exclude-standard"]); // untracked
     if let Some(base) = base {
         let range = format!("{base}...HEAD");
-        add(&["diff", "--name-only", &range]);
+        add(&["diff", "--relative", "--name-only", &range]);
     }
     Some(set)
 }
@@ -85,11 +85,11 @@ pub fn changed_lines(
             }
         }
     };
-    add_diff(&["diff", "--unified=0"]);
-    add_diff(&["diff", "--unified=0", "--cached"]);
+    add_diff(&["diff", "--relative", "--unified=0"]);
+    add_diff(&["diff", "--relative", "--unified=0", "--cached"]);
     if let Some(base) = base {
         let range = format!("{base}...HEAD");
-        add_diff(&["diff", "--unified=0", &range]);
+        add_diff(&["diff", "--relative", "--unified=0", &range]);
     }
     // Untracked files: the whole file is "introduced".
     if let Ok(out) = Command::new("git")
@@ -177,7 +177,15 @@ pub fn file_churn(root: &Utf8Path) -> Option<rustc_hash::FxHashMap<String, u32>>
         .args(["-c", "core.quotepath=off"])
         .arg("-C")
         .arg(root.as_str())
-        .args(["log", "--no-merges", "--pretty=format:", "--name-only"])
+        .args([
+            "log",
+            "--no-merges",
+            "--pretty=format:",
+            "--name-only",
+            "--relative",
+            "--",
+            ".",
+        ])
         .output()
         .ok()?;
     if !out.status.success() {
