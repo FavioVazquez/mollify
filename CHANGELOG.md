@@ -6,6 +6,10 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+### Security
+- **`rustls` 0.23.46**. Closes RUSTSEC-2026-0346, RUSTSEC-2026-0347,
+  RUSTSEC-2026-0348, and RUSTSEC-2026-0349.
+
 ### Fixed
 - `mollify fix --apply` removes the full span of a multi-line unused import
   and removes leading `@decorator` lines along with a dead private function or
