@@ -38,7 +38,43 @@ pub fn run() -> std::io::Result<()> {
 struct Server {
     /// Workspace root resolved from `initialize`.
     root: Option<Utf8PathBuf>,
+    /// Cached cross-file findings per URI from the most recent open/save
+    /// workspace audit, preserved across live `didChange` buffer updates so
+    /// cross-file diagnostics don't vanish on the first keystroke.
+    cross_file: std::collections::HashMap<String, Vec<Finding>>,
     exit: bool,
+}
+
+/// Rules recomputed directly from the in-memory buffer by `analyze_text`.
+/// Everything else (`unused-export`, `circular-dependency`, `unused-method`,
+/// `duplication`, …) requires the workspace graph and is retained from the
+/// last `didOpen`/`didSave` audit until the next save.
+fn is_buffer_rule(rule: &str) -> bool {
+    matches!(
+        rule,
+        "unused-import"
+            | "unused-variable"
+            | "unused-parameter"
+            | "unreachable-code"
+            | "commented-code"
+            | "high-complexity"
+            | "untyped-function"
+            | "private-type-leak"
+            | "dangerous-eval"
+            | "subprocess-shell-true"
+            | "sql-injection"
+            | "unsafe-yaml-load"
+            | "unsafe-deserialization"
+            | "tls-verify-disabled"
+            | "hardcoded-secret"
+            | "weak-hash"
+            | "weak-cipher"
+            | "insecure-random"
+            | "request-without-timeout"
+            | "flask-debug-true"
+            | "jinja2-autoescape-false"
+            | "try-except-pass"
+    )
 }
 
 /// Extract the full document text from a didOpen/didChange notification (we
@@ -98,10 +134,13 @@ impl Server {
             "textDocument/didChange" => self.diagnose_buffer(msg),
             // Close → publish an empty set so the client drops stale diagnostics.
             "textDocument/didClose" => match doc_uri(msg) {
-                Some(uri) => vec![notification(
-                    "textDocument/publishDiagnostics",
-                    json!({ "uri": uri, "diagnostics": [] }),
-                )],
+                Some(uri) => {
+                    self.cross_file.remove(uri);
+                    vec![notification(
+                        "textDocument/publishDiagnostics",
+                        json!({ "uri": uri, "diagnostics": [] }),
+                    )]
+                }
                 None => vec![],
             },
             // initialized and other notifications: no response. Unknown
@@ -115,7 +154,7 @@ impl Server {
 
     /// Run the audit for the workspace and publish diagnostics for the document
     /// referenced by the notification.
-    fn diagnose(&self, msg: &Value) -> Vec<Value> {
+    fn diagnose(&mut self, msg: &Value) -> Vec<Value> {
         let Some(uri) = doc_uri(msg) else {
             return vec![];
         };
@@ -128,12 +167,18 @@ impl Server {
             .clone()
             .unwrap_or_else(|| Utf8PathBuf::from(file_abs.parent().unwrap_or(&file_abs)));
         let report = mollify_core::audit_report(&root);
-        let diagnostics: Vec<Value> = report
+        let file_findings: Vec<Finding> = report
             .findings
-            .iter()
+            .into_iter()
             .filter(|f| same_file(&root, &f.location.path, &file_abs))
-            .map(to_diagnostic)
             .collect();
+        let cross: Vec<Finding> = file_findings
+            .iter()
+            .filter(|f| !is_buffer_rule(&f.rule))
+            .cloned()
+            .collect();
+        self.cross_file.insert(uri.to_string(), cross);
+        let diagnostics: Vec<Value> = file_findings.iter().map(to_diagnostic).collect();
         vec![notification(
             "textDocument/publishDiagnostics",
             json!({ "uri": uri, "diagnostics": diagnostics }),
@@ -142,7 +187,8 @@ impl Server {
 }
 
 impl Server {
-    /// Live file-local diagnostics from the edited buffer (no disk read).
+    /// Live file-local diagnostics from the edited buffer (no disk read),
+    /// merged with cached cross-file findings from the last open/save.
     fn diagnose_buffer(&self, msg: &Value) -> Vec<Value> {
         let Some(uri) = doc_uri(msg) else {
             return vec![];
@@ -150,10 +196,12 @@ impl Server {
         let (Some(path), Some(text)) = (uri_to_path(uri), doc_text(msg)) else {
             return vec![];
         };
-        let diagnostics: Vec<Value> = mollify_core::analyze_text(&path, &text)
-            .iter()
-            .map(to_diagnostic)
-            .collect();
+        let mut findings = mollify_core::analyze_text_with_root(self.root.as_deref(), &path, &text);
+        if let Some(cross) = self.cross_file.get(uri) {
+            findings.extend(cross.iter().cloned());
+        }
+        mollify_types::sort_findings(&mut findings);
+        let diagnostics: Vec<Value> = findings.iter().map(to_diagnostic).collect();
         vec![notification(
             "textDocument/publishDiagnostics",
             json!({ "uri": uri, "diagnostics": diagnostics }),
@@ -165,7 +213,8 @@ impl Server {
 fn same_file(root: &Utf8PathBuf, finding_path: &camino::Utf8Path, file_abs: &Utf8PathBuf) -> bool {
     let joined = root.join(finding_path);
     let fa = file_abs.as_str();
-    joined.as_str() == fa || fa.ends_with(finding_path.as_str()) || finding_path.as_str() == fa
+    let fp = finding_path.as_str();
+    joined.as_str() == fa || fa == fp || fa.ends_with(&format!("/{fp}"))
 }
 
 fn to_diagnostic(f: &Finding) -> Value {
@@ -439,9 +488,9 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("__main__.py"), "print('hi')\n").unwrap();
         std::fs::write(d.join("lib.py"), "def _dead():\n    return 1\n").unwrap();
-        let s = Server {
+        let mut s = Server {
             root: Utf8PathBuf::from_path_buf(d.clone()).ok(),
-            exit: false,
+            ..Default::default()
         };
         let uri = format!("file://{}/lib.py", d.to_string_lossy());
         let note = json!({"jsonrpc":"2.0","method":"textDocument/didOpen",

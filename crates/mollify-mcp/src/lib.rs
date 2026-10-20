@@ -259,8 +259,15 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
                 return error(id, -32602, "mollify_inspect requires `file`");
             };
             let ins = mollify_core::inspect(&root, file);
+            if ins.module.is_none() && ins.findings.is_empty() {
+                return tool_error(
+                    id,
+                    &format!("no file matching `{file}` found under `{root}`"),
+                );
+            }
             let body = json!({
                 "kind": "inspect",
+                "schema_version": mollify_types::SCHEMA_VERSION,
                 "file": ins.file,
                 "module": ins.module,
                 "findings": ins.findings,
@@ -272,7 +279,12 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
         "mollify_list" => {
             let kind = arg_str("kind").unwrap_or("entry-points");
             let rows = mollify_core::list_topology(&root, kind);
-            serde_json::to_string_pretty(&json!({ "kind": "list", "of": kind, "items": rows }))
+            serde_json::to_string_pretty(&json!({
+                "kind": "list",
+                "schema_version": mollify_types::SCHEMA_VERSION,
+                "of": kind,
+                "items": rows,
+            }))
         }
         "mollify_metrics" => {
             serde_json::to_string_pretty(&Report::Metrics(mollify_core::metrics::report(&root)))
@@ -307,8 +319,12 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
                 );
             }
             serde_json::to_string_pretty(&json!({
-                "kind": "fix", "applied": do_apply, "count": edits.len(),
-                "fixes": items, "written": outcome.applied,
+                "kind": "fix",
+                "schema_version": mollify_types::SCHEMA_VERSION,
+                "applied": do_apply,
+                "count": edits.len(),
+                "fixes": items,
+                "written": outcome.applied,
                 "failures": outcome.failures,
             }))
         }
@@ -316,7 +332,7 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
             let body = match arg_str("rule") {
                 Some(rule) => match mollify_core::explain::text(rule) {
                     Some(t) => json!({ "rule": rule, "explanation": t }),
-                    None => json!({ "rule": rule, "error": "unknown rule" }),
+                    None => return tool_error(id, &format!("unknown rule `{rule}`")),
                 },
                 None => json!({ "rules": mollify_core::explain::RULES }),
             };
@@ -329,11 +345,17 @@ fn handle_tool_call(id: Value, req: &Value) -> Value {
             let graph = mollify_core::build_graph(&root);
             let body = match mollify_core::trace::module(&graph, module) {
                 Some(t) => json!({
-                    "kind": "trace", "target": t.target,
-                    "imports": t.imports, "imported_by": t.imported_by,
+                    "kind": "trace",
+                    "schema_version": mollify_types::SCHEMA_VERSION,
+                    "target": t.target,
+                    "imports": t.imports,
+                    "imported_by": t.imported_by,
                 }),
                 None => {
-                    json!({ "kind": "trace", "error": format!("no module matching `{module}`") })
+                    return tool_error(
+                        id,
+                        &format!("no module matching `{module}` found under `{root}`"),
+                    )
                 }
             };
             serde_json::to_string_pretty(&body)

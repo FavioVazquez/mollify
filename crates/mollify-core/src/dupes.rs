@@ -43,6 +43,19 @@ pub fn analyze_with(
     min_lines: u32,
     mirrors: &[(String, String)],
 ) -> Vec<Finding> {
+    analyze_with_ignore(graph, min_tokens, min_lines, mirrors, &[])
+}
+
+/// Like [`analyze_with`], honoring `.mollifyrc.json` `ignore` before clone
+/// families are built so an ignored directory sorting before `src/` never
+/// anchors `instances[0]` and swallows a real production clone.
+pub fn analyze_with_ignore(
+    graph: &ModuleGraph,
+    min_tokens: usize,
+    min_lines: u32,
+    mirrors: &[(String, String)],
+    ignore: &[String],
+) -> Vec<Finding> {
     let min_tokens = min_tokens.max(8) as u32;
 
     // Tokenize each module (deterministic order via sorted modules).
@@ -51,6 +64,11 @@ pub fn analyze_with(
     // notebooks and produces bogus clone families).
     let mut files: Vec<(usize, Vec<Tok>)> = Vec::new();
     for (i, m) in graph.modules.iter().enumerate() {
+        if !ignore.is_empty()
+            && crate::config::is_ignored(ignore, &m.rel.as_str().replace('\\', "/"))
+        {
+            continue;
+        }
         if let Some(src) = mollify_graph::read_source(&m.path) {
             let toks = tokenize(&src);
             if toks.len() as u32 >= min_tokens {
@@ -601,6 +619,38 @@ def score(label, weight, note):\n\
                 .any(|f| f.reason.contains("left.py") && f.reason.contains("right.py")),
             "unrelated clone should stay: {dups:?}"
         );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn ignored_directory_sorting_before_src_does_not_swallow_src_clones() {
+        let d = temp("ignore-order");
+        let block = "def compute_invoice_totals(items, tax_rate, discount):\n\
+            subtotal = 0\n\
+            for item in items:\n\
+                if item.active and item.price > 0:\n\
+                    subtotal += item.price * item.quantity\n\
+            taxed = subtotal * (1.0 + tax_rate)\n\
+            final_amount = taxed - discount\n\
+            if final_amount < 0:\n\
+                final_amount = 0\n\
+            return round(final_amount, 2)\n";
+        write(&d, "a_tests/test_it.py", block);
+        write(&d, "src/one.py", block);
+        write(&d, "src/two.py", block);
+        std::fs::write(d.join(".mollifyrc.json"), r#"{"ignore":["a_tests/"]}"#).unwrap();
+        let report = crate::dupes_report(&d);
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "src clone swallowed by ignored a_tests/: {:?}",
+            report.findings
+        );
+        assert!(report.findings[0]
+            .location
+            .path
+            .as_str()
+            .starts_with("src/"));
         std::fs::remove_dir_all(&d).ok();
     }
 }

@@ -213,6 +213,10 @@ struct FixArgs {
     /// Write the changes (default is a dry-run preview).
     #[arg(long)]
     apply: bool,
+    /// Scan this directory name despite the builtin exclude list,
+    /// .mollifyrc.json's exclude_dirs, or .gitignore. Repeatable.
+    #[arg(long, value_name = "DIR")]
+    include: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -783,7 +787,7 @@ fn run_fix(a: &FixArgs) -> i32 {
     if let Some(code) = validate_root(&a.path) {
         return code;
     }
-    let edits = mollify_core::fix::plan(&a.path);
+    let edits = mollify_core::fix::plan_with_includes(&a.path, &a.include);
     if edits.is_empty() {
         println!("No auto-fixable findings (only `certain` unused symbols are auto-fixed). ✓");
         return 0;
@@ -870,6 +874,7 @@ fn run_trace(a: &TraceArgs) -> i32 {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "kind": "trace",
+                "schema_version": mollify_types::SCHEMA_VERSION,
                 "target": t.target,
                 "imports": t.imports,
                 "imported_by": t.imported_by,
@@ -964,6 +969,7 @@ fn run_inspect(a: &InspectArgs) -> i32 {
         Format::Json => {
             let body = serde_json::json!({
                 "kind": "inspect",
+                "schema_version": mollify_types::SCHEMA_VERSION,
                 "file": ins.file,
                 "module": ins.module,
                 "findings": ins.findings,
@@ -1007,9 +1013,12 @@ fn run_list(a: &ListArgs) -> i32 {
         Format::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(
-                    &serde_json::json!({ "kind": "list", "of": label, "items": rows })
-                )
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "kind": "list",
+                    "schema_version": mollify_types::SCHEMA_VERSION,
+                    "of": label,
+                    "items": rows,
+                }))
                 .unwrap()
             );
         }

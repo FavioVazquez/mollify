@@ -13,12 +13,12 @@ mollify metrics
 
 ```text
 Mollify metrics — .
-7 file(s), 45 LOC (35 SLOC), 6 function(s); mean MI 80.9
-  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  billing/__init__.py
+7 file(s), 45 LOC (32 SLOC), 6 function(s); mean MI 80.9
+  [A] MI  99.9  cc(max  0, sum   0)  0 sloc  billing/__init__.py
   [A] MI  56.0  cc(max  1, sum   3)  14 sloc  billing/app.py
-  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  billing/domain/__init__.py
+  [A] MI  99.9  cc(max  0, sum   0)  0 sloc  billing/domain/__init__.py
   [A] MI  77.1  cc(max  1, sum   1)  3 sloc  billing/domain/money.py
-  [A] MI  99.9  cc(max  0, sum   0)  1 sloc  billing/services/__init__.py
+  [A] MI  99.9  cc(max  0, sum   0)  0 sloc  billing/services/__init__.py
   [A] MI  57.1  cc(max  7, sum   7)  12 sloc  billing/services/invoice.py
   [A] MI  76.4  cc(max  1, sum   1)  3 sloc  billing/services/ledger.py
 ```

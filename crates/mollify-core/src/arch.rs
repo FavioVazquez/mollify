@@ -218,7 +218,7 @@ pub fn private_imports(graph: &ModuleGraph) -> Vec<Finding> {
     for m in &graph.modules {
         let importer_top = m.dotted.split('.').next().unwrap_or("");
         let mut occ = crate::fingerprint::Occurrences::default();
-        for imp in &m.parsed.imports {
+        for imp in m.parsed.imports.iter().chain(&m.parsed.nested_imports) {
             if imp.relative_dots > 0 {
                 continue; // relative imports are intra-package by construction
             }
@@ -229,8 +229,48 @@ pub fn private_imports(graph: &ModuleGraph) -> Vec<Finding> {
             if src_top.is_empty() || src_top == importer_top || !internal_tops.contains(src_top) {
                 continue;
             }
+            let is_priv_seg =
+                |s: &str| s.starts_with('_') && !(s.starts_with("__") && s.ends_with("__"));
+            // Importing a private submodule of another package (`import pkg._internal`
+            // or `from pkg._internal import pub`).
+            let priv_mod_seg = imp.module.split('.').skip(1).find(|s| is_priv_seg(s));
+            if let Some(seg) = priv_mod_seg {
+                let rule = "private-import";
+                let occ_key = format!("{}\u{1f}{seg}", imp.module);
+                findings.push(Finding {
+                    fingerprint: fingerprint(
+                        rule,
+                        &[m.rel.as_str(), &imp.module, seg, &occ.next(&occ_key)],
+                    ),
+                    rule: rule.into(),
+                    category: Category::Architecture,
+                    severity: Severity::Warn,
+                    confidence: Confidence::Likely,
+                    attribution: None,
+                    reason: format!(
+                        "imports private module `{}` from another package `{src_top}` — reaching past its public API",
+                        imp.module
+                    ),
+                    location: Location {
+                        path: m.path.clone(),
+                        line: imp.line,
+                        column: 0,
+                        end_line: None,
+                    },
+                    actions: vec![Action {
+                        kind: "use-public-api".into(),
+                        description: format!(
+                            "Import via `{src_top}`'s public surface (`__init__.py`) instead of reaching into `{}`",
+                            imp.module
+                        ),
+                        auto_fixable: false,
+                        suppression_comment: Some(format!("# mollify: ignore[{rule}]")),
+                    }],
+                });
+                continue;
+            }
             for name in &imp.names {
-                if !(name.starts_with('_') && !(name.starts_with("__") && name.ends_with("__"))) {
+                if !is_priv_seg(name) {
                     continue;
                 }
                 let rule = "private-import";

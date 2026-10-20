@@ -6,6 +6,54 @@ versioned by `schema_version` (currently `0.1`).
 
 ## Unreleased
 
+### Security
+- **`rustls` 0.23.46**. Closes RUSTSEC-2026-0346, RUSTSEC-2026-0347,
+  RUSTSEC-2026-0348, and RUSTSEC-2026-0349.
+
+### Fixed
+- `mollify fix --apply` removes the full span of a multi-line unused import
+  and removes leading `@decorator` lines along with a dead private function or
+  class. Comma-separated `import a, b` statements with a used sibling,
+  semicolon-separated multi-statement lines, and definitions nested inside
+  top-level `if`, `try`, `with`, `for`, `while`, or `match` suites are not
+  auto-deleted.
+- PEP 695 generic type parameter bounds and defaults (`def f[T: _Bound]`) and
+  quoted forward-reference annotations (`def f(x: "Optional[_Node]")`) count
+  as uses in `module_used`, and PEP 695 type parameters (`def pub[_T]`) are not
+  `private-type-leak`. Comprehension loop targets no longer resolve to module
+  scope.
+- `.mollifyrc.json` `ignore` paths are excluded before building duplication
+  clone classes, so an ignored directory sorting before `src/` cannot hide a
+  clone in `src/`.
+- `duplicate-export` ignores conditional or type-checking imports and plain
+  dotted submodule imports (`import pkg.a` followed by `import pkg.b`).
+- `commented-code` inspects lexer comment tokens rather than raw source lines
+  (skipping docstrings), requires trailing spaces or colons on `return` and
+  `except`, requires trailing colons on compound headers, and requires call
+  syntax with no space before `(`.
+- `weak-hash` honors `usedforsecurity=False`. `hardcoded-secret` ignores
+  non-alphanumeric redaction masks (`":****"`) and metadata, header, or
+  environment-variable names (`token_type`, `*_header`, `*_env`).
+- `unused-variable` skips local variables prefixed with `_`, matching
+  `unused-parameter`.
+- `policy` (`forbid_import`) and `private-import` inspect nested imports,
+  match `from pkg import sub` against `pkg.sub`, and flag imports of private
+  submodules (`from other_pkg._internal import pub`).
+- Pointing `--path` directly at a package directory (`root/__init__.py`
+  present) resolves self-prefixed absolute imports (`from mypkg.sub import x`)
+  and groups the package's `untyped-function` rollup under the root package
+  name.
+- `mollify inspect ./path/to/file.py` normalizes leading `./` and reuses a
+  single module graph. `mollify lsp` retains cross-file diagnostics across
+  `textDocument/didChange` buffer edits and applies `.mollifyrc.json`.
+  `mollify mcp` returns `isError: true` when `inspect`, `trace`, or `explain`
+  targets an unknown file, module, or rule.
+- `git diff` and `git log` pass `--relative` (and `-- .` for churn), scoping
+  git queries to `--path`.
+- `mollify metrics` reports `0` SLOC for empty or comment-only files.
+  `compression` (Python 3.14) and `profiling` (Python 3.15) are recognized as
+  standard library modules. `mollify fix` accepts `--include`.
+
 ## 0.2.2 - 2026-09-22
 
 ### Fixed

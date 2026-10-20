@@ -2,7 +2,6 @@
 //! symbols and unused imports (never files, never lower-confidence findings).
 //! Dry-run by default at the CLI; this module computes a plan and can apply it.
 
-use crate::dead_code_report;
 use camino::{Utf8Path, Utf8PathBuf};
 use mollify_types::Confidence;
 use rustc_hash::FxHashMap;
@@ -17,7 +16,21 @@ pub struct FixEdit {
 
 /// Compute the set of safe edits (deleting unused-symbol line ranges).
 pub fn plan(root: &Utf8Path) -> Vec<FixEdit> {
-    let report = dead_code_report(root);
+    plan_with_includes(root, &[])
+}
+
+/// Like [`plan`], honoring the CLI's `--include` override.
+pub fn plan_with_includes(root: &Utf8Path, includes: &[String]) -> Vec<FixEdit> {
+    let graph = crate::build_graph_with_includes(root, includes);
+    let report = crate::dead_code_report_with_includes(root, includes);
+    // Map (rel_path, def_line) -> decorator-inclusive start_line so deleting a
+    // decorated private function/class removes its leading `@decorator` lines too.
+    let mut def_starts: FxHashMap<(&str, u32), u32> = FxHashMap::default();
+    for m in &graph.modules {
+        for d in &m.parsed.definitions {
+            def_starts.insert((m.rel.as_str(), d.line), d.start_line);
+        }
+    }
     let mut edits: Vec<FixEdit> = report
         .findings
         .into_iter()
@@ -29,17 +42,27 @@ pub fn plan(root: &Utf8Path) -> Vec<FixEdit> {
                 // safely (notebook findings carry cell-relative lines).
                 && f.location.path.extension() == Some("py")
         })
-        .map(|f| FixEdit {
-            start_line: f.location.line,
-            end_line: f.location.end_line.unwrap_or(f.location.line),
-            // Report paths are root-relative; edits need the on-disk path.
-            path: root.join(&f.location.path),
-            description: f
-                .actions
-                .into_iter()
-                .next()
-                .map(|a| a.description)
-                .unwrap_or_default(),
+        .map(|f| {
+            let start_line = if f.rule == "unused-export" {
+                def_starts
+                    .get(&(f.location.path.as_str(), f.location.line))
+                    .copied()
+                    .unwrap_or(f.location.line)
+            } else {
+                f.location.line
+            };
+            FixEdit {
+                start_line,
+                end_line: f.location.end_line.unwrap_or(f.location.line),
+                // Report paths are root-relative; edits need the on-disk path.
+                path: root.join(&f.location.path),
+                description: f
+                    .actions
+                    .into_iter()
+                    .next()
+                    .map(|a| a.description)
+                    .unwrap_or_default(),
+            }
         })
         .collect();
     edits.sort_by(|a, b| a.path.cmp(&b.path).then(a.start_line.cmp(&b.start_line)));
@@ -114,6 +137,7 @@ pub fn apply(edits: &[FixEdit]) -> ApplyOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dead_code_report;
 
     fn temp(tag: &str) -> Utf8PathBuf {
         let base =
@@ -277,6 +301,47 @@ mod tests {
             assert!(!f.actions[0].auto_fixable, "fixture auto-fixable: {f:?}");
         }
         assert!(plan(&d).is_empty(), "fixture edits planned: {:?}", plan(&d));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn fix_handles_multiline_imports_decorators_suites_and_semicolons_safely() {
+        let d = temp("p0-safety");
+        std::fs::write(d.join("__main__.py"), "import lib\nlib.keep()\n").unwrap();
+        let lib = d.join("lib.py");
+        std::fs::write(
+            &lib,
+            "from os import (\n    path,\n    environ,\n)\n\
+             from functools import lru_cache\n\
+             import os, sys\n\
+             import math; LIVE = 42\n\n\
+             @lru_cache\n\
+             def _dead():\n    return 1\n\n\
+             if sys.platform == 'darwin':\n    def _mac():\n        return 1\n\n\
+             def keep():\n    return sys.version, LIVE\n",
+        )
+        .unwrap();
+        let edits = plan(&d);
+        let out = apply(&edits);
+        assert!(out.failures.is_empty(), "failures: {:?}", out.failures);
+        let after = std::fs::read_to_string(&lib).unwrap();
+        // Multiline import removed completely.
+        assert!(!after.contains("environ"), "after: {after:?}");
+        // Decorated function and its @lru_cache decorator removed together.
+        assert!(
+            !after.contains("@lru_cache"),
+            "dangling decorator: {after:?}"
+        );
+        assert!(!after.contains("def _dead"), "after: {after:?}");
+        // Comma import (`import os, sys`), semicolon line (`LIVE = 42`), and
+        // suite-nested def (`def _mac`) preserved intact.
+        assert!(after.contains("import os, sys"), "after: {after:?}");
+        assert!(after.contains("LIVE = 42"), "after: {after:?}");
+        assert!(after.contains("def _mac():"), "after: {after:?}");
+        // Resulting file parses with 0 syntax errors.
+        let mut p = mollify_parse::PyParser::new().unwrap();
+        let parsed = p.parse(&lib, &after).unwrap();
+        assert!(!parsed.had_errors(), "syntax errors in after: {after:?}");
         std::fs::remove_dir_all(&d).ok();
     }
 }
